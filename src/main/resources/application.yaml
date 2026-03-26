@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: temporal-eh-download
+  datasource:
+    url: jdbc:mysql://10.10.10.161:3306/eh_automation?serverTimezone=UTC
+    username: root
+    password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  temporal:
+    connection:
+      target: 10.10.10.161:7233
+    namespace: default
+    workers-auto-discovery:
+      packages:
+        - com.checker
+  mail:
+    host: smtp.office365.com
+    port: 587
+    username: Angelina@renl57.onmicrosoft.com
+    password:
+mybatis-plus:
+  mapper-locations: classpath:mapper/*.xml
+  type-aliases-package: com.checker.model
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+server:
+  port: 8001
+
+eh-config:
+  # Cookie 信息
+  cookies:
+    member-id: "4674255"
+    pass-hash: "0345da71457857378639a3a7f2eb045a"
+    sk: "u2szd0pu6r7o3t3suf36iq1mr641"
+    star: "1-2516af5cd7"
+  # 代理信息
+  proxy:
+    host: "10.10.10.32"
+    port: 7893
+    username: "Clash"
+    password: "azWPzWfP"
+    type: "http"
+  synology:
+    url: "https://10.10.10.40:5001"
+    username: "5465541"
+    password: "Gcz@15271348205"
+    destination: "n8n_bot/EHentai"
+  notification:
+    admin-email: "15272888596@163.com"
