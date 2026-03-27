@@ -1,11 +1,15 @@
 package com.checker.temporalServices.activities.impl;
 
+import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.checker.common.EhNetworkClient;
 import com.checker.config.EhNetworkConfig;
@@ -16,16 +20,15 @@ import com.checker.temporalServices.activities.EHAutomationActivity;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
+import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Date;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -104,7 +107,9 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
             String html = ehNetworkClient.getHtml(currentUrl);
 
             // 3. 正则解析当前页的画廊列表
-            // EHentai 典型画廊区块: <a href="https://e-hentai.org/g/12345/abcde/"><div class="glink">画廊标题</div></a>
+            // EHentai 典型画廊区块:
+            // <a href="https://e-hentai.org/g/12345/abcde/">
+            //  <div class="glink">画廊标题</div></a>
             String regex = "<a href=\"(https://e-hentai\\.org/g/(\\d+)/([a-z0-9]+)/)\"[^>]*><div class=\"glink\">([^<]+)</div>";
             Pattern pattern = Pattern.compile(regex);
             Matcher matcher = pattern.matcher(html);
@@ -143,8 +148,8 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
             }
 
             // 6. 解析下一页游标 (Next Cursor)
-            // 典型 HTML: <a id="dnext" class="ptds" href="https://e-hentai.org/?next=123456789&f_search=...">
-            String nextUrlRegex = "href=\"([^\"]+)\"[^>]*id=\"dnext\"";
+            // 典型 HTML: <a id="unext" href="https://e-hentai.org/?next=3859750">下一页 ></a>
+            String nextUrlRegex = "href=\"([^\"]+)\"[^>]*id=\"unext\"";
             String nextUrl = ReUtil.getGroup1(nextUrlRegex, html);
 
             if (nextUrl == null) {
@@ -278,13 +283,13 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         String taskApi = netConfig.getSynology().getUrl() + "/webapi/DownloadStation/task.cgi";
         String response = postSynologyForm(taskApi, form);
 
-        cn.hutool.json.JSONObject jsonObj = cn.hutool.json.JSONUtil.parseObj(response);
+        JSONObject jsonObj = JSONUtil.parseObj(response);
         if (!jsonObj.getBool("success", false)) {
             log.warn("❌ 群晖 list 接口调用失败, GID: {}", gid);
             return "error";
         }
 
-        cn.hutool.json.JSONArray tasks = jsonObj.getByPath("data.tasks", cn.hutool.json.JSONArray.class);
+        JSONArray tasks = jsonObj.getByPath("data.tasks", JSONArray.class);
         if (tasks == null || tasks.isEmpty()) {
             log.warn("⚠️ 任务列表为空, GID: {} (可能已被删除)", gid);
             return "finished"; // 业务兜底
@@ -292,7 +297,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
 
         // 遍历任务列表，寻找匹配的 URI
         for (int i = 0; i < tasks.size(); i++) {
-            cn.hutool.json.JSONObject task = tasks.getJSONObject(i);
+            JSONObject task = tasks.getJSONObject(i);
             // 从 additional.detail.uri 中获取链接
             String taskUri = task.getByPath("additional.detail.uri", String.class);
 
@@ -303,8 +308,19 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
                 log.info("🔍 找到匹配任务, GID: {}, status: {}", gid, status);
 
                 if ("finished".equals(status) || "seeding".equals(status) || "extracted".equals(status)) {
+                    // 🚀 核心升级 1：提取群晖真实的下载文件名，并保存到数据库供 Komga 匹配
+                    String taskTitle = task.getStr("title", ""); // 例如：_Yaseuma_Loru__..._.zip
+                    if (StrUtil.isNotBlank(taskTitle)) {
+                        // 剥离后缀名 .zip / .cbz / .rar
+                        String pureName = taskTitle.replaceAll("(?i)\\.(zip|cbz|rar)$", "");
+                        EhGalleriesEntity updateFile = new EhGalleriesEntity();
+                        updateFile.setGid(gid);
+                        updateFile.setFilename(pureName); // 覆盖掉之前程序估算的文件名
+                        galleriesMapper.updateById(updateFile);
+                        log.info("💾 已记录群晖真实文件名: {}", pureName);
+                    }
                     return "finished";
-                } else if ("error".equals(status) || "broken".equals(status) || "file_not_found".equals(status)) {
+                }else if ("error".equals(status) || "broken".equals(status) || "file_not_found".equals(status)) {
                     log.warn("❌ 任务异常, GID: {}", gid);
                     return "error";
                 } else {
@@ -332,19 +348,121 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
 
     @Override
     public void sendEmailAlert(String subject, String content) {
-        String adminEmail = netConfig.getNotification().getAdminEmail();
-        if (StrUtil.isBlank(adminEmail)) {
-            log.warn("未配置通知邮箱，跳过邮件发送。主题: {}, 内容: {}", subject, content);
+        EhNetworkConfig.Notification notifConfig = netConfig.getNotification();
+        if (StrUtil.isBlank(notifConfig.getAdminEmail()) || StrUtil.isBlank(notifConfig.getTenantId())) {
+            log.warn("未配置完整的邮件通知参数，跳过邮件发送。主题: {}", subject);
             return;
         }
-        log.info("邮件通知占位: to={}, subject={}, content={}", adminEmail, subject, content);
+        try {
+            // 1. 获取 Microsoft Graph Access Token
+            String tokenUrl = String.format("https://login.microsoftonline.com/%s/oauth2/v2.0/token", notifConfig.getTenantId());
+            Map<String, Object> tokenForm = new HashMap<>();
+            tokenForm.put("client_id", notifConfig.getClientId());
+            tokenForm.put("client_secret", notifConfig.getClientSecret());
+            tokenForm.put("scope", "https://graph.microsoft.com/.default");
+            tokenForm.put("grant_type", "client_credentials");
+            String tokenResp = HttpRequest.post(tokenUrl)
+                    .form(tokenForm)
+                    .timeout(10000)
+                    .execute().body();
+           JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
+            String accessToken = tokenJson.getStr("access_token");
+            if (StrUtil.isBlank(accessToken)) {
+                log.error("获取 Microsoft Graph Token 失败: {}", tokenResp);
+                return;
+            }
+            // 2. 组装 Graph API 发送邮件的 JSON Body
+            JSONObject mailPayload = getEntries(subject, content, notifConfig);
+            // 3. 调用 Graph API 发送邮件
+            String sendMailUrl = String.format("https://graph.microsoft.com/v1.0/users/%s/sendMail", notifConfig.getSenderEmail());
+            try (HttpResponse mailResp = HttpRequest.post(sendMailUrl)
+                    .header("Authorization", "Bearer " + accessToken)
+                    .header("Content-Type", "application/json")
+                    .body(mailPayload.toString())
+                    .timeout(15000)
+                    .execute()) {
+                if (mailResp.isOk() || mailResp.getStatus() == 202) {
+                    log.info("✅ Graph API 邮件通知已成功发送至: {}", notifConfig.getAdminEmail());
+                } else {
+                    log.error("❌ Graph API 发送邮件失败, HTTP状态码: {}, 响应: {}", mailResp.getStatus(), mailResp.body());
+                }
+            }
+        } catch (Exception e) {
+            log.error("❌ 邮件通知流程发生异常: {}", e.getMessage());
+        }
+    }
+
+    @NotNull
+    private static JSONObject getEntries(String subject, String content, EhNetworkConfig.Notification notifConfig) {
+        JSONObject message = new JSONObject();
+        message.set("subject", subject);
+
+        JSONObject fromEmailAddress = new JSONObject();
+        fromEmailAddress.set("address", notifConfig.getSenderEmail());
+        fromEmailAddress.set("name", "EHentai 自动化机器人");
+        JSONObject from = new JSONObject();
+        from.set("emailAddress", fromEmailAddress);
+        message.set("from", from);
+
+        // 获取当前时间 (依赖 Hutool)
+        String currentTime = DateUtil.now();
+
+        // 将正文中的普通换行符替换为 HTML 的换行标签，防止挤在一坨
+        String htmlSafeContent = content.replace("\n", "<br>");
+
+        // 组装精美的 HTML 模板
+        String htmlTemplate = String.format(
+                "<!DOCTYPE html>" +
+                        "<html>" +
+                        "<head>" +
+                        "<style>" +
+                        "  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f9f9f9; color: #333; margin: 0; padding: 20px; }" +
+                        "  .card { background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 24px; max-width: 600px; margin: 0 auto; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }" +
+                        "  .header { border-bottom: 2px solid #0078D4; padding-bottom: 12px; margin-bottom: 20px; font-size: 20px; font-weight: bold; color: #0078D4; }" +
+                        "  .content { font-size: 15px; line-height: 1.6; }" +
+                        "  .footer { margin-top: 30px; padding-top: 15px; border-top: 1px dashed #ccc; font-size: 12px; color: #888; }" +
+                        "</style>" +
+                        "</head>" +
+                        "<body>" +
+                        "  <div class='card'>" +
+                        "    <div class='header'>%s</div>" +
+                        "    <div class='content'>%s</div>" +
+                        "    <div class='footer'>" +
+                        "      <strong>触发时间：</strong> %s <br>" +
+                        "      <strong>系统来源：</strong> EHentai 自动化工作流 (Temporal)" +
+                        "    </div>" +
+                        "  </div>" +
+                        "</body>" +
+                        "</html>",
+                subject, htmlSafeContent, currentTime
+        );
+
+        JSONObject body = new JSONObject();
+        // 🚀 核心修改：将 Text 改为 HTML
+        body.set("contentType", "HTML");
+        body.set("content", htmlTemplate);
+        message.set("body", body);
+
+        JSONArray toRecipients = new JSONArray();
+        JSONObject emailAddress = new JSONObject();
+        emailAddress.set("address", notifConfig.getAdminEmail());
+        JSONObject recipient = new JSONObject();
+        recipient.set("emailAddress", emailAddress);
+        toRecipients.add(recipient);
+        message.set("toRecipients", toRecipients);
+
+        JSONObject mailPayload = new JSONObject();
+        mailPayload.set("message", message);
+        mailPayload.set("saveToSentItems", "false");
+
+        return mailPayload;
     }
 
     @Override
     public List<EhGalleriesEntity> getFailedGalleries() {
         // 使用 MyBatis-Plus 查询所有下载失败的画廊
         QueryWrapper<EhGalleriesEntity> queryWrapper = new QueryWrapper<>();
-        queryWrapper.eq("download_status", "下载失败");
+        queryWrapper.in("download_status", "下载失败", "已下载");
         return galleriesMapper.selectList(queryWrapper);
     }
 
@@ -371,7 +489,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         String resp = postSynologyForm(authUrl, form);
 
         // 4. 解析返回值
-        cn.hutool.json.JSONObject jsonObj = cn.hutool.json.JSONUtil.parseObj(resp);
+        JSONObject jsonObj = JSONUtil.parseObj(resp);
         if (jsonObj.getBool("success", false)) {
             return jsonObj.getByPath("data.sid", String.class);
         } else {
@@ -397,6 +515,127 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
                 );
             }
             return response.body();
+        }
+    }
+
+    @Override
+    public EhGalleriesEntity getGalleryById(Long gid) {
+        return galleriesMapper.selectById(gid);
+    }
+
+    // 1. 获取并保存元数据
+    @Override
+    public void fetchAndSaveMetadata(Long gid, String token) {
+        // 调用 EHentai 的 gdata API
+        String apiUrl = "https://api.e-hentai.org/api.php";
+        String jsonBody = String.format("{\"method\":\"gdata\",\"gidlist\":[[%d,\"%s\"]],\"namespace\":1}", gid, token);
+
+        String response = HttpRequest.post(apiUrl)
+                .body(jsonBody)
+                .execute().body();
+
+        // 解析返回的 JSON，提取 tags
+        JSONObject resObj = JSONUtil.parseObj(response);
+        JSONArray gmetadata = resObj.getJSONArray("gmetadata");
+        if (gmetadata != null && !gmetadata.isEmpty()) {
+            JSONArray tagsArray = gmetadata.getJSONObject(0).getJSONArray("tags");
+            List<String> tagsList = tagsArray.toList(String.class);
+            // 将获取到的 Tags 更新到数据库
+            EhGalleriesEntity updateEntity = new EhGalleriesEntity();
+            updateEntity.setGid(gid);
+            updateEntity.setTags(tagsList);
+            galleriesMapper.updateById(updateEntity);
+            log.info("✅ GID: {} 元数据获取并存库成功，共 {} 个标签", gid, tagsList.size());
+        }
+    }
+
+    // 2. 轮询查找 Komga 中的 Series ID
+    @Override
+    public String findBookInKomga(String realFilename) {
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/series/list";
+
+        // 🚀 核心升级 2：使用 Komga 的 Condition 进行 100% 精确匹配
+        cn.hutool.json.JSONObject searchBody = new cn.hutool.json.JSONObject();
+        cn.hutool.json.JSONObject condition = new cn.hutool.json.JSONObject();
+        cn.hutool.json.JSONObject titleCond = new cn.hutool.json.JSONObject();
+
+        titleCond.set("operator", "Is"); // 绝对相等
+        titleCond.set("value", realFilename); // 使用刚从群晖拿到的真实物理文件名
+        condition.set("title", titleCond);
+        searchBody.set("condition", condition);
+
+        HttpResponse response = HttpRequest.post(komgaUrl)
+                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
+                .header("Content-Type", "application/json")
+                .body(searchBody.toString())
+                .execute();
+
+        if (response.isOk()) {
+            cn.hutool.json.JSONObject resObj = cn.hutool.json.JSONUtil.parseObj(response.body());
+            cn.hutool.json.JSONArray content = resObj.getJSONArray("content");
+            if (content != null && !content.isEmpty()) {
+                // 找到了！直接返回
+                return content.getJSONObject(0).getStr("id");
+            }
+        }
+        return null;
+    }
+
+    // 3. 将元数据和完美标题推送给 Komga
+    @Override
+    public void pushMetadataToKomga(String seriesId, Long gid) {
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+
+        cn.hutool.json.JSONObject metadata = new cn.hutool.json.JSONObject();
+
+        // 🌟 核心魔法 3：在这里进行“虚拟重命名”！
+        // 用数据库里原始的、带方括号的精美标题，覆盖 Komga 界面上丑陋的下划线文件名
+        metadata.set("title", gallery.getTitle());
+        metadata.set("titleLock", true);
+        metadata.set("titleSort", gallery.getTitle());
+        metadata.set("titleSortLock", true);
+
+        // 正常推送标签
+        if (gallery.getTags() != null && !gallery.getTags().isEmpty()) {
+            metadata.set("tags", gallery.getTags());
+            metadata.set("tagsLock", true);
+        }
+
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/series/" + seriesId + "/metadata";
+        HttpRequest.patch(komgaUrl)
+                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
+                .header("Content-Type", "application/json")
+                .body(metadata.toString())
+                .execute();
+
+        // 记录入库成功
+        EhGalleriesEntity updateEntity = new EhGalleriesEntity();
+        updateEntity.setGid(gid);
+        updateEntity.setKomgaBookId(seriesId);
+        updateEntity.setDownloadStatus("已入库");
+        galleriesMapper.updateById(updateEntity);
+        log.info("🎉 GID: {} 已成功虚拟重命名并打上标签! SeriesID: {}", gid, seriesId);
+    }
+
+    @Override
+    public void triggerKomgaLibraryScan() {
+        String libraryId = netConfig.getKomga().getLibraryId();
+        if (StrUtil.isBlank(libraryId)) {
+            log.warn("⚠️ 未配置 Komga Library ID，跳过主动扫描触发。");
+            return;
+        }
+
+        String scanUrl = netConfig.getKomga().getUrl() + "/api/v1/libraries/" + libraryId + "/scan";
+
+        HttpResponse response = HttpRequest.post(scanUrl)
+                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
+                .execute();
+
+        // API 规范中定义的成功响应是 202 Accepted
+        if (response.isOk() || response.getStatus() == 202) {
+            log.info("🚀 已成功向 Komga 发送主动扫描指令，Library ID: {}", libraryId);
+        } else {
+            log.error("❌ 触发 Komga 扫描失败, HTTP 状态码: {}", response.getStatus());
         }
     }
 }

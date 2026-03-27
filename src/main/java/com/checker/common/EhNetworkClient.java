@@ -1,10 +1,10 @@
 package com.checker.common;
 
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.core.codec.Base64;
 import cn.hutool.http.*;
 import com.checker.config.EhNetworkConfig;
 import io.temporal.failure.ApplicationFailure;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -22,6 +22,25 @@ public class EhNetworkClient {
 
     // 默认超时时间设定为 15 秒（爬虫尽量设置长一点防抖）
     private static final int TIMEOUT_MS = 15000;
+
+    @PostConstruct
+    public void initProxyAuth() {
+        EhNetworkConfig.Proxy proxyConfig = netConfig.getProxy();
+        if (StrUtil.isNotBlank(proxyConfig.getUsername()) && StrUtil.isNotBlank(proxyConfig.getPassword())) {
+            // 注册全局认证器，且严格限定仅响应代理认证请求
+            Authenticator.setDefault(new Authenticator() {
+                @Override
+                protected PasswordAuthentication getPasswordAuthentication() {
+                    // 只有当请求者是 PROXY (代理) 时，才交出账号密码，避免泄露给其他服务器
+                    if (getRequestorType() == RequestorType.PROXY) {
+                        return new PasswordAuthentication(proxyConfig.getUsername(), proxyConfig.getPassword().toCharArray());
+                    }
+                    return null; // 其他普通网站的弹窗认证一律不理会
+                }
+            });
+            log.info("✅ 全局代理认证器已成功初始化");
+        }
+    }
 
     /**
      * 发起 GET 请求并返回 HTML 内容
@@ -95,11 +114,6 @@ public class EhNetworkClient {
         EhNetworkConfig.Proxy proxyConfig = netConfig.getProxy();
         if (StrUtil.isNotBlank(proxyConfig.getHost()) && proxyConfig.getPort() != null) {
             request.setHttpProxy(proxyConfig.getHost(), proxyConfig.getPort());
-            if (StrUtil.isNotBlank(proxyConfig.getUsername()) && StrUtil.isNotBlank(proxyConfig.getPassword())) {
-                String authString = proxyConfig.getUsername() + ":" + proxyConfig.getPassword();
-                String base64Auth = Base64.encode(authString);
-                request.header("Proxy-Authorization", "Basic " + base64Auth);
-            }
         }
         return request;
     }

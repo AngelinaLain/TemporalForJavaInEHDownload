@@ -13,14 +13,9 @@ spring:
     workers-auto-discovery:
       packages:
         - com.checker
-  mail:
-    host: smtp.office365.com
-    port: 587
-    username: Angelina@renl57.onmicrosoft.com
-    password:
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
-  type-aliases-package: com.checker.model
+  type-aliases-package: com.checker.entity
   configuration:
     map-underscore-to-camel-case: true
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
@@ -54,3 +49,12 @@ eh-config:
     destination: "n8n_bot/EHentai"
   notification:
     admin-email: "15272888596@163.com"
+    tenant-id: a5f69b32-f12b-407f-b81e-a2b7057367dc
+    client-id: ab36780f-0903-4fa2-9dfa-8a699fc4a2c4
+    client-secret: g4W8Q~nzMeftYkOLJ3kiKPZkV1barzFIyMFyGc6a
+    sender-email: ehbo@renl57.onmicrosoft.com
+  komga:
+    url: http://10.10.10.40:3001
+    username: 15272888596@163.com
+    password: 15271348205
+    library-id: 0PWD8X2S9169Y

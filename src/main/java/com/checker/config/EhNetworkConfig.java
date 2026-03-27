@@ -12,6 +12,7 @@ public class EhNetworkConfig {
     private Proxy proxy = new Proxy();
     private Synology synology = new Synology();
     private Notification notification = new Notification();
+    private Komga komga = new Komga();
 
     @Data
     public static class Cookies {
@@ -55,5 +56,16 @@ public class EhNetworkConfig {
     @Data
     public static class Notification {
         private String adminEmail;
+        private String tenantId;
+        private String clientId;
+        private String clientSecret;
+        private String senderEmail;
+    }
+    @Data
+    public static class Komga {
+        private String url;
+        private String username;
+        private String password;
+        private String libraryId;
     }
 }

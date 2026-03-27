@@ -76,4 +76,22 @@ public interface EHAutomationActivity {
      */
     @ActivityMethod
     List<EhGalleriesEntity> getFailedGalleries();
+
+    @ActivityMethod
+    EhGalleriesEntity getGalleryById(Long gid);
+
+    // 1. 获取并保存元数据
+    @ActivityMethod
+    void fetchAndSaveMetadata(Long gid, String token);
+
+    // 2. 轮询查找 Komga 中的 Book ID
+    @ActivityMethod
+    String findBookInKomga(String title);
+
+    // 3. 将元数据推送给 Komga
+    @ActivityMethod
+    void pushMetadataToKomga(String bookId, Long gid);
+
+    @ActivityMethod
+    void triggerKomgaLibraryScan();
 }

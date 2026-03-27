@@ -2,6 +2,7 @@ package com.checker.controllers;
 
 import com.checker.common.Result;
 import com.checker.dto.SearchOptions;
+import com.checker.temporalServices.activities.EHAutomationActivity;
 import com.checker.temporalServices.workflows.EHAutomationWorkflow;
 import com.checker.temporalServices.workflows.RetryFailedDownloadWorkflow; // 记得加上这个导入
 import io.temporal.api.common.v1.WorkflowExecution;
@@ -74,6 +75,30 @@ public class EHAutomationController {
         return Result.success(Map.of(
                 "workflowId", execution.getWorkflowId(),
                 "runId", execution.getRunId()
+        ));
+    }
+
+    @Autowired
+    private EHAutomationActivity ehAutomationActivity;
+    /**
+     * 测试/Debug 专用：直接测试 Microsoft Graph API 发送邮件功能
+     */
+    @PostMapping("/test-email")
+    public Result<Map<String, String>> testEmail(@RequestBody(required = false) Map<String, String> payload) {
+        String subject = "EHentai 自动化 - 邮件测试";
+        String content = "这是一封测试邮件。如果您收到此邮件，说明您的 Microsoft E5 Graph API 凭证配置完全正确！";
+
+        // 如果通过 Postman 传了自定义内容，就使用自定义内容
+        if (payload != null) {
+            subject = payload.getOrDefault("subject", subject);
+            content = payload.getOrDefault("content", content);
+        }
+
+        // 直接调用 Activity 的发邮件方法 (脱离 Temporal 框架直接执行)
+        ehAutomationActivity.sendEmailAlert(subject, content);
+
+        return Result.success(Map.of(
+                "message", "发送邮件指令已执行，请查看控制台日志以及您的管理员邮箱接收情况。"
         ));
     }
 }

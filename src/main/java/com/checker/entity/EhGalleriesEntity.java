@@ -7,10 +7,10 @@ import lombok.Data;
 
 import java.io.Serializable;
 import java.util.Date;
+import java.util.List;
 
 /**
  * EHentai画廊抓取队列
- * @TableName eh_galleries
  */
 @Data // 自动生成 get/set/toString
 @TableName(value = "eh_galleries", autoResultMap = true)
@@ -93,4 +93,12 @@ public class EhGalleriesEntity implements Serializable {
      */
     @TableField(value = "_trace_page_trace", typeHandler = JacksonTypeHandler.class)
     private Object tracePageTrace;
+
+    @TableField(value = "tags", typeHandler = JacksonTypeHandler.class)
+    private List<String> tags;
+
+    /**
+     * Komga 中的书籍 ID (用于记录是否成功推送到 Komga)
+     */
+    private String komgaBookId;
 }
