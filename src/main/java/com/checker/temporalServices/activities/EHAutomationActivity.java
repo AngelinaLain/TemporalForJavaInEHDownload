@@ -86,7 +86,7 @@ public interface EHAutomationActivity {
 
     // 2. 轮询查找 Komga 中的 Book ID
     @ActivityMethod
-    String findBookInKomga(String title);
+    String findBookInKomga(Long gid);
 
     // 3. 将元数据推送给 Komga
     @ActivityMethod
@@ -94,4 +94,13 @@ public interface EHAutomationActivity {
 
     @ActivityMethod
     void triggerKomgaLibraryScan();
+
+    /**
+     * 调用群晖 File Station API 对物理文件进行重命名
+     * @param gid 画廊 GID
+     * @param oldFilename 群晖下载生成的原始文件名 (带后缀)
+     * @return 最终重命名后的新文件名
+     */
+    @ActivityMethod
+    String renameSynologyFile(Long gid, String oldFilename);
 }

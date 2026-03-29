@@ -1,5 +1,6 @@
 package com.checker.temporalServices.workflows.impl;
 
+import cn.hutool.core.util.StrUtil;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.EHAutomationActivity;
 import com.checker.temporalServices.workflows.RetryFailedDownloadWorkflow;
@@ -47,18 +48,20 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                 try {
                     // 直接获取元数据并踹一脚 Komga 扫描
                     activity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
+                    // 🚀 2. 核心新增：调用物理重命名！
+                    EhGalleriesEntity downloadedGallery = activity.getGalleryById(gallery.getGid());
+                    if (downloadedGallery != null && StrUtil.isNotBlank(downloadedGallery.getFilename())) {
+                        activity.renameSynologyFile(gallery.getGid(), downloadedGallery.getFilename());
+                    }
                     activity.triggerKomgaLibraryScan();
                     Promise<Void> komgaTask = Async.procedure(() -> {
-                        // 重新拉取实体，获取真实 filename
-                        EhGalleriesEntity downloadedGallery = activity.getGalleryById(gallery.getGid());
-                        String realFilename = downloadedGallery.getFilename();
                         boolean isImportedToKomga = false;
                         int maxKomgaRetries = 20;
                         int currentTry = 0;
                         while (!isImportedToKomga && currentTry < maxKomgaRetries) {
                             Workflow.sleep(Duration.ofSeconds(15));
                             currentTry++;
-                            String komgaSeriesId = activity.findBookInKomga(realFilename);
+                            String komgaSeriesId = activity.findBookInKomga(gallery.getGid());
                             if (komgaSeriesId != null) {
                                 activity.pushMetadataToKomga(komgaSeriesId, gallery.getGid());
                                 isImportedToKomga = true;
@@ -85,7 +88,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                 String downloadUrl = activity.extractDownloadUrl(gallery.getGid(), gallery.getToken());
 
                 // 3. 重新推给群晖
-                Long gid = activity.pushToSynology(downloadUrl, gallery.getGid(), "n8n_bot/EHentai");
+                Long gid = activity.pushToSynology(downloadUrl, gallery.getGid(), null);
 
                 boolean isDownloadComplete = false;
                 while (!isDownloadComplete) {
@@ -95,12 +98,14 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                         activity.updateGalleryStatus(gallery.getGid(), "已下载");
                         isDownloadComplete = true;
                         activity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
+                        // 🚀 2. 核心新增：调用物理重命名！
+                        EhGalleriesEntity downloadedGallery = activity.getGalleryById(gallery.getGid());
+                        if (downloadedGallery != null && StrUtil.isNotBlank(downloadedGallery.getFilename())) {
+                            activity.renameSynologyFile(gallery.getGid(), downloadedGallery.getFilename());
+                        }
                         // Go Work!!!
                         activity.triggerKomgaLibraryScan();
                         Promise<Void> komgaTask = Async.procedure(() -> {
-                            // 🚀 核心升级 4：重新拉取实体，获取刚刚由群晖填入的真实 filename
-                            EhGalleriesEntity downloadedGallery = activity.getGalleryById(gallery.getGid());
-                            String realFilename = downloadedGallery.getFilename();
 
                             boolean isImportedToKomga = false;
                             int maxKomgaRetries = 20;
@@ -109,7 +114,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                                 Workflow.sleep(Duration.ofSeconds(15));
                                 currentTry++;
                                 // 用真实文件名去搜！
-                                String komgaSeriesId = activity.findBookInKomga(realFilename);
+                                String komgaSeriesId = activity.findBookInKomga(gallery.getGid());
                                 if (komgaSeriesId != null) {
                                     // 找到后注入元数据和美化标题
                                     activity.pushMetadataToKomga(komgaSeriesId, gallery.getGid());
@@ -119,6 +124,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                             if (!isImportedToKomga) {
                                 log.warn("[⚠️ Komga 入库超时]画廊已下载，且已触发扫描，但未识别:{} " , gallery.getTitle());
                                 activity.sendEmailAlert("⚠️ Komga 入库超时", "画廊已下载，且已触发扫描，但未识别: " + gallery.getTitle());
+                                /*activity.updateGalleryStatus(gallery.getGid(), "入库失败");*/
                             }
                         });
                         komgaPromises.add(komgaTask);

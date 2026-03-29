@@ -55,6 +55,5 @@ eh-config:
     sender-email: ehbo@renl57.onmicrosoft.com
   komga:
     url: http://10.10.10.40:3001
-    username: 15272888596@163.com
-    password: 15271348205
+    api-key: 71c80c96520247c5bd7bb893b337eaee
     library-id: 0PWD8X2S9169Y

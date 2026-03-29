@@ -5,6 +5,7 @@ import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
+import cn.hutool.extra.ssh.JschUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONArray;
@@ -17,6 +18,7 @@ import com.checker.dto.SearchOptions;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.temporalServices.activities.EHAutomationActivity;
+import com.jcraft.jsch.Session;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,8 @@ import org.jetbrains.annotations.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Date;
@@ -53,22 +57,22 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         List<EhGalleriesEntity> results = new ArrayList<>();
         // 1. 初始链接拼接 (根据 params.md 要求)
         String baseUrl = "https://e-hentai.org/";
-        
+
         // 构建 f_search 参数：keyword + language
         String searchParam = URLUtil.encodeAll(searchOptions.getKeyword());
         if (StrUtil.isNotBlank(searchOptions.getLanguage())) {
             // 追加语言条件：语言用空格分隔，URL编码
-            searchParam += "%20language%3A%22" + URLUtil.encodeAll(searchOptions.getLanguage()) + "%22";  
+            searchParam += "%20language%3A%22" + URLUtil.encodeAll(searchOptions.getLanguage()) + "%22";
         }
-        
+
         String currentUrl = String.format("%s?f_search=%s&f_cats=%d&advsearch=1",
                 baseUrl, searchParam, searchOptions.getFCats());
-        
+
         // 添加星级过滤 (f_srdd)
         if (searchOptions.getMinimumRating() != null && searchOptions.getMinimumRating() > 1) {
             currentUrl += "&f_srdd=" + searchOptions.getMinimumRating();
         }
-        
+
         // 添加页数范围过滤
         if (searchOptions.getPageAtLeast() != null && searchOptions.getPageAtLeast() > 0) {
             currentUrl += "&f_spf=" + searchOptions.getPageAtLeast();  // 最少页数
@@ -76,7 +80,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         if (searchOptions.getPageAtMost() != null && searchOptions.getPageAtMost() > 0) {
             currentUrl += "&f_spt=" + searchOptions.getPageAtMost();   // 最多页数
         }
-        
+
         // 添加高级搜索选项
         if (searchOptions.getSearchExpungedGalleries() != null && searchOptions.getSearchExpungedGalleries()) {
             currentUrl += "&f_sh=on";  // 搜索已删除的画廊
@@ -84,7 +88,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         if (searchOptions.getShowOnlyWithTorrents() != null && searchOptions.getShowOnlyWithTorrents()) {
             currentUrl += "&f_sto=on"; // 仅显示有种子的
         }
-        
+
         // 添加禁用过滤器选项
         if (searchOptions.getDisableLanguageFilter() != null && searchOptions.getDisableLanguageFilter()) {
             currentUrl += "&f_sfl=on"; // 禁用语言过滤
@@ -308,16 +312,14 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
                 log.info("🔍 找到匹配任务, GID: {}, status: {}", gid, status);
 
                 if ("finished".equals(status) || "seeding".equals(status) || "extracted".equals(status)) {
-                    // 🚀 核心升级 1：提取群晖真实的下载文件名，并保存到数据库供 Komga 匹配
-                    String taskTitle = task.getStr("title", ""); // 例如：_Yaseuma_Loru__..._.zip
+                    String taskTitle = task.getStr("title", "");
                     if (StrUtil.isNotBlank(taskTitle)) {
-                        // 剥离后缀名 .zip / .cbz / .rar
-                        String pureName = taskTitle.replaceAll("(?i)\\.(zip|cbz|rar)$", "");
                         EhGalleriesEntity updateFile = new EhGalleriesEntity();
                         updateFile.setGid(gid);
-                        updateFile.setFilename(pureName); // 覆盖掉之前程序估算的文件名
+                        // 不再剔除后缀名，直接保存群晖物理磁盘上的完整文件名 (含 .zip)
+                        updateFile.setFilename(taskTitle);
                         galleriesMapper.updateById(updateFile);
-                        log.info("💾 已记录群晖真实文件名: {}", pureName);
+                        log.info("💾 已记录群晖真实完整文件名: {}", taskTitle);
                     }
                     return "finished";
                 }else if ("error".equals(status) || "broken".equals(status) || "file_not_found".equals(status)) {
@@ -365,7 +367,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
                     .form(tokenForm)
                     .timeout(10000)
                     .execute().body();
-           JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
+            JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
             String accessToken = tokenJson.getStr("access_token");
             if (StrUtil.isBlank(accessToken)) {
                 log.error("获取 Microsoft Graph Token 失败: {}", tokenResp);
@@ -548,24 +550,38 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
             log.info("✅ GID: {} 元数据获取并存库成功，共 {} 个标签", gid, tagsList.size());
         }
     }
-
-    // 2. 轮询查找 Komga 中的 Series ID
     @Override
-    public String findBookInKomga(String realFilename) {
-        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/series/list";
+    public String findBookInKomga(Long gid) {
+        // ==========================================
+        // 🚀 第一步：动态获取 N8N_Update 的 SeriesID
+        // ==========================================
+        String seriesName = "N8N_Update"; // 你的目标系列/文件夹名称
+        String targetSeriesId = getSeriesIdByName(seriesName);
 
-        // 🚀 核心升级 2：使用 Komga 的 Condition 进行 100% 精确匹配
+        if (StrUtil.isBlank(targetSeriesId)) {
+            log.error("❌ 无法在 Komga 中找到名为 [{}] 的系列", seriesName);
+            return null;
+        }
+
+        // ==========================================
+        // 🚀 第二步：使用 SeriesID + GID 联合精确检索 BookID
+        // ==========================================
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list";
+
         cn.hutool.json.JSONObject searchBody = new cn.hutool.json.JSONObject();
-        cn.hutool.json.JSONObject condition = new cn.hutool.json.JSONObject();
-        cn.hutool.json.JSONObject titleCond = new cn.hutool.json.JSONObject();
+        searchBody.set("fullTextSearch", String.valueOf(gid));
 
-        titleCond.set("operator", "Is"); // 绝对相等
-        titleCond.set("value", realFilename); // 使用刚从群晖拿到的真实物理文件名
-        condition.set("title", titleCond);
+        // 完美复刻你抓包得到的 condition 结构
+        cn.hutool.json.JSONObject condition = new cn.hutool.json.JSONObject();
+        cn.hutool.json.JSONObject seriesIdCond = new cn.hutool.json.JSONObject();
+        seriesIdCond.set("operator", "is");
+        seriesIdCond.set("value", targetSeriesId);
+        condition.set("seriesId", seriesIdCond);
+
         searchBody.set("condition", condition);
 
         HttpResponse response = HttpRequest.post(komgaUrl)
-                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
+                .header("X-API-Key", netConfig.getKomga().getApiKey())
                 .header("Content-Type", "application/json")
                 .body(searchBody.toString())
                 .execute();
@@ -573,48 +589,115 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         if (response.isOk()) {
             cn.hutool.json.JSONObject resObj = cn.hutool.json.JSONUtil.parseObj(response.body());
             cn.hutool.json.JSONArray content = resObj.getJSONArray("content");
+
             if (content != null && !content.isEmpty()) {
-                // 找到了！直接返回
-                return content.getJSONObject(0).getStr("id");
+                String bookId = content.getJSONObject(0).getStr("id");
+                log.info("🎯 Komga 复合检索精准命中! GID: {}, 锁定系列: {}, BookID: {}",
+                        gid, seriesName, bookId);
+                return bookId; // 返回精准无误的 BookID 交给 HttpClient 去 PATCH！
+            } else {
+                log.warn("⚠️ 在系列 [{}] 中未找到包含 GID: {} 的书籍", seriesName, gid);
             }
+        } else {
+            log.error("❌ Komga 复合搜索失败: HTTP {}, {}", response.getStatus(), response.body());
         }
         return null;
     }
 
+    /**
+     * 辅助方法：通过系列名称动态获取 SeriesID，避免硬编码
+     */
+    private String getSeriesIdByName(String seriesName) {
+        String url = netConfig.getKomga().getUrl() + "/api/v1/series/list?size=50";
+
+        cn.hutool.json.JSONObject searchBody = new cn.hutool.json.JSONObject();
+        searchBody.set("fullTextSearch", seriesName);
+
+        HttpResponse response = HttpRequest.post(url)
+                .header("X-API-Key", netConfig.getKomga().getApiKey())
+                .header("Content-Type", "application/json")
+                .body(searchBody.toString())
+                .execute();
+
+        if (!response.isOk()) {
+            log.error("❌ Komga series/list 查询失败: HTTP {}, {}", response.getStatus(), response.body());
+            return null;
+        }
+
+        cn.hutool.json.JSONObject resObj = cn.hutool.json.JSONUtil.parseObj(response.body());
+        cn.hutool.json.JSONArray content = resObj.getJSONArray("content");
+        if (content == null || content.isEmpty()) return null;
+
+        // 精确匹配优先：先匹配 metadata.title，再匹配 name
+        for (int i = 0; i < content.size(); i++) {
+            cn.hutool.json.JSONObject series = content.getJSONObject(i);
+            String title = series.getByPath("metadata.title", String.class);
+            if (seriesName.equalsIgnoreCase(StrUtil.blankToDefault(title, ""))) {
+                return series.getStr("id");
+            }
+        }
+        for (int i = 0; i < content.size(); i++) {
+            cn.hutool.json.JSONObject series = content.getJSONObject(i);
+            if (seriesName.equalsIgnoreCase(series.getStr("name"))) {
+                return series.getStr("id");
+            }
+        }
+
+        // 兜底返回第一条
+        return content.getJSONObject(0).getStr("id");
+    }
+
     // 3. 将元数据和完美标题推送给 Komga
     @Override
-    public void pushMetadataToKomga(String seriesId, Long gid) {
+    public void pushMetadataToKomga(String bookId, Long gid) {
         EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
-
-        cn.hutool.json.JSONObject metadata = new cn.hutool.json.JSONObject();
-
-        // 🌟 核心魔法 3：在这里进行“虚拟重命名”！
-        // 用数据库里原始的、带方括号的精美标题，覆盖 Komga 界面上丑陋的下划线文件名
+        JSONObject metadata = new JSONObject();
         metadata.set("title", gallery.getTitle());
         metadata.set("titleLock", true);
-        metadata.set("titleSort", gallery.getTitle());
-        metadata.set("titleSortLock", true);
-
-        // 正常推送标签
         if (gallery.getTags() != null && !gallery.getTags().isEmpty()) {
             metadata.set("tags", gallery.getTags());
             metadata.set("tagsLock", true);
         }
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/" + bookId + "/metadata";
+        try {
+            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
+            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(komgaUrl))
+                    .header("X-API-Key", netConfig.getKomga().getApiKey())
+                    .header("Content-Type", "application/json")
+                    .method("PATCH", java.net.http.HttpRequest.BodyPublishers.ofString(metadata.toString(), StandardCharsets.UTF_8))
+                    .build();
 
-        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/series/" + seriesId + "/metadata";
-        HttpRequest.patch(komgaUrl)
-                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
-                .header("Content-Type", "application/json")
-                .body(metadata.toString())
-                .execute();
+            java.net.http.HttpResponse<String> response =
+                    client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
 
-        // 记录入库成功
+            int status = response.statusCode();
+
+            // Komga PATCH 成功时通常返回 204 No Content。
+            if (!(status == 204 || (status >= 200 && status < 300))) {
+                log.error("❌ Komga 元数据更新失败, GID: {}, BookID: {}, HTTP: {}, body: {}",
+                        gid, bookId, status, response.body());
+                throw ApplicationFailure.newFailure(
+                        "Komga metadata patch failed: HTTP " + status,
+                        "KOMGA_METADATA_PATCH_FAILED"
+                );
+            }
+        } catch (Exception e) {
+            log.error("❌ 调用 Komga PATCH 接口异常, GID: {}, BookID: {}", gid, bookId, e);
+            throw ApplicationFailure.newFailure(
+                    "Komga metadata patch exception: " + e.getMessage(),
+                    "KOMGA_METADATA_PATCH_EXCEPTION"
+            );
+        }
+
+        // 记录入库成功 (此时存进库里的正好是准确的 BookId)
         EhGalleriesEntity updateEntity = new EhGalleriesEntity();
         updateEntity.setGid(gid);
-        updateEntity.setKomgaBookId(seriesId);
+        updateEntity.setKomgaBookId(bookId);
         updateEntity.setDownloadStatus("已入库");
         galleriesMapper.updateById(updateEntity);
-        log.info("🎉 GID: {} 已成功虚拟重命名并打上标签! SeriesID: {}", gid, seriesId);
+
+        log.info("🎉 GID: {} 已成功虚拟重命名并打上标签! BookID: {}", gid, bookId);
     }
 
     @Override
@@ -628,7 +711,7 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
         String scanUrl = netConfig.getKomga().getUrl() + "/api/v1/libraries/" + libraryId + "/scan";
 
         HttpResponse response = HttpRequest.post(scanUrl)
-                .basicAuth(netConfig.getKomga().getUsername(), netConfig.getKomga().getPassword())
+                .header("X-API-Key", netConfig.getKomga().getApiKey())
                 .execute();
 
         // API 规范中定义的成功响应是 202 Accepted
@@ -636,6 +719,145 @@ public class EHAutomationActivityImpl implements EHAutomationActivity {
             log.info("🚀 已成功向 Komga 发送主动扫描指令，Library ID: {}", libraryId);
         } else {
             log.error("❌ 触发 Komga 扫描失败, HTTP 状态码: {}", response.getStatus());
+        }
+    }
+
+    @Override
+    public String renameSynologyFile(Long gid, String oldFilename) {
+        if (StrUtil.isBlank(oldFilename)) return null;
+
+        // 🚀 核心防御：如果文件名已经包含了 [GID] 前缀，跳过重命名
+        if (oldFilename.startsWith("[" + gid + "]")) {
+            log.info("✅ 文件已包含 GID 前缀，跳过重命名: {}", oldFilename);
+            return oldFilename;
+        }
+
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+        if (gallery == null) return null;
+
+        // 1. 提取后缀名 (用于新文件名)
+        String ext = ".zip"; // 默认兜底后缀
+        if (oldFilename.matches("(?i).*\\.(zip|cbz|rar)$")) {
+            // 只有当源文件真的带常规压缩包后缀时，才提取它
+            ext = oldFilename.substring(oldFilename.lastIndexOf('.'));
+        }
+
+        // 2. 构建安全的新文件名
+        String safeTitle = gallery.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (safeTitle.length() > 80) {
+            safeTitle = safeTitle.substring(0, 80);
+        }
+
+        // 无论原物理文件有没有后缀，新文件都会被强行赋予 .zip 或原有后缀！
+        String newFilename = "[" + gid + "] " + safeTitle + ext;
+
+        try {
+            // 3. 获取群晖 SID
+            String sid = getSynologySid();
+            String synoUrl = netConfig.getSynology().getUrl() + "/webapi/entry.cgi";
+
+            // 4. 组装物理绝对路径
+            String dest = netConfig.getSynology().getDestination(); // e.g., n8n_bot/EHentai
+            if (!dest.startsWith("/")) {
+                dest = "/" + dest;
+            }
+            String oldFilePath = dest + "/" + oldFilename; // 使用纯正无污染的原始名字找文件
+
+            // 5. 调用 File Station Rename API
+            Map<String, Object> params = new HashMap<>();
+            params.put("api", "SYNO.FileStation.Rename");
+            params.put("version", "2");
+            params.put("method", "rename");
+
+            params.put("path", new cn.hutool.json.JSONArray().set(oldFilePath).toString());
+            params.put("name", new cn.hutool.json.JSONArray().set(newFilename).toString());
+            params.put("_sid", sid);
+
+            HttpResponse response = HttpRequest.post(synoUrl).form(params).execute();
+            if (response.isOk() && JSONUtil.parseObj(response.body()).getBool("success", false)) {
+                log.info("✅ 群晖物理文件重命名成功: {} -> {}", oldFilename, newFilename);
+
+                // 将新文件名更新到数据库
+                EhGalleriesEntity updateEntity = new EhGalleriesEntity();
+                updateEntity.setGid(gid);
+                updateEntity.setFilename(newFilename);
+                galleriesMapper.updateById(updateEntity);
+
+                return newFilename;
+            } else {
+                log.error("❌ 群晖 API 重命名失败 (可能遇到 412 物理死结): {}", response.body());
+
+                String safePrefix = oldFilename;
+                if (safePrefix.length() > 60) {
+                    safePrefix = safePrefix.substring(0, 60);
+                }
+                boolean sshSuccess = renameViaSSH(safePrefix, newFilename);
+                if (sshSuccess) {
+                    // SSH 改名成功，一样更新数据库并返回！
+                    EhGalleriesEntity updateEntity = new EhGalleriesEntity();
+                    updateEntity.setGid(gid);
+                    updateEntity.setFilename(newFilename);
+                    galleriesMapper.updateById(updateEntity);
+                    return newFilename;
+                }
+            }
+        } catch (Exception e) {
+            log.error("调用群晖重命名接口发生异常", e);
+        }
+        return oldFilename; // 如果失败，退化为旧文件名
+    }
+
+    /**
+     * 通过 SSH 直接调用 Linux 底层 mv + rm 强制改名并清理残留
+     */
+    private boolean renameViaSSH(String safePrefix, String newFilename) {
+        // 🚀 核心修复：使用原生 URL 类安全提取 Host，彻底抛弃脆弱的正则
+        String host = "10.10.10.40"; // 默认兜底 IP
+        try {
+            host = new URL(netConfig.getSynology().getUrl()).getHost();
+        } catch (Exception e) {
+            log.warn("⚠️ 解析群晖 URL 获取 Host 失败，将使用默认 IP 进行 SSH 连接", e);
+        }
+
+        int port = 22;
+        String user = netConfig.getSynology().getUsername();
+        String pass = netConfig.getSynology().getPassword();
+
+        Session session = null;
+        try {
+            log.warn("⚠️ 触发终极兜底引擎：尝试通过 SSH 连接群晖底层执行通配符改名... 目标IP: {}", host);
+            session = JschUtil.getSession(host, port, user, pass);
+
+            String dest = netConfig.getSynology().getDestination();
+            if (!dest.startsWith("/")) dest = "/" + dest;
+
+            String volume = "/volume1";
+            String physicalPath = volume + dest;
+
+            // 组装命令，安全包裹双引号
+            String command = String.format("mv \"%s/%s\"* \"%s/%s\" && rm -rf \"%s/%s\"*",
+                    physicalPath, safePrefix,
+                    physicalPath, newFilename,
+                    physicalPath, safePrefix);
+
+            log.info("💻 执行 SSH 强制指令: {}", command);
+
+            String result = JschUtil.exec(session, command, StandardCharsets.UTF_8);
+
+            if (StrUtil.isBlank(result) || !result.toLowerCase().contains("cannot stat")) {
+                log.info("✅ SSH 底层重命名与清理执行成功！");
+                return true;
+            } else {
+                log.error("❌ SSH 底层重命名失败，系统返回: {}", result);
+                return false;
+            }
+        } catch (Exception e) {
+            log.error("SSH 兜底改名发生异常", e);
+            return false;
+        } finally {
+            if (session != null) {
+                JschUtil.close(session);
+            }
         }
     }
 }

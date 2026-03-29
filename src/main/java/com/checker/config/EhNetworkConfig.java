@@ -64,8 +64,7 @@ public class EhNetworkConfig {
     @Data
     public static class Komga {
         private String url;
-        private String username;
-        private String password;
         private String libraryId;
+        private String apiKey;
     }
 }
