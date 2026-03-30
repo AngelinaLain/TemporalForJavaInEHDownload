@@ -1,35 +1,40 @@
 # EHentai 自动化爬虫 — REST API 文档
 
-##  端点总览
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/temporal/eh/start` | 按关键词启动搜索 + 自动下载工作流 |
-| `POST` | `/api/temporal/eh/retry-failed` | 重试所有「下载失败」状态的画廊 |
-| `POST` | `/api/temporal/eh/test-email` | 发送测试邮件，验证 Graph API 配置 |
+该文档描述了本 Temporal 工作流服务的全部 REST API 接口、参数说明、请求/响应示例及错误处理机制。
 
 ---
 
-## 📌 端点：POST /api/temporal/eh/start
+## 📋 快速导航
+
+| 接口名 | 方法 | 路径 | 说明 |
+|-------|------|------|------|
+| [启动自动化工作流](#启动自动化工作流) | `POST` | `/api/temporal/eh/start` | 按关键词搜索画廊并启动下载流程 |
+| [重试失败任务](#重试失败任务) | `POST` | `/api/temporal/eh/retry-failed` | 重试数据库中所有失败的画廊下载 |
+| [测试邮件配置](#测试邮件配置) | `POST` | `/api/temporal/eh/test-email` | 验证 Microsoft Graph API 邮件通知配置是否正确 |
+
+---
+
+## 📌 启动自动化工作流
 
 ### 基本信息
 
 | 项目 | 值 |
 |------|-----|
-| **Method** | `POST` |
+| **方法** | `POST` |
 | **URL** | `http://127.0.0.1:8001/api/temporal/eh/start` |
 | **Content-Type** | `application/json` |
-| **Authentication** | 内置 Cookie（无需额外认证） |
+| **认证** | 无（内置 Cookie 认证） |
+| **异步** | ✅ 异步执行（返回 workflowId 和 runId） |
 
 ---
 
-## 📥 请求体参数
+### 📥 请求体参数
 
-### JSON Schema
+#### JSON Schema
 
 ```json
 {
-  "keyword": "string (required, non-empty)",
+  "keyword": "string (required, 非空)",
   "fCats": "integer (optional, default: 0)",
   "minimumRating": "integer (optional, default: 1)",
   "language": "string (optional, default: null)",
@@ -43,23 +48,23 @@
 }
 ```
 
-### 参数说明
+#### 参数详解
 
-| 参数 | 类型 | 必需 | 默认 | 说明 |
-|------|------|------|------|------|
-| **`keyword`** | String | ✅ | — | **搜索关键词**，不能为空。支持 EHentai 高级搜索语法 |
-| **`fCats`** | Integer | ❌ | `0` | **分类排除码**（位运算组合），`0` = 不排除任何分类 |
-| **`minimumRating`** | Integer | ❌ | `1` | **最低星级过滤**，范围 1-5。`1` = 不过滤，`2-5` = 仅保留该星级及以上的作品 |
-| **`language`** | String | ❌ | `null` | **语言过滤**，如 `"chinese"`, `"japanese"`, `"korean"` 等。`null` 表示不过滤 |
-| **`pageAtLeast`** | Integer | ❌ | `null` | **最少页数** (f_spf)，仅搜索至少有指定页数的作品 |
-| **`pageAtMost`** | Integer | ❌ | `null` | **最多页数** (f_spt)，仅搜索不超过指定页数的作品 |
-| **`searchExpungedGalleries`** | Boolean | ❌ | `false` | **搜索已删除的画廊** (f_sh)，`true` 包含被删除的作品 |
-| **`showOnlyWithTorrents`** | Boolean | ❌ | `false` | **仅显示有种子的** (f_sto)，`true` 仅返回有种子的作品 |
-| **`disableLanguageFilter`** | Boolean | ❌ | `false` | **禁用语言过滤** (f_sfl)，`true` 不使用语言 tag 进行过滤 |
-| **`disableUploaderFilter`** | Boolean | ❌ | `false` | **禁用上传者过滤** (f_sfu)，`true` 不过滤特定上传者 |
-| **`disableTagsFilter`** | Boolean | ❌ | `false` | **禁用标签过滤** (f_sft)，`true` 忽略 tag 相关的搜索限制 |
+| 参数 | 类型 | 必需 | 默认 | 范围/说明 |
+|------|------|------|------|----------|
+| **`keyword`** | String | ✅ | — | 搜索关键词，不能为空。支持 EHentai 高级搜索语法（见下表） |
+| **`fCats`** | Integer | ❌ | `0` | 分类排除码（位运算组合）。`0` = 不排除，其他值见"分类码"表 |
+| **`minimumRating`** | Integer | ❌ | `1` | 最低星级（1-5）：`1` = 不过滤，`2-5` = 该星级以上 |
+| **`language`** | String | ❌ | `null` | 语言代码：`"chinese"`, `"japanese"`, `"korean"$ 等，`null` = 不过滤 |
+| **`pageAtLeast`** | Integer | ❌ | `null` | 最少页数：仅返回至少有这么多页的作品 |
+| **`pageAtMost`** | Integer | ❌ | `null` | 最多页数：仅返回不超过这么多页的作品 |
+| **`searchExpungedGalleries`** | Boolean | ❌ | `false` | 搜索已删除画廊：`true` = 包含被从网站移除的作品 |
+| **`showOnlyWithTorrents`** | Boolean | ❌ | `false` | 仅种子作品：`true` = 仅返回已发布种子的作品 |
+| **`disableLanguageFilter`** | Boolean | ❌ | `false` | 禁用语言 tag 过滤：`true` = 忽略语言相关限制 |
+| **`disableUploaderFilter`** | Boolean | ❌ | `false` | 禁用上传者过滤：`true` = 忽略上传者相关限制 |
+| **`disableTagsFilter`** | Boolean | ❌ | `false` | 禁用标签过滤：`true` = 忽略所有 tag 相关限制 |
 
-### keyword 搜索语法示例
+### 搜索语法示例
 
 ```javascript
 // 单条件
@@ -71,33 +76,367 @@
 // 多条件组合（空格分隔）
 "language:chinese female:corruption"
 
-// 复杂组合
+// 复杂组合（带引号的精确匹配）
 "language:chinese female:corruption male:\"gender change$\""
+
+// 排除语法（使用 - 前缀）
+"female:corruption -language:japanese"  // 包含腐化但排除日文
+
+// 标签名精确匹配示例
+"artist:\"example artist$\""
 ```
 
-### fCats 分类排除码
+### 分类排除码表
 
-#### 分类定义
+| 分类代码 | 含义 | 排除码 |
+|---------|------|--------|
+| Misc | 其他 | `1` |
+| Doujinshi | 同人志 | `2` |
+| Manga | 漫画 | `4` |
+| Artist CG | 艺术 CG | `8` |
+| Game CG | 游戏 CG | `16` |
+| Image Set | 图像集 | `32` |
+| Cosplay | Cosplay | `64` |
+| Asian Porn | 亚洲成人视频 | `128` |
+| Non-H | 无码作品 | `256` |
+| Western | 西方作品 | `512` |
 
-| 分类 | 排除码 | 说明 |
-|------|--------|------|
-| Misc | `1` | 其他 |
-| Doujinshi | `2` | 同人志 |
-| Manga | `4` | 漫画 |
-| Artist CG | `8` | 艺术 CG |
-| Game CG | `16` | 游戏 CG |
-| Image Set | `32` | 图像集 |
-| Cosplay | `64` | Cosplay |
-| Asian Porn | `128` | 亚洲成人视频 |
-| Non-H | `256` | 无码作品 |
-| Western | `512` | 西方作品 |
+**fCats 组合示例**：
 
-#### 常用组合例子
+- `fCats = 0` — 不排除任何分类（默认，全选）
+- `fCats = 2` — 仅排除 Doujinshi
+- `fCats = 514` — 排除 Doujinshi(2) + Western(512)
+- `fCats = 3` — 排除 Misc(1) + Doujinshi(2)
 
-```javascript
-fCats = 0      // 不排除任何分类（默认，全选）
-fCats = 2      // 仅排除 Doujinshi
-fCats = 514    // 排除 Doujinshi(2) + Western(512)
+### 📤 响应体
+
+#### 成功响应 (200 OK)
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": {
+    "workflowId": "eh-auto-f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "runId": "c7a8b52f-9c8b-4c8d-a1d0-2e8f7a9c4e1b"
+  }
+}
+```
+
+**字段说明**：
+
+- `code`: `"SUCCESS"` — 请求成功
+- `message`: 成功提示信息
+- `data.workflowId`: Temporal 工作流 ID，可用于查询工作流状态
+- `data.runId`: 工作流运行 ID
+
+#### 参数验证失败 (400 Bad Request)
+
+```json
+{
+  "code": "BAD_REQUEST",
+  "message": "keyword 不能为空",
+  "data": null
+}
+```
+
+---
+
+## 📌 重试失败任务
+
+### 基本信息
+
+| 项目 | 值 |
+|------|-----|
+| **方法** | `POST` |
+| **URL** | `http://127.0.0.1:8001/api/temporal/eh/retry-failed` |
+| **Content-Type** | `application/json` |
+| **认证** | 无 |
+| **异步** | ✅ 异步执行 |
+| **请求体** | 空（无参数） |
+
+### 工作原理
+
+1. 扫描数据库中所有 `download_status` 为 `FAILED` 或 `DOWNLOADED_PENDING` 的画廊
+2. 为每条失败记录启动一个独立的 `SingleGalleryDownloadWorkflow` 子工作流
+3. 子工作流实现单画廊的完整下载 → 入库 → 通知流程
+4. 所有子工作流并行执行（工作量由 Temporal Worker 线程池管理）
+
+### 📥 请求示例
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/retry-failed \
+  -H "Content-Type: application/json"
+```
+
+### 📤 响应体
+
+#### 成功响应 (200 OK)
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": {
+    "workflowId": "eh-retry-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "runId": "9876f5e4-d3c2-b1a0-9f8e-7d6c5b4a3210"
+  }
+}
+```
+
+---
+
+## 📌 测试邮件配置
+
+### 基本信息
+
+| 项目 | 值 |
+|------|-----|
+| **方法** | `POST` |
+| **URL** | `http://127.0.0.1:8001/api/temporal/eh/test-email` |
+| **Content-Type** | `application/json` |
+| **认证** | 无 |
+| **异步** | ❌ 同步执行（等待完成后返回） |
+
+### 功能说明
+
+直接调用 NotificationActivity 的发邮件接口（绕过 Temporal 框架），用于快速验证 Microsoft Graph API 凭证是否正确配置。
+
+### 📥 请求体
+
+#### 最小化请求（使用默认邮件内容）
+
+```json
+{}
+```
+
+或
+
+```json
+null
+```
+
+#### 自定义邮件内容（可选）
+
+```json
+{
+  "subject": "自定义测试主题",
+  "content": "这是自定义的邮件内容。"
+}
+```
+
+**字段说明**：
+
+- `subject`: 邮件主题（可选，默认："EHentai 自动化 - 邮件测试"）
+- `content`: 邮件正文（可选，默认："这是一封测试邮件..."）
+
+### 📥 请求示例
+
+```bash
+# 方式 1：使用默认内容
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/test-email \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# 方式 2：自定义邮件内容
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/test-email \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject": "我的邮件测试",
+    "content": "邮件配置是否正确？如果收到此邮件，则正确！"
+  }'
+```
+
+### 📤 响应体
+
+#### 成功响应 (200 OK)
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": {
+    "message": "发送邮件指令已执行，请查看控制台日志以及您的管理员邮箱接收情况。"
+  }
+}
+```
+
+#### 失败响应示例
+
+如果 Graph API 配置错误（如凭证无效）：
+
+```json
+{
+  "code": "INTERNAL_SERVER_ERROR",
+  "message": "发送邮件失败: Client error: 401 Unauthorized",
+  "data": null
+}
+```
+
+**排查步骤**：
+
+1. 检查 `application.yaml` 中 `eh-config.notification` 的配置
+2. 验证 Microsoft Entra ID 应用程序凭证（tenant_id, client_id, client_secret）
+3. 确认应用程序有 `Mail.Send` 权限
+4. 查看应用日志获取详细错误信息
+
+---
+
+## 🔄 工作流执行流程与查询
+
+### 工作流执行生命周期
+
+```
+顶级工作流启动
+  │
+  ├─ [Scraper Activity] 搜索并爬取画廊列表
+  │
+  ├─ [Database Activity] 批量保存/更新到 MySQL
+  │
+  └─ [For Each Gallery] 逐个处理
+      ├─ [Synology Activity] 推送下载链接
+      ├─ [Database Activity] 更新下载状态为 DOWNLOADING
+      ├─ [Loop Poll Activity] 轮询下载状态（最多 20 次，每次间隔 15 秒）
+      │   └─ 当下载完成时，继续
+      ├─ [Komga Activity] 触发媒体库入库 (3 个子步骤)
+      │   ├─ 触发文件重命名
+      │   ├─ 抽取元数据
+      │   └─ 扫描媒体库
+      └─ [Notification Activity] 发送下载完成邮件
+```
+
+### 通过 Temporal Web UI 查询工作流
+
+Temporal 默认提供 Web UI 来查询、监控、调试工作流。
+
+**访问地址**：`http://127.0.0.1:8233`
+
+**常见查询操作**：
+
+- 输入 `workflowId` 查询单个工作流的执行进度
+- 查看工作流执行历史与事件时间线
+- 查看每个 Activity 的执行日志与错误堆栈
+- 重放（重新执行）失败的工作流
+
+---
+
+## ❌ 错误处理与错误码
+
+### 错误响应格式
+
+所有错误响应遵循统一格式：
+
+```json
+{
+  "code": "ERROR_CODE",
+  "message": "人类可读的错误信息",
+  "data": null
+}
+```
+
+### 错误码列表
+
+| 错误码 | HTTP 状态 | 说明 | 对应场景 |
+|--------|----------|------|---------|
+| `SUCCESS` | 200 | 请求成功 | 正常完成 |
+| `BAD_REQUEST` | 400 | 请求参数错误 | keyword 为空、参数类型错误等 |
+| `INTERNAL_SERVER_ERROR` | 500 | 服务器内部错误 | Temporal 连接失败、数据库异常等 |
+| `VALIDATION_ERROR` | 400 | 参数验证失败 | 参数值不在范围内等 |
+
+### Activity 业务错误码
+
+在工作流执行过程中，各 Activity 可能抛出业务异常。这些错误被记录在数据库字段 `error_type` 中：
+
+| 错误类型 | 代码 | 重试 | 说明 |
+|---------|------|------|------|
+| **配额超限** | `QUOTA_EXCEEDED` | ❌ 不重试 | EHentai 请求过于频繁，被限流 |
+| **IP 被封** | `IP_BANNED` | ❌ 不重试 | IP 已被 EHentai 列入黑名单 |
+| **链接提取失败** | `ARCHIVE_LINK_EXTRACT_FAILED` | ❌ 不重试 | 无法提取下载链接（可能是权限问题） |
+| **群晖认证失败** | `SYNOLOGY_AUTH_FAILED` | ❌ 不重试 | Synology 凭据错误或服务离线 |
+| **网络超时** | `NETWORK_TIMEOUT` | ✅ 重试 | 网络请求超时，自动重试最多 3 次 |
+| **临时故障** | `TEMPORARY_FAILURE` | ✅ 重试 | 临时网络/服务故障，重试 |
+| **未知错误** | `UNKNOWN_ERROR` | ✅ 重试 | 未分类的错误 |
+
+### 数据库中的错误记录
+
+当 Activity 执行失败时，相关字段会被更新：
+
+```sql
+UPDATE eh_galleries 
+SET 
+  download_status = 'FAILED',
+  error_type = 'IP_BANNED',
+  error_message = '您的 IP 已被 EHentai 列入黑名单'
+WHERE gid = 12345;
+```
+
+---
+
+## 📚 完整 API 请求示例
+
+### 示例 1：搜索中文作品并下载
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keyword": "language:chinese",
+    "minimumRating": 2,
+    "pageAtLeast": 10
+  }'
+```
+
+**预期响应**：
+
+```json
+{
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": {
+    "workflowId": "eh-auto-12345678-abcd-ef01-2345-6789abcdef01",
+    "runId": "00000000-0000-0000-0000-000000000001"
+  }
+}
+```
+
+### 示例 2：搜索有种子的日文作品
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "keyword": "language:japanese",
+    "showOnlyWithTorrents": true,
+    "fCats": 256
+  }'
+```
+
+### 示例 3：重试所有失败任务
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/retry-failed \
+  -H "Content-Type: application/json"
+```
+
+### 示例 4：发送测试邮件
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/temporal/eh/test-email \
+  -H "Content-Type: application/json" \
+  -d '{
+    "subject": "Graph API 配置正确性验证",
+    "content": "如果成功收到此邮件，说明您的 Microsoft Graph API 凭证配置完全正确！"
+  }'
+```
+
+---
+
+## 🔗 相关文档
+
+- [main README.md](README.md) — 项目概览、架构、启动方式
+- [Temporal 官方 Java SDK](https://docs.temporal.io/develop/java/)
+- [EHentai 高级搜索语法](https://ehwiki.org/wiki/Advanced_Search)
+- [Microsoft Graph API 邮件文档](https://learn.microsoft.com/en-us/graph/api/user-sendmail)
 fCats = 6      // 排除 Doujinshi(2) + Manga(4)  
 fCats = 510    // 排除 Doujinshi + Manga + Artist CG + Game CG + Image Set + Cosplay + Asian Porn + Non-H（仅保留 Misc + Western）
 fCats = 1023   // 全部排除（无意义，结果为空）
