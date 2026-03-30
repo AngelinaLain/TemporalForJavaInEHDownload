@@ -4,6 +4,9 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+/**
+ * EHentai 网络配置类，绑定 application.yaml 中 eh-config 前缀的属性
+ */
 @Data
 @Component
 @ConfigurationProperties(prefix = "eh-config")
@@ -45,6 +48,9 @@ public class EhNetworkConfig {
             return String.format("%s://%s:%s@%s:%d", type, username, password, host, port);
         }
     }
+    /**
+     * 群晖 DownloadStation / FileStation 连接配置
+     */
     @Data
     public static class Synology {
         private String url;
@@ -53,6 +59,9 @@ public class EhNetworkConfig {
         private String destination;
         private String type;
     }
+    /**
+     * 邮件通知配置（基于 Microsoft Graph API）
+     */
     @Data
     public static class Notification {
         private String adminEmail;
@@ -61,6 +70,9 @@ public class EhNetworkConfig {
         private String clientSecret;
         private String senderEmail;
     }
+    /**
+     * Komga 漫画库管理服务连接配置
+     */
     @Data
     public static class Komga {
         private String url;

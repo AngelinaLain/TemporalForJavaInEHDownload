@@ -2,7 +2,7 @@ package com.checker.controllers;
 
 import com.checker.common.Result;
 import com.checker.dto.SearchOptions;
-import com.checker.temporalServices.activities.EHAutomationActivity;
+import com.checker.temporalServices.activities.NotificationActivity;
 import com.checker.temporalServices.workflows.EHAutomationWorkflow;
 import com.checker.temporalServices.workflows.RetryFailedDownloadWorkflow; // 记得加上这个导入
 import io.temporal.api.common.v1.WorkflowExecution;
@@ -18,6 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * EHentai 自动化工作流 REST 控制器
+ */
 @RestController
 @RequestMapping("/api/temporal/eh")
 public class EHAutomationController {
@@ -25,6 +28,12 @@ public class EHAutomationController {
     @Autowired
     private WorkflowClient workflowClient;
 
+    /**
+     * 启动 EHentai 自动化工作流：按搜索条件抓取画廊并推送下载
+     *
+     * @param searchOptions 搜索参数（关键词、分类、评分等）
+     * @return 包含 workflowId 和 runId 的响应
+     */
     @PostMapping("/start")
     public Result<Map<String, String>> startWorkflow(@Valid @RequestBody SearchOptions searchOptions) {
         String workflowId = "eh-auto-" + UUID.randomUUID();
@@ -79,7 +88,7 @@ public class EHAutomationController {
     }
 
     @Autowired
-    private EHAutomationActivity ehAutomationActivity;
+    private NotificationActivity notificationActivity;
     /**
      * 测试/Debug 专用：直接测试 Microsoft Graph API 发送邮件功能
      */
@@ -95,7 +104,7 @@ public class EHAutomationController {
         }
 
         // 直接调用 Activity 的发邮件方法 (脱离 Temporal 框架直接执行)
-        ehAutomationActivity.sendEmailAlert(subject, content);
+        notificationActivity.sendEmailAlert(subject, content);
 
         return Result.success(Map.of(
                 "message", "发送邮件指令已执行，请查看控制台日志以及您的管理员邮箱接收情况。"
