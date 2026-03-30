@@ -32,8 +32,8 @@ public class Result<T> implements Serializable {
      */
     public static <T> Result<T> success(T data) {
         Result<T> result = new Result<>();
-        result.setCode(200);
-        result.setMsg("操作成功");
+        result.setCode(ResultCode.SUCCESS.getCode());
+        result.setMsg(ResultCode.SUCCESS.getMsg());
         result.setData(data);
         return result;
     }
@@ -71,6 +71,17 @@ public class Result<T> implements Serializable {
      * @return 失败 Result
      */
     public static <T> Result<T> error(String msg) {
-        return error(500, msg);
+        return error(ResultCode.ERROR.getCode(), msg);
+    }
+
+    /**
+     * 根据 ResultCode 枚举构建失败响应
+     *
+     * @param resultCode 状态码枚举
+     * @param <T>        数据类型
+     * @return 失败 Result
+     */
+    public static <T> Result<T> error(ResultCode resultCode) {
+        return error(resultCode.getCode(), resultCode.getMsg());
     }
 }

@@ -38,6 +38,17 @@ class WorkflowSteps {
                     .build())
             .build();
 
+    /** 爬虫 Activity 专用配置：更长超时 + 心跳检测 */
+    static final ActivityOptions SCRAPER_OPTIONS = ActivityOptions.newBuilder()
+            .setStartToCloseTimeout(Duration.ofMinutes(15))
+            .setHeartbeatTimeout(Duration.ofSeconds(30))
+            .setRetryOptions(RetryOptions.newBuilder()
+                    .setInitialInterval(Duration.ofSeconds(10))
+                    .setMaximumAttempts(3)
+                    .setDoNotRetry(ErrorType.QUOTA_EXCEEDED.getCode(), ErrorType.IP_BANNED.getCode(), ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode(), ErrorType.SYNOLOGY_AUTH_FAILED.getCode())
+                    .build())
+            .build();
+
     /**
      * 下载完成后的 Komga 入库前置三步骤：
      * <ol>
@@ -60,12 +71,14 @@ class WorkflowSteps {
     }
 
     /**
-     * 构建 Komga 异步轮询入库任务（最多重试 20 次，每次间隔 15 秒）。
+     * 构建 Komga 异步轮询入库任务。
      * 超时后通过 {@code notificationActivity} 发送邮件告警。
      *
      * @param gallery            目标画廊实体（需要 gid、title）
      * @param timeoutSubject     超时邮件主题
      * @param timeoutContent     超时邮件正文
+     * @param maxRetries         最大轮询次数（来自 WorkflowSettings）
+     * @param pollIntervalSeconds 轮询间隔秒数（来自 WorkflowSettings）
      * @return Promise&lt;Void&gt; 供调用方加入 {@code Promise.allOf()} 等待
      */
     static Promise<Void> buildKomgaImportTask(
@@ -74,13 +87,14 @@ class WorkflowSteps {
             EhGalleriesEntity gallery,
             Logger log,
             String timeoutSubject,
-            String timeoutContent) {
+            String timeoutContent,
+            int maxRetries,
+            int pollIntervalSeconds) {
         return Async.procedure(() -> {
             boolean isImportedToKomga = false;
-            int maxRetries = 20;
             int currentTry = 0;
             while (!isImportedToKomga && currentTry < maxRetries) {
-                Workflow.sleep(Duration.ofSeconds(15));
+                Workflow.sleep(Duration.ofSeconds(pollIntervalSeconds));
                 currentTry++;
                 String komgaSeriesId = komgaActivity.findBookInKomga(gallery.getGid());
                 if (komgaSeriesId != null) {

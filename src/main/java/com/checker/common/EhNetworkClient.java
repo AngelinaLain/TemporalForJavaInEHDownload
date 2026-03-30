@@ -1,20 +1,23 @@
 package com.checker.common;
 
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.http.*;
 import com.checker.config.EhNetworkConfig;
 import io.temporal.failure.ApplicationFailure;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.net.Authenticator;
-import java.net.PasswordAuthentication;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
- * EHentai 网络客户端：封装了带代理、Cookie、UA 伪装的 HTTP 请求能力
+ * EHentai 网络客户端：使用 OkHttp 重构，完美解决 HTTPS 代理隧道 (CONNECT) 407 问题，
+ * 且代理认证仅对当前 OkHttpClient 实例生效，不污染 JVM 全局环境。
  */
 @Slf4j
 @Component
@@ -23,113 +26,89 @@ public class EhNetworkClient {
     @Autowired
     private EhNetworkConfig netConfig;
 
-    // 默认超时时间设定为 15 秒（爬虫尽量设置长一点防抖）
-    private static final int TIMEOUT_MS = 15000;
+    private OkHttpClient httpClient;
 
-    /**
-     * 初始化全局代理认证器，在 Bean 创建后自动执行
-     * <p>仅在配置了代理账号密码时注册 {@link Authenticator}，且严格限定只响应代理认证请求</p>
-     */
+    // 默认超时时间设定为 15 秒
+    private static final int TIMEOUT_SECONDS = 15;
+
     @PostConstruct
-    public void initProxyAuth() {
+    public void init() {
+        OkHttpClient.Builder builder = new OkHttpClient.Builder()
+                .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
         EhNetworkConfig.Proxy proxyConfig = netConfig.getProxy();
-        if (StrUtil.isNotBlank(proxyConfig.getUsername()) && StrUtil.isNotBlank(proxyConfig.getPassword())) {
-            // 注册全局认证器，且严格限定仅响应代理认证请求
-            Authenticator.setDefault(new Authenticator() {
-                @Override
-                protected PasswordAuthentication getPasswordAuthentication() {
-                    // 只有当请求者是 PROXY (代理) 时，才交出账号密码，避免泄露给其他服务器
-                    if (getRequestorType() == RequestorType.PROXY) {
-                        return new PasswordAuthentication(proxyConfig.getUsername(), proxyConfig.getPassword().toCharArray());
-                    }
-                    return null; // 其他普通网站的弹窗认证一律不理会
-                }
-            });
-            log.info("✅ 全局代理认证器已成功初始化");
+        if (StrUtil.isNotBlank(proxyConfig.getHost()) && proxyConfig.getPort() != null) {
+            // 配置代理服务器
+            Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxyConfig.getHost(), proxyConfig.getPort()));
+            builder.proxy(proxy);
+
+            // 配置实例级代理认证 (解决 HTTPS CONNECT 报 407 的核心)
+            if (StrUtil.isNotBlank(proxyConfig.getUsername()) && StrUtil.isNotBlank(proxyConfig.getPassword())) {
+                builder.proxyAuthenticator((route, response) -> {
+                    String credential = Credentials.basic(proxyConfig.getUsername(), proxyConfig.getPassword());
+                    return response.request().newBuilder()
+                            .header("Proxy-Authorization", credential)
+                            .build();
+                });
+                log.info("✅ OkHttp 代理认证已配置，安全隔离不污染全局");
+            }
         }
+        this.httpClient = builder.build();
     }
 
-    /**
-     * 发起 GET 请求并返回 HTML 内容
-     *
-     * @param url 目标链接
-     * @return 页面 HTML 字符串
-     */
     public String getHtml(String url) {
         log.info("正在请求 EHentai 页面: {}", url);
-        try (HttpResponse response = buildBaseRequest(url, Method.GET).execute()) {
-            return handleResponse(url, response);
-        } catch (Exception e) {
-        // 如果已经是我们自定义包装的 Temporal 业务异常，直接抛出，不要拦截！
-        if (e instanceof ApplicationFailure) {
-            throw (ApplicationFailure) e;
-        }
-        log.error("网络请求发生未知致命异常: {}", e.getMessage());
-        throw ApplicationFailure.newFailure("代理失效或网络无法连接: " + e.getMessage(), ErrorType.NETWORK_ERROR.getCode());
-    }
+        Request request = buildBaseRequest(url).get().build();
+        return executeRequest(url, request);
     }
 
-    /**
-     * 发起 POST 表单请求并返回 HTML 内容
-     */
     public String postForm(String url, Map<String, Object> formParams) {
         log.info("正在提交 EHentai 表单: {}", url);
-        try {
-            HttpRequest request = buildBaseRequest(url, Method.POST);
-            if (formParams != null && !formParams.isEmpty()) {
-                request.form(formParams);
-            }
-            try (HttpResponse response = request.execute()) {
-                return handleResponse(url, response);
-            }
+        FormBody.Builder formBuilder = new FormBody.Builder();
+        if (formParams != null) {
+            formParams.forEach((k, v) -> formBuilder.add(k, String.valueOf(v)));
+        }
+        Request request = buildBaseRequest(url).post(formBuilder.build()).build();
+        return executeRequest(url, request);
+    }
+
+    private String executeRequest(String url, Request request) {
+        try (Response response = httpClient.newCall(request).execute()) {
+            return handleResponse(url, response);
         } catch (Exception e) {
             if (e instanceof ApplicationFailure) {
                 throw (ApplicationFailure) e;
             }
-            log.error("表单发生未知致命异常: {}", e.getMessage());
+            log.error("网络请求发生未知致命异常: {}", e.getMessage());
             throw ApplicationFailure.newFailure("代理失效或网络无法连接: " + e.getMessage(), ErrorType.NETWORK_ERROR.getCode());
         }
     }
 
-    /**
-     * 统一处理 HTTP 响应，检测 509 配额超限、403/502 封禁等异常状态码
-     *
-     * @param url      请求 URL（用于日志输出）
-     * @param response Hutool HTTP 响应对象
-     * @return 响应体字符串
-     * @throws ApplicationFailure 当遇到 509 / 403 / 502 或其他非 200 状态码时抛出
-     */
-    private String handleResponse(String url, HttpResponse response) {
-        int status = response.getStatus();
+    private String handleResponse(String url, Response response) throws IOException {
+        int status = response.code();
         if (status == 509) {
             log.error("配额超限 (509 Bandwidth Exceeded) - URL: {}", url);
             throw ApplicationFailure.newFailure("触发 509 配额超限", ErrorType.QUOTA_EXCEEDED.getCode());
-        } else if (status == 403 || status == 502) { // 502 网关错误或 403 封禁
+        } else if (status == 403 || status == 502) {
             log.error("IP 被封禁或节点不可用 - URL: {}", url);
             throw ApplicationFailure.newFailure("IP 被封禁或节点不可用", ErrorType.IP_BANNED.getCode());
         }
-        if (!response.isOk()) {
+        if (!response.isSuccessful()) {
             log.error("请求失败，HTTP 状态码: {} - URL: {}", status, url);
             throw new RuntimeException("请求异常: HTTP " + status);
         }
-        return response.body();
+        ResponseBody body = response.body();
+        return body != null ? body.string() : "";
     }
 
-    /**
-     * 构建带有完整伪装、代理、Cookie 的 Hutool Request
-     */
-    private HttpRequest buildBaseRequest(String url, Method method) {
-        HttpRequest request = HttpUtil.createRequest(method, url)
-                .timeout(TIMEOUT_MS)
-                .cookie(netConfig.getCookies().getFullCookieString())
-                // 必须带上浏览器 UA，这是 params.md 里明确要求的
-                .header(Header.USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                .header(Header.ACCEPT_LANGUAGE, "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7");
-        // 注入代理配置
-        EhNetworkConfig.Proxy proxyConfig = netConfig.getProxy();
-        if (StrUtil.isNotBlank(proxyConfig.getHost()) && proxyConfig.getPort() != null) {
-            request.setHttpProxy(proxyConfig.getHost(), proxyConfig.getPort());
-        }
-        return request;
+    private Request.Builder buildBaseRequest(String url) {
+        return new Request.Builder()
+                .url(url)
+                // 从 netConfig 获取 Cookie 并拼接
+                .header("Cookie", netConfig.getCookies().getFullCookieString())
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .header("Accept-Language", "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7");
     }
 }

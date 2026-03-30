@@ -7,9 +7,12 @@ import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checker.common.Constants;
 import com.checker.common.ErrorType;
 import com.checker.config.EhNetworkConfig;
 import com.checker.temporalServices.activities.NotificationActivity;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -18,17 +21,24 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 通知 Activity 实现：通过 Microsoft Graph API 发送邮件通知
  */
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = "EHDownloadTaskQueue")
+@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
 public class NotificationActivityImpl implements NotificationActivity {
 
     @Autowired
     private EhNetworkConfig netConfig;
+
+    /** Graph API Token 缓存，有效期 50 分钟（Token 实际有效 1 小时，提前 10 分钟刷新） */
+    private final Cache<String, String> tokenCache = Caffeine.newBuilder()
+            .expireAfterWrite(50, TimeUnit.MINUTES)
+            .maximumSize(1)
+            .build();
 
     @Override
     public void sendEmailAlert(String subject, String content) {
@@ -38,20 +48,10 @@ public class NotificationActivityImpl implements NotificationActivity {
             return;
         }
         try {
-            // 1. 获取 Microsoft Graph Access Token
-            String tokenUrl = String.format("https://login.microsoftonline.com/%s/oauth2/v2.0/token",
-                    notifConfig.getTenantId());
-            Map<String, Object> tokenForm = new HashMap<>();
-            tokenForm.put("client_id", notifConfig.getClientId());
-            tokenForm.put("client_secret", notifConfig.getClientSecret());
-            tokenForm.put("scope", "https://graph.microsoft.com/.default");
-            tokenForm.put("grant_type", "client_credentials");
-
-            String tokenResp = HttpRequest.post(tokenUrl).form(tokenForm).timeout(10000).execute().body();
-            JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
-            String accessToken = tokenJson.getStr("access_token");
+            // 1. 从缓存获取 Token（过期自动刷新）
+            String accessToken = tokenCache.get("graphToken", key -> fetchGraphToken(notifConfig));
             if (StrUtil.isBlank(accessToken)) {
-                log.error("获取 Graph Token 失败: {}", tokenResp);
+                log.error("获取 Graph Token 失败");
                 return;
             }
 
@@ -129,5 +129,28 @@ public class NotificationActivityImpl implements NotificationActivity {
         mailPayload.set("message", message);
         mailPayload.set("saveToSentItems", "false");
         return mailPayload;
+    }
+
+    /**
+     * 向 Microsoft Identity Platform 请求 OAuth2 Client Credentials Token
+     */
+    private String fetchGraphToken(EhNetworkConfig.Notification notifConfig) {
+        String tokenUrl = String.format("https://login.microsoftonline.com/%s/oauth2/v2.0/token",
+                notifConfig.getTenantId());
+        Map<String, Object> tokenForm = new HashMap<>();
+        tokenForm.put("client_id", notifConfig.getClientId());
+        tokenForm.put("client_secret", notifConfig.getClientSecret());
+        tokenForm.put("scope", "https://graph.microsoft.com/.default");
+        tokenForm.put("grant_type", "client_credentials");
+
+        String tokenResp = HttpRequest.post(tokenUrl).form(tokenForm).timeout(10000).execute().body();
+        JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
+        String accessToken = tokenJson.getStr("access_token");
+        if (StrUtil.isBlank(accessToken)) {
+            log.error("获取 Graph Token 失败: {}", tokenResp);
+            return null;
+        }
+        log.info("✅ Graph API Token 已获取并缓存");
+        return accessToken;
     }
 }

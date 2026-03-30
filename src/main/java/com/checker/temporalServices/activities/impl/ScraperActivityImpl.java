@@ -4,15 +4,21 @@ import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
+import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.EhNetworkClient;
 import com.checker.common.ErrorType;
 import com.checker.dto.SearchOptions;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.ScraperActivity;
+import io.temporal.activity.Activity;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -29,7 +35,7 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = "EHDownloadTaskQueue")
+@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
 public class ScraperActivityImpl implements ScraperActivity {
 
     @Autowired
@@ -40,7 +46,6 @@ public class ScraperActivityImpl implements ScraperActivity {
     @Override
     public List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions) {
         List<EhGalleriesEntity> results = new ArrayList<>();
-        String baseUrl = "https://e-hentai.org/";
 
         String searchParam = URLUtil.encodeAll(searchOptions.getKeyword());
         if (StrUtil.isNotBlank(searchOptions.getLanguage())) {
@@ -48,7 +53,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         }
 
         String currentUrl = String.format("%s?f_search=%s&f_cats=%d&advsearch=1",
-                baseUrl, searchParam, searchOptions.getFCats());
+                Constants.EHENTAI_BASE_URL, searchParam, searchOptions.getFCats());
 
         if (searchOptions.getMinimumRating() != null && searchOptions.getMinimumRating() > 1) {
             currentUrl += "&f_srdd=" + searchOptions.getMinimumRating();
@@ -78,29 +83,40 @@ public class ScraperActivityImpl implements ScraperActivity {
         int maxPages = 10;
         int delayMs = 3000;
         String lastNextCursor = null;
+        Pattern galleryPattern = Pattern.compile("https://e-hentai\\.org/g/(\\d+)/([a-z0-9]+)/");
 
         for (int pageNo = 1; pageNo <= maxPages; pageNo++) {
+            // 向 Temporal Server 汇报心跳，防止长耗时 Activity 被误判超时
+            Activity.getExecutionContext().heartbeat(pageNo);
+
             log.info("正在抓取第 {} 页: {}", pageNo, currentUrl);
             String html = ehNetworkClient.getHtml(currentUrl);
+            Document doc = Jsoup.parse(html);
 
-            String regex = "<a href=\"(https://e-hentai\\.org/g/(\\d+)/([a-z0-9]+)/)\"[^>]*><div class=\"glink\">([^<]+)</div>";
-            Pattern pattern = Pattern.compile(regex);
-            Matcher matcher = pattern.matcher(html);
-
+            // 使用 Jsoup CSS 选择器替代脆弱的正则表达式
+            Elements galleryLinks = doc.select("a[href~=https://e-hentai\\.org/g/\\d+/[a-z0-9]+/]");
             boolean hasData = false;
-            while (matcher.find()) {
+
+            for (Element link : galleryLinks) {
+                Element glinkDiv = link.selectFirst("div.glink");
+                if (glinkDiv == null) continue;
+
+                String href = link.attr("href");
+                Matcher matcher = galleryPattern.matcher(href);
+                if (!matcher.find()) continue;
+
                 hasData = true;
                 EhGalleriesEntity entity = new EhGalleriesEntity();
-                entity.setGalleryUrl(matcher.group(1));
-                entity.setGid(Long.parseLong(matcher.group(2)));
-                entity.setToken(matcher.group(3));
-                entity.setTitle(matcher.group(4));
+                entity.setGalleryUrl(href);
+                entity.setGid(Long.parseLong(matcher.group(1)));
+                entity.setToken(matcher.group(2));
+                entity.setTitle(glinkDiv.text());
                 entity.setFilename(entity.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_"));
                 entity.setSearchQuery(searchOptions.getKeyword());
                 entity.setCrawledAt(new Date());
                 entity.setDownloadStatus(STATUS_PENDING);
                 entity.setTracePagesCrawled(pageNo);
-                entity.setTraceFirstPageTitle(ReUtil.getGroup1("<title>(.*?)</title>", html));
+                entity.setTraceFirstPageTitle(doc.title());
                 results.add(entity);
             }
 
@@ -110,8 +126,9 @@ public class ScraperActivityImpl implements ScraperActivity {
                 break;
             }
 
-            String nextUrl = ReUtil.getGroup1("href=\"([^\"]+)\"[^>]*id=\"unext\"", html);
-            if (nextUrl == null) {
+            Element nextLink = doc.selectFirst("#unext");
+            String nextUrl = nextLink != null ? nextLink.attr("href") : null;
+            if (StrUtil.isBlank(nextUrl)) {
                 log.info("未找到下一页游标，停止翻页。");
                 results.forEach(r -> r.setTraceStopReason("no_next_cursor"));
                 break;
@@ -138,20 +155,25 @@ public class ScraperActivityImpl implements ScraperActivity {
 
     @Override
     public String extractDownloadUrl(Long gid, String token) {
-        String archiveUrl = String.format("https://e-hentai.org/archiver.php?gid=%d&token=%s", gid, token);
+        String archiveUrl = String.format("%s?gid=%d&token=%s", Constants.EHENTAI_ARCHIVER_URL, gid, token);
         Map<String, Object> form = new HashMap<>();
         form.put("dlcheck", "Download Original Archive");
         form.put("dltype", "org");
 
         String html = ehNetworkClient.postForm(archiveUrl, form);
+        Document doc = Jsoup.parse(html);
+
+        // JS redirect 只能用正则
         String jsRedirect = ReUtil.getGroup1("document\\.location\\s*=\\s*['\"](https?://[^'\"]+)['\"]", html);
-        String clickLink  = ReUtil.getGroup1("<a href=\"([^\"]+)\">Click Here To Start Downloading</a>", html);
+        // HTML 链接用 Jsoup
+        Element clickEl = doc.selectFirst("a:contains(Click Here To Start Downloading)");
+        String clickLink = clickEl != null ? clickEl.attr("href") : null;
 
         String finalUrl = null;
         if (StrUtil.isNotBlank(jsRedirect)) {
             finalUrl = jsRedirect;
         } else if (StrUtil.isNotBlank(clickLink)) {
-            finalUrl = clickLink.startsWith("http") ? clickLink : "https://e-hentai.org" + clickLink;
+            finalUrl = clickLink.startsWith("http") ? clickLink : Constants.EHENTAI_BASE_URL + clickLink;
         }
 
         if (StrUtil.isBlank(finalUrl)) {

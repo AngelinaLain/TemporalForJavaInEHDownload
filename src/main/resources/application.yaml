@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:mysql://10.10.10.161:3306/eh_automation?serverTimezone=UTC
     username: root
-    password: root
+    password: ${DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
   temporal:
     connection:
@@ -31,29 +31,36 @@ server:
 eh-config:
   # Cookie 信息
   cookies:
-    member-id: "4674255"
-    pass-hash: "0345da71457857378639a3a7f2eb045a"
-    sk: "u2szd0pu6r7o3t3suf36iq1mr641"
-    star: "1-2516af5cd7"
+    member-id: ${EH_MEMBER_ID:4674255}
+    pass-hash: ${EH_PASS_HASH:0345da71457857378639a3a7f2eb045a}
+    sk: ${EH_SK:u2szd0pu6r7o3t3suf36iq1mr641}
+    star: ${EH_STAR:1-2516af5cd7}
   # 代理信息
   proxy:
     host: "10.10.10.32"
     port: 7893
-    username: "Clash"
-    password: "azWPzWfP"
+    username: ${PROXY_USERNAME:Clash}
+    password: ${PROXY_PASSWORD:azWPzWfP}
     type: "http"
   synology:
     url: "https://10.10.10.40:5001"
-    username: "5465541"
-    password: "Gcz@15271348205"
+    username: ${SYNOLOGY_USERNAME:5465541}
+    password: ${SYNOLOGY_PASSWORD:Gcz@15271348205}
     destination: "n8n_bot/EHentai"
   notification:
     admin-email: "15272888596@163.com"
-    tenant-id: a5f69b32-f12b-407f-b81e-a2b7057367dc
-    client-id: ab36780f-0903-4fa2-9dfa-8a699fc4a2c4
-    client-secret: g4W8Q~nzMeftYkOLJ3kiKPZkV1barzFIyMFyGc6a
+    tenant-id: ${GRAPH_TENANT_ID:a5f69b32-f12b-407f-b81e-a2b7057367dc}
+    client-id: ${GRAPH_CLIENT_ID:ab36780f-0903-4fa2-9dfa-8a699fc4a2c4}
+    client-secret: ${GRAPH_CLIENT_SECRET:g4W8Q~nzMeftYkOLJ3kiKPZkV1barzFIyMFyGc6a}
     sender-email: ehbo@renl57.onmicrosoft.com
   komga:
     url: http://10.10.10.40:3001
-    api-key: 71c80c96520247c5bd7bb893b337eaee
+    api-key: ${KOMGA_API_KEY:71c80c96520247c5bd7bb893b337eaee}
     library-id: 0PWD8X2S9169Y
+  # 工作流运行时参数（可在线调整，无需重新编译）
+  workflow:
+    max-concurrency: 2
+    komga-import-max-retries: 20
+    komga-import-poll-interval-seconds: 15
+    download-poll-interval-minutes: 5
+    download-cooldown-seconds: 10

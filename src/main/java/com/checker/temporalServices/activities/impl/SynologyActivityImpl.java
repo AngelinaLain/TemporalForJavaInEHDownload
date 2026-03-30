@@ -7,6 +7,7 @@ import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checker.common.Constants;
 import com.checker.common.ErrorType;
 import com.checker.config.EhNetworkConfig;
 import com.checker.entity.EhGalleriesEntity;
@@ -29,7 +30,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = "EHDownloadTaskQueue")
+@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
 public class SynologyActivityImpl implements SynologyActivity {
 
     @Autowired
@@ -42,6 +43,13 @@ public class SynologyActivityImpl implements SynologyActivity {
     @Override
     public Long pushToSynology(String downloadUrl, Long gid, String destination) {
         String sid = getSynologySid();
+
+        // 幂等性检查：先确认该任务是否已存在于下载列表中
+        if (isTaskAlreadyInQueue(sid, downloadUrl)) {
+            log.info("✅ 任务已存在于群晖下载列表中，跳过创建, GID: {}", gid);
+            return gid;
+        }
+
         Map<String, Object> form = new HashMap<>();
         form.put("api", "SYNO.DownloadStation.Task");
         form.put("version", "3");
@@ -50,7 +58,7 @@ public class SynologyActivityImpl implements SynologyActivity {
         form.put("uri", downloadUrl);
         form.put("destination", StrUtil.blankToDefault(destination, netConfig.getSynology().getDestination()));
 
-        String taskApi = netConfig.getSynology().getUrl() + "/webapi/DownloadStation/task.cgi";
+        String taskApi = netConfig.getSynology().getUrl() + Constants.SYNO_DOWNLOAD_TASK_PATH;
         String response = postSynologyForm(taskApi, form);
 
         if (response.contains("\"success\":true")) {
@@ -59,6 +67,34 @@ public class SynologyActivityImpl implements SynologyActivity {
         } else {
             throw ApplicationFailure.newFailure("群晖任务创建失败: " + response, ErrorType.SYNOLOGY_CREATE_FAILED.getCode());
         }
+    }
+
+    /**
+     * 检查群晖下载队列中是否已存在相同 downloadUrl 的任务（幂等性保护）
+     */
+    private boolean isTaskAlreadyInQueue(String sid, String downloadUrl) {
+        Map<String, Object> form = new HashMap<>();
+        form.put("api", "SYNO.DownloadStation.Task");
+        form.put("version", "1");
+        form.put("method", "list");
+        form.put("additional", "detail");
+        form.put("_sid", sid);
+
+        String taskApi = netConfig.getSynology().getUrl() + Constants.SYNO_DOWNLOAD_TASK_PATH;
+        try {
+            String response = postSynologyForm(taskApi, form);
+            JSONObject jsonObj = JSONUtil.parseObj(response);
+            if (!jsonObj.getBool("success", false)) return false;
+            JSONArray tasks = jsonObj.getByPath("data.tasks", JSONArray.class);
+            if (tasks == null) return false;
+            for (int i = 0; i < tasks.size(); i++) {
+                String taskUri = tasks.getJSONObject(i).getByPath("additional.detail.uri", String.class);
+                if (downloadUrl.equals(taskUri)) return true;
+            }
+        } catch (Exception e) {
+            log.warn("幂等检查失败，继续创建任务", e);
+        }
+        return false;
     }
 
 
@@ -72,7 +108,7 @@ public class SynologyActivityImpl implements SynologyActivity {
         form.put("additional", "detail");
         form.put("_sid", sid);
 
-        String taskApi = netConfig.getSynology().getUrl() + "/webapi/DownloadStation/task.cgi";
+        String taskApi = netConfig.getSynology().getUrl() + Constants.SYNO_DOWNLOAD_TASK_PATH;
         String response = postSynologyForm(taskApi, form);
 
         JSONObject jsonObj = JSONUtil.parseObj(response);
@@ -141,7 +177,7 @@ public class SynologyActivityImpl implements SynologyActivity {
 
         try {
             String sid = getSynologySid();
-            String synoUrl = netConfig.getSynology().getUrl() + "/webapi/entry.cgi";
+            String synoUrl = netConfig.getSynology().getUrl() + Constants.SYNO_ENTRY_PATH;
             String dest = netConfig.getSynology().getDestination();
             if (!dest.startsWith("/")) dest = "/" + dest;
             String oldFilePath = dest + "/" + oldFilename;
@@ -193,7 +229,7 @@ public class SynologyActivityImpl implements SynologyActivity {
      * @throws ApplicationFailure 登录失败时抛出
      */
     private String getSynologySid() {
-        String authUrl = netConfig.getSynology().getUrl() + "/webapi/auth.cgi";
+        String authUrl = netConfig.getSynology().getUrl() + Constants.SYNO_AUTH_PATH;
         Map<String, Object> form = new HashMap<>();
         form.put("api", "SYNO.API.Auth");
         form.put("version", "3");
@@ -254,11 +290,13 @@ public class SynologyActivityImpl implements SynologyActivity {
      * @return 重命名是否成功
      */
     private boolean renameViaSSH(String safePrefix, String newFilename) {
-        String host = "10.10.10.40";
+        String synoUrl = netConfig.getSynology().getUrl();
+        String host;
         try {
-            host = new URL(netConfig.getSynology().getUrl()).getHost();
+            host = new URL(synoUrl).getHost();
         } catch (Exception e) {
-            log.warn("⚠️ 解析群晖 URL 失败，使用默认 IP", e);
+            log.error("❌ 解析群晖 URL 失败，无法执行 SSH 重命名: {}", synoUrl, e);
+            return false;
         }
         Session session = null;
         try {

@@ -1,5 +1,6 @@
 package com.checker.temporalServices.activities;
 
+import com.checker.dto.WorkflowSettings;
 import com.checker.entity.EhGalleriesEntity;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
@@ -19,6 +20,12 @@ public interface DatabaseActivity {
     void saveToDatabase(EhGalleriesEntity gallery);
 
     /**
+     * 批量幂等写入（MyBatis-Plus saveOrUpdateBatch）
+     */
+    @ActivityMethod
+    void saveGalleriesBatch(List<EhGalleriesEntity> galleries);
+
+    /**
      * 更新指定画廊的下载状态
      */
     @ActivityMethod
@@ -35,4 +42,16 @@ public interface DatabaseActivity {
      */
     @ActivityMethod
     EhGalleriesEntity getGalleryById(Long gid);
+
+    /**
+     * 批量按 GID 查询画廊记录
+     */
+    @ActivityMethod
+    List<EhGalleriesEntity> getGalleriesByIds(List<Long> gids);
+
+    /**
+     * 从 application.yaml 加载工作流运行时配置
+     */
+    @ActivityMethod
+    WorkflowSettings loadWorkflowSettings();
 }

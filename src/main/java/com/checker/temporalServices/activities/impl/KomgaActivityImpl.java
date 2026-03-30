@@ -3,22 +3,27 @@ package com.checker.temporalServices.activities.impl;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
+
+
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.ErrorType;
 import com.checker.config.EhNetworkConfig;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.temporalServices.activities.KomgaActivity;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
+import okhttp3.OkHttpClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -26,7 +31,7 @@ import java.util.List;
  */
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = "EHDownloadTaskQueue")
+@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
 public class KomgaActivityImpl implements KomgaActivity {
 
     @Autowired
@@ -35,14 +40,19 @@ public class KomgaActivityImpl implements KomgaActivity {
     @Autowired
     private EhGalleriesMapper galleriesMapper;
 
+    /** Komga 系列 ID 缓存：目标系列 ID 在 Komga 中基本固定不变，缓存后永久复用，
+     *  避免每次 findBookInKomga 轮询时重复查询 series/list 接口 */
+    private final Cache<String, String> seriesIdCache = Caffeine.newBuilder()
+            .maximumSize(10)
+            .build();
+
     // ------------------------------------------------------------------ fetchAndSaveMetadata
 
     @Override
     public void fetchAndSaveMetadata(Long gid, String token) {
-        String apiUrl = "https://api.e-hentai.org/api.php";
         String jsonBody = String.format("{\"method\":\"gdata\",\"gidlist\":[[%d,\"%s\"]],\"namespace\":1}", gid, token);
 
-        String response = HttpRequest.post(apiUrl).body(jsonBody).execute().body();
+        String response = HttpRequest.post(Constants.EHENTAI_API_URL).body(jsonBody).execute().body();
 
         JSONObject resObj = JSONUtil.parseObj(response);
         JSONArray gmetadata = resObj.getJSONArray("gmetadata");
@@ -61,9 +71,9 @@ public class KomgaActivityImpl implements KomgaActivity {
 
     @Override
     public String findBookInKomga(Long gid) {
-        String targetSeriesId = getSeriesIdByName("N8N_Update");
+        String targetSeriesId = getOrCacheTargetSeriesId();
         if (StrUtil.isBlank(targetSeriesId)) {
-            log.error("❌ 无法在 Komga 中找到 [N8N_Update] 系列");
+            log.error("❌ 无法在 Komga 中找到 [{}] 系列", Constants.KOMGA_TARGET_SERIES);
             return null;
         }
 
@@ -112,22 +122,23 @@ public class KomgaActivityImpl implements KomgaActivity {
         }
 
         String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/" + bookId + "/metadata";
+
         try {
-            java.net.http.HttpClient client = java.net.http.HttpClient.newHttpClient();
-            java.net.http.HttpRequest request = java.net.http.HttpRequest.newBuilder()
-                    .uri(java.net.URI.create(komgaUrl))
+            OkHttpClient client = new OkHttpClient();
+            okhttp3.RequestBody body = okhttp3.RequestBody.create(metadata.toString(), okhttp3.MediaType.parse("application/json"));
+
+            okhttp3.Request request = new okhttp3.Request.Builder()
+                    .url(komgaUrl)
+                    .patch(body) // OkHttp 原生支持 PATCH
                     .header("X-API-Key", netConfig.getKomga().getApiKey())
-                    .header("Content-Type", "application/json")
-                    .method("PATCH", java.net.http.HttpRequest.BodyPublishers.ofString(metadata.toString(), StandardCharsets.UTF_8))
                     .build();
 
-            java.net.http.HttpResponse<String> httpResponse =
-                    client.send(request, java.net.http.HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            int status = httpResponse.statusCode();
-
-            if (!(status == 204 || (status >= 200 && status < 300))) {
-                throw ApplicationFailure.newFailure(
-                        "Komga metadata patch failed: HTTP " + status, ErrorType.KOMGA_METADATA_PATCH_FAILED.getCode());
+            try (okhttp3.Response response = client.newCall(request).execute()) {
+                int status = response.code();
+                if (!(status == 204 || (status >= 200 && status < 300))) {
+                    throw ApplicationFailure.newFailure(
+                            "Komga metadata patch failed: HTTP " + status, ErrorType.KOMGA_METADATA_PATCH_FAILED.getCode());
+                }
             }
         } catch (ApplicationFailure e) {
             throw e;
@@ -166,6 +177,21 @@ public class KomgaActivityImpl implements KomgaActivity {
     }
 
     // ------------------------------------------------------------------ private helpers
+
+    /**
+     * 懒加载并缓存目标系列 ID，只在第一次访问时查询 Komga，后续复用缓存值。
+     * 若查询结果为 null（系列不存在），不会缓存，下次调用会重新查询。
+     */
+    private String getOrCacheTargetSeriesId() {
+        String cached = seriesIdCache.getIfPresent(Constants.KOMGA_TARGET_SERIES);
+        if (cached != null) return cached;
+
+        String seriesId = getSeriesIdByName(Constants.KOMGA_TARGET_SERIES);
+        if (seriesId != null) {
+            seriesIdCache.put(Constants.KOMGA_TARGET_SERIES, seriesId);
+        }
+        return seriesId;
+    }
 
     /**
      * 根据系列名称在 Komga 中查找对应的 seriesId

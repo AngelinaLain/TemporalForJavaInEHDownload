@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import com.checker.common.Constants;
 import com.checker.common.Result;
 import com.checker.dto.SearchOptions;
 import com.checker.temporalServices.activities.NotificationActivity;
@@ -41,7 +42,7 @@ public class EHAutomationController {
         EHAutomationWorkflow workflow = workflowClient.newWorkflowStub(
                 EHAutomationWorkflow.class,
                 WorkflowOptions.newBuilder()
-                        .setTaskQueue("EHDownloadTaskQueue")
+                        .setTaskQueue(Constants.TASK_QUEUE)
                         .setWorkflowId(workflowId)
                         .build()
         );
@@ -73,7 +74,7 @@ public class EHAutomationController {
         RetryFailedDownloadWorkflow workflow = workflowClient.newWorkflowStub(
                 RetryFailedDownloadWorkflow.class,
                 WorkflowOptions.newBuilder()
-                        .setTaskQueue("EHDownloadTaskQueue")
+                        .setTaskQueue(Constants.TASK_QUEUE)
                         .setWorkflowId(workflowId)
                         .build()
         );

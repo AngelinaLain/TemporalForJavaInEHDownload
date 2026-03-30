@@ -1,98 +1,91 @@
 package com.checker.temporalServices.workflows.impl;
 
+import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
-import com.checker.common.ErrorType;
+import com.checker.dto.WorkflowSettings;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.DatabaseActivity;
-import com.checker.temporalServices.activities.KomgaActivity;
 import com.checker.temporalServices.activities.NotificationActivity;
-import com.checker.temporalServices.activities.ScraperActivity;
-import com.checker.temporalServices.activities.SynologyActivity;
 import com.checker.temporalServices.workflows.RetryFailedDownloadWorkflow;
-import io.temporal.failure.ActivityFailure;
-import io.temporal.failure.ApplicationFailure;
+import com.checker.temporalServices.workflows.SingleGalleryDownloadWorkflow;
+import io.temporal.failure.ChildWorkflowFailure;
 import io.temporal.spring.boot.WorkflowImpl;
+import io.temporal.workflow.Async;
+import io.temporal.workflow.ChildWorkflowOptions;
 import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
 import org.slf4j.Logger;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 重试失败下载工作流实现：查询失败画廊并重新执行下载、入库流程
+ * 重试失败下载工作流实现：查询失败画廊并通过子工作流重新执行下载、入库流程
+ * <p>
+ * 与主工作流共享同一套子工作流和滑动窗口并发控制机制。
  */
-@WorkflowImpl(taskQueues = "EHDownloadTaskQueue")
+@WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkflow {
     private static final Logger log = Workflow.getLogger(RetryFailedDownloadWorkflowImpl.class);
 
-        private final ScraperActivity scraperActivity = Workflow.newActivityStub(ScraperActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
-        private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
-        private final SynologyActivity synologyActivity = Workflow.newActivityStub(SynologyActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
-        private final KomgaActivity komgaActivity = Workflow.newActivityStub(KomgaActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
-        private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+
+    /** 子工作流致命错误标识 */
+    private boolean fatalErrorOccurred = false;
+
     @Override
     public void retryFailedTasks() {
+        int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
+
+        // 加载运行时配置
+        WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
+
         List<EhGalleriesEntity> failedGalleries = databaseActivity.getFailedGalleries();
         if (failedGalleries == null || failedGalleries.isEmpty()) {
             return;
         }
-        List<Promise<Void>> komgaPromises = new ArrayList<>();
-        for (EhGalleriesEntity gallery : failedGalleries) {
-            String oldStatus = gallery.getDownloadStatus();
-            // 阶段 1：断点补偿（已下载但未入库）
-            if (DownloadStatus.DOWNLOADED.getValue().equals(oldStatus)) {
-                log.info("🚀 [重试补偿] 画廊已下载但未入库。GID: {}", gallery.getGid());
-                try {
-                    WorkflowSteps.postDownloadKomgaProcess(komgaActivity, databaseActivity, synologyActivity, gallery.getGid(), gallery.getToken());
-                    komgaPromises.add(WorkflowSteps.buildKomgaImportTask(
-                            komgaActivity, notificationActivity, gallery, log,
-                            "⚠️ Komga 补偿入库超时", "尝试补偿入库依然失败: " + gallery.getTitle()));
-                } catch (Exception e) {
-                    log.error("补偿机制发生异常 GID: " + gallery.getGid(), e);
-                }
-                continue;
-            }
-            // 阶段 2：正常重试（下载失败的画廊）
-            try {
-                databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADING.getValue());
-                String downloadUrl = scraperActivity.extractDownloadUrl(gallery.getGid(), gallery.getToken());
-                Long gid = synologyActivity.pushToSynology(downloadUrl, gallery.getGid(), null);
 
-                boolean isDownloadComplete = false;
-                while (!isDownloadComplete) {
-                    Workflow.sleep(Duration.ofMinutes(5));
-                    String status = synologyActivity.checkSynologyTaskStatus(gid, downloadUrl);
-                    if ("finished".equalsIgnoreCase(status)) {
-                        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADED.getValue());
-                        isDownloadComplete = true;
-                        WorkflowSteps.postDownloadKomgaProcess(komgaActivity, databaseActivity, synologyActivity, gallery.getGid(), gallery.getToken());
-                        komgaPromises.add(WorkflowSteps.buildKomgaImportTask(
-                                komgaActivity, notificationActivity, gallery, log,
-                                "⚠️ Komga 入库超时", "画廊已下载，且已触发扫描，但未识别: " + gallery.getTitle()));
-                    } else if ("error".equalsIgnoreCase(status)) {
-                        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOAD_FAILED.getValue());
-                        notificationActivity.sendEmailAlert("群晖下载异常", "画廊: " + gallery.getTitle() + " 下载失败");
-                        break;
-                    }
+        // 滑动窗口并发控制：派发子工作流
+        List<Promise<Void>> running = new ArrayList<>();
+
+        for (EhGalleriesEntity gallery : failedGalleries) {
+            if (fatalErrorOccurred) break;
+
+            while (running.size() >= settings.getMaxConcurrency()) {
+                Promise.anyOf(running).get();
+                running.removeIf(Promise::isCompleted);
+            }
+
+            boolean compensateOnly = DownloadStatus.DOWNLOADED.getValue().equals(gallery.getDownloadStatus());
+
+            ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
+                    .setWorkflowId("retry-gallery-" + gallery.getGid())
+                    .setTaskQueue(Constants.TASK_QUEUE)
+                    .build();
+            SingleGalleryDownloadWorkflow child = Workflow.newChildWorkflowStub(
+                    SingleGalleryDownloadWorkflow.class, childOptions);
+
+            Promise<Void> promise = Async.procedure(() -> {
+                try {
+                    child.processSingleGallery(gallery, compensateOnly, settings);
+                } catch (ChildWorkflowFailure e) {
+                    log.error("子工作流异常终止（致命错误），停止派发新任务。GID: {}", gallery.getGid());
+                    fatalErrorOccurred = true;
                 }
-            } catch (ActivityFailure e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof ApplicationFailure appFailure) {
-                    String errorType = appFailure.getType();
-                    if (ErrorType.QUOTA_EXCEEDED.getCode().equals(errorType) || ErrorType.IP_BANNED.getCode().equals(errorType) || ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode().equals(errorType)) {
-                        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.BLOCKED.getValue());
-                        notificationActivity.sendEmailAlert("EHentai 抓取阻断", "致命错误 (" + errorType + "): " + appFailure.getOriginalMessage());
-                        return;
-                    }
-                }
-                databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOAD_FAILED.getValue());
+            });
+            running.add(promise);
+        }
+
+        // 等待所有剩余子工作流完成
+        for (Promise<Void> p : running) {
+            try {
+                p.get();
+            } catch (Exception e) {
+                log.error("等待子工作流完成时发生异常", e);
             }
         }
-        if (!komgaPromises.isEmpty()) {
-            Promise.allOf(komgaPromises).get();
-        }
+
         notificationActivity.sendEmailAlert("重试流程结束", "本次共重试了 " + failedGalleries.size() + " 个画廊");
     }
 }
