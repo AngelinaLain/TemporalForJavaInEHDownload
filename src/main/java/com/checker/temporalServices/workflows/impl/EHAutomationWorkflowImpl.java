@@ -52,22 +52,24 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     public void executeAutomation(SearchOptions searchOptions) {
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
 
-        // ── 1. 加载运行时配置（来自 application.yaml，无需重新编译即可调整） ──
+        // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
 
-        // ── 2. 爬虫抓取画廊列表 ──
+        // 爬虫抓取画廊列表
         List<EhGalleriesEntity> galleries = scraperActivity.scrapeGalleries(searchOptions);
         if (galleries == null || galleries.isEmpty()) {
             return;
         }
 
-        // ── 3. 批量查询已有记录，按状态分类 ──
+        //  批量查询已有记录，按状态分类
         List<Long> allGids = galleries.stream().map(EhGalleriesEntity::getGid).toList();
         List<EhGalleriesEntity> existingRecords = databaseActivity.getGalleriesByIds(allGids);
         Map<Long, EhGalleriesEntity> existingMap = existingRecords.stream()
                 .collect(Collectors.toMap(EhGalleriesEntity::getGid, Function.identity()));
 
+        /* 还没下载的 */
         List<EhGalleriesEntity> toDownload = new ArrayList<>();
+        /* 已下载但未入库 */
         List<EhGalleriesEntity> toCompensate = new ArrayList<>();
 
         for (EhGalleriesEntity gallery : galleries) {
@@ -89,12 +91,12 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             toDownload.add(gallery);
         }
 
-        // ── 4. 批量保存新画廊到数据库 ──
+        // 批量保存新画廊到数据库
         if (!toDownload.isEmpty()) {
             databaseActivity.saveGalleriesBatch(toDownload);
         }
 
-        // ── 5. 合并任务列表：补偿任务优先（已下载，只需入库） ──
+        // 合并任务列表：补偿任务优先（已下载，只需入库）
         List<GalleryTask> tasks = new ArrayList<>();
         for (EhGalleriesEntity g : toCompensate) {
             tasks.add(new GalleryTask(g, true));
@@ -103,7 +105,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             tasks.add(new GalleryTask(g, false));
         }
 
-        // ── 6. 滑动窗口并发控制：派发子工作流 ──
+        // 滑动窗口并发控制：派发子工作流
         List<Promise<Void>> running = new ArrayList<>();
 
         for (GalleryTask task : tasks) {
@@ -126,7 +128,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 try {
                     child.processSingleGallery(task.gallery, task.compensateOnly, settings);
                 } catch (ChildWorkflowFailure e) {
-                    log.error("子工作流异常终止（致命错误），停止派发新任务。GID: {}", task.gallery.getGid());
+                    log.error("❌ 子工作流异常终止（致命错误），停止派发新任务。GID: {}", task.gallery.getGid());
                     fatalErrorOccurred = true;
                 }
             });
@@ -138,7 +140,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             try {
                 p.get();
             } catch (Exception e) {
-                log.error("等待子工作流完成时发生异常", e);
+                log.error("❌ 等待子工作流完成时发生异常", e);
             }
         }
 

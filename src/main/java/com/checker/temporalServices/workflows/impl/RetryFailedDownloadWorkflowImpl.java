@@ -28,7 +28,9 @@ import java.util.List;
 public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkflow {
     private static final Logger log = Workflow.getLogger(RetryFailedDownloadWorkflowImpl.class);
 
+    // 数据库的活动设置进来
     private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    // 将邮件的发送设置进来
     private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
 
     /** 子工作流致命错误标识 */
@@ -40,6 +42,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
 
         // 加载运行时配置
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
+
 
         List<EhGalleriesEntity> failedGalleries = databaseActivity.getFailedGalleries();
         if (failedGalleries == null || failedGalleries.isEmpty()) {

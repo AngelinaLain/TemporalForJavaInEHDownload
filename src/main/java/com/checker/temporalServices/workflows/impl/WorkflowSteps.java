@@ -18,6 +18,7 @@ import java.time.Duration;
 
 /**
  * Temporal 工作流共享工具类 — 非 Spring Bean，包内可见。
+ * 统一配置类
  * <p>
  * 集中管理：
  * <ul>
@@ -28,15 +29,19 @@ import java.time.Duration;
  */
 class WorkflowSteps {
 
+
     /** 所有 Activity Stub 共用的超时与重试策略 */
     static final ActivityOptions DEFAULT_OPTIONS = ActivityOptions.newBuilder()
             .setStartToCloseTimeout(Duration.ofMinutes(5))
             .setRetryOptions(RetryOptions.newBuilder()
                     .setInitialInterval(Duration.ofSeconds(10))
                     .setMaximumAttempts(3)
-                    .setDoNotRetry(ErrorType.QUOTA_EXCEEDED.getCode(), ErrorType.IP_BANNED.getCode(), ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode(), ErrorType.SYNOLOGY_AUTH_FAILED.getCode())
-                    .build())
-            .build();
+                    .setDoNotRetry(
+                            ErrorType.QUOTA_EXCEEDED.getCode(),
+                            ErrorType.IP_BANNED.getCode(),
+                            ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode(),
+                            ErrorType.SYNOLOGY_AUTH_FAILED.getCode()
+                    ).build()).build();
 
     /** 爬虫 Activity 专用配置：更长超时 + 心跳检测 */
     static final ActivityOptions SCRAPER_OPTIONS = ActivityOptions.newBuilder()

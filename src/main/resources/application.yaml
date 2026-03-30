@@ -59,8 +59,13 @@ eh-config:
     library-id: 0PWD8X2S9169Y
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
+    # 最大子工作流个数
     max-concurrency: 2
+    # komga最大尝试次数
     komga-import-max-retries: 20
+    # 多少时间轮询komga的元数据状态 [秒]
     komga-import-poll-interval-seconds: 15
+    # 多少时间去群晖检查是否下载完成 [分钟]
     download-poll-interval-minutes: 5
+    # 每次下载后的等待时间 [秒]
     download-cooldown-seconds: 10
