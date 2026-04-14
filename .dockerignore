@@ -1,0 +1,7 @@
+target/
+.idea/
+*.iml
+.git/
+前端/node_modules/
+前端/dist/
+.env
