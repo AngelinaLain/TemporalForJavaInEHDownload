@@ -1,549 +1,197 @@
 # TemporalForJavaInEHDow
 
-基于 Spring Boot + Temporal 的分布式工作流引擎，实现 EHentai 画廊内容搜索、下载、数据库管理与媒体库入库的全自动执行。
+基于 **Spring Boot + Temporal** 的 EHentai 自动化下载与 Komga 入库系统。通过 REST API 触发异步工作流，完成从搜索抓取、Synology 下载推送到 Komga 元数据同步的全链路自动化。
 
-## 项目概览
+## 核心功能
 
-该项目基于 **Temporal 工作流框架**，采用 Activity + Workflow 的设计模式，提供 REST API 触发异步工作流任务，实现：
-
-- ✅ 异步接收搜索参数并启动 Temporal 工作流
-- ✅ 调用多个 Activity 执行关键业务步骤（爬取、下载、数据库操作、邮件通知等）
-- ✅ 完整的错误处理与重试机制（内置可配置的重试策略和不重试错误类型列表）
-- ✅ 支持失败任务批量重试工作流
-- ✅ 工作流执行过程中的实时状态跟踪和轮询
-- ✅ 支持 Microsoft Graph API 邮件通知
-- ✅ 支持 Komga 媒体库的自动扫描与元数据补流程
+- EHentai 画廊搜索与数据抓取，支持多维度过滤
+- Temporal 异步工作流，内置重试与容错机制
+- MySQL 持久化画廊状态与元数据
+- Synology Download Station 下载任务推送
+- Komga 自动入库、标签同步与合集管理
+- Microsoft Graph API 邮件通知
+- JWT 认证 + Swagger UI
+- Dashboard 统计面板（状态分布、时间线、标签分析）
 
 ## 技术栈
 
-- **Java**: 17
-- **框架**: Spring Boot 3.2.4 + Temporal 工作流引擎
-- **数据库**: MyBatis-Plus + MySQL
-- **网络**: OkHttp3 + Hutool
-- **通知**: Microsoft Graph API
-- **媒体库**: Komga（可选集成）
+| 类别 | 组件 |
+| --- | --- |
+| 语言 / 运行时 | Java 17 |
+| 框架 | Spring Boot 3.2.4 |
+| 工作流引擎 | Temporal Java SDK |
+| ORM | MyBatis-Plus |
+| 数据库 | MySQL 8+ |
+| HTTP 客户端 | OkHttp3 |
+| 工具库 | Hutool |
+| 安全 | Spring Security + JWT |
+| API 文档 | Springdoc OpenAPI (Swagger) |
 
-## 项目架构
-
-### 分层设计
-
-```
-Controllers Layer (REST API)
-    ↓
-Temporal Workflow Layer (工作流编排)
-    ├── EHAutomationWorkflow (主搜索+下载工作流)
-    ├── RetryFailedDownloadWorkflow (重试失败任务工作流)
-    └── SingleGalleryDownloadWorkflow (单画廊下载子工作流)
-    ↓
-Activity Layer (业务逻辑执行单元)
-    ├── ScraperActivity (网络爬取)
-    ├── DatabaseActivity (数据库操作)
-    ├── SynologyActivity (推送下载)
-    ├── KomgaActivity (媒体库入库)
-    └── NotificationActivity (邮件通知)
-    ↓
-Support Layer (工具/配置)
-    ├── EhNetworkClient (网络客户端)
-    ├── Entity & Mapper (数据层)
-    └── Config (连接池/超时配置)
-```
-
-## 目录结构详解
+## 目录结构
 
 ```text
 src/main/java/com/checker/
-├─ TemporalForJavaInEHDowApplication.java              # Spring Boot 启动入口
-│
-├─ controllers/
-│  └─ EHAutomationController.java                      # 3 个 REST 端点 (start, retry-failed, test-email)
-│
-├─ temporalServices/                                   # Temporal 工作流核心
-│  ├─ workflows/                                       # 工作流接口定义
-│  │  ├─ EHAutomationWorkflow.java                     # 主工作流（搜索+下载完整流程）
-│  │  ├─ RetryFailedDownloadWorkflow.java              # 重试工作流
-│  │  ├─ SingleGalleryDownloadWorkflow.java            # 单画廊下载子流程
-│  │  └─ impl/
-│  │     ├─ EHAutomationWorkflowImpl.java               # 主工作流实现
-│  │     ├─ RetryFailedDownloadWorkflowImpl.java        # 重试工作流实现
-│  │     ├─ SingleGalleryDownloadWorkflowImpl.java      # 单画廊下载实现
-│  │     └─ WorkflowSteps.java                         # 共享工具类：统一 ActivityOptions + Komga 流程
-│  │
-│  ├─ activities/                                      # Activity 接口定义（5 个域）
-│  │  ├─ ScraperActivity.java                          # 网络爬取接口
-│  │  ├─ DatabaseActivity.java                         # 数据库读写接口
-│  │  ├─ SynologyActivity.java                         # 群晖下载推送接口
-│  │  ├─ KomgaActivity.java                            # 媒体库入库接口
-│  │  ├─ NotificationActivity.java                     # 邮件通知接口
-│  │  └─ impl/                                         # Activity 实现类
-│  │     ├─ ScraperActivityImpl.java
-│  │     ├─ DatabaseActivityImpl.java
-│  │     ├─ SynologyActivityImpl.java
-│  │     ├─ KomgaActivityImpl.java
-│  │     └─ NotificationActivityImpl.java
-│  │
-│  └─ workers/                                         # Temporal Worker 配置（自动扫描注册）
-│
-├─ common/
-│  ├─ Constants.java                                   # 常量定义（Task Queue 等）
-│  ├─ ErrorType.java                                   # 自定义错误类型（不重试列表）
-│  ├─ Result.java & ResultCode.java                    # 统一响应格式
-│  ├─ DownloadStatus.java                              # 下载状态枚举
-│  ├─ EhNetworkClient.java                             # 网络请求客户端（OkHttp3）
-│  └─ Other utilities
-│
-├─ config/
-│  ├─ EhNetworkConfig.java                             # 网络配置（代理、Cookie、超时等）
-│  └─ EhWorkflowConfig.java                            # Temporal 客户端配置（地址、命名空间等）
-│
-├─ dto/
-│  ├─ SearchOptions.java                               # 搜索参数 DTO（搜索关键词、分类、评分等）
-│  └─ WorkflowSettings.java                            # 工作流运行时设置
-│
-├─ entity/
-│  └─ EhGalleriesEntity.java                           # 画廊数据实体（与表 eh_galleries 映射）
-│
-└─ mapper/
-   └─ EhGalleriesMapper.java                           # MyBatis-Plus Mapper（CRUD 操作）
-
-src/main/resources/
-└─ application.yaml                                    # Spring Boot 配置（DB、Temporal、代理等）
+├── TemporalForJavaInEHDowApplication.java
+├── common/                    # 通用工具：Result、ResultCode、ErrorType、枚举等
+├── config/                    # JWT、Security、网络、Workflow 配置
+├── controllers/
+│   ├── AuthController.java    # 登录认证
+│   ├── EHAutomationController.java  # 工作流触发接口
+│   └── DashboardController.java     # 统计看板接口
+├── dto/                       # 请求数据对象：SearchOptions、KomgaCollectionRequest 等
+├── entity/                    # 数据库实体：EhGalleriesEntity
+├── mapper/                    # MyBatis-Plus Mapper
+├── service/                   # 业务逻辑层
+└── temporalServices/
+    ├── activities/            # Temporal Activity 接口与实现
+    ├── workflows/             # Temporal Workflow 接口与实现
+    └── workers/               # Temporal Worker 注册
 ```
 
-## 工作流执行流程
+## 快速启动
 
-### 主工作流 (EHAutomationWorkflow)
+### 依赖要求
 
-```
-SearchOptions (用户输入)
-    ↓
-[Activity] Scraper: 网络爬取画廊列表
-    ↓
-[Activity] Database: 批量保存/更新到 MySQL
-    ↓
-[For Each Gallery]
-    ├─ [Activity] Synology: 推送下载链接
-    ├─ [Activity] Database: 更新下载状态
-    ├─ [Loop Poll] Database: 轮询下载完成状态
-    ├─ [Activity] Komga: 触发元数据补全 (3 步: 文件重命名 → 元数据提取 → 扫描)
-    └─ [Activity] Notification: 发送邮件通知 (下载完成)
-```
+- JDK 17
+- MySQL 8+
+- Temporal Server（本地或远程）
+- Synology Download Station（可选）
+- Komga（可选）
+- Microsoft 365 / Graph API（可选，用于邮件通知）
 
-### 重试工作流 (RetryFailedDownloadWorkflow)
-
-```
-[Activity] Database: 查询所有failed/downloaded状态的画廊
-    ↓
-[For Each Failed Gallery]
-    └─ [Invoke] SingleGalleryDownloadWorkflow (逐个重新执行下载)
-```
-
-## 运行前准备
-
-### 必需服务
-
-1. **JDK 17** — Java 运行时环境
-2. **MySQL** — 数据库服务
-3. **Temporal Server** — 工作流引擎（关键组件）
-4. **Synology Download Station** (可选) — 如需推送下载任务
-5. **Microsoft Entra ID App Registration** (可选) — 如需邮件通知
-6. **Komga** (可选) — 如需自动入库媒体库
-
-### 数据库初始化
-
-创建数据库与表（MySQL 5.7+）：
+### 1. 初始化数据库
 
 ```sql
-CREATE DATABASE IF NOT EXISTS `eh_automation` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS `eh_automation`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 USE `eh_automation`;
 
 CREATE TABLE `eh_galleries` (
-  `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
-  `gid` BIGINT NOT NULL UNIQUE,
-  `token` VARCHAR(255),
-  `title` VARCHAR(500),
-  `title_jpn` VARCHAR(500),
-  `category` VARCHAR(50),
-  `thumb` VARCHAR(500),
-  `posted` BIGINT,
-  `cover` VARCHAR(500),
-  `parent_gid` BIGINT,
-  `parent_key` VARCHAR(255),
-  `first_gid` BIGINT,
-  `first_key` VARCHAR(255),
-  `uploader` VARCHAR(200),
-  `rating` DECIMAL(3, 2),
-  `tags` JSON,
-  `download_url` TEXT,
-  `download_status` VARCHAR(50) DEFAULT 'PENDING',
-  `komga_status` VARCHAR(50) DEFAULT 'PENDING',
-  `error_type` VARCHAR(50),
-  `error_message` TEXT,
-  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX idx_gid (gid),
-  INDEX idx_download_status (download_status),
-  INDEX idx_komga_status (komga_status)
+  `gid`                        BIGINT PRIMARY KEY,
+  `token`                      VARCHAR(255),
+  `title`                      VARCHAR(500),
+  `filename`                   VARCHAR(500),
+  `gallery_url`                VARCHAR(500),
+  `search_query`               VARCHAR(500),
+  `crawled_at`                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `download_status`            VARCHAR(50) DEFAULT 'PENDING',
+  `tags`                       JSON,
+  `komga_book_id`              VARCHAR(255),
+  `file_size_mb`               DOUBLE,
+  `_trace_pages_crawled`       INT,
+  `_trace_stop_reason`         VARCHAR(200),
+  `_trace_last_next_cursor`    VARCHAR(500),
+  `_trace_request_url_chain`   TEXT,
+  `_trace_first_page_title`    VARCHAR(500),
+  `_trace_page_trace`          JSON,
+  INDEX idx_download_status (`download_status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-### Temporal Server 启动
+### 2. 修改配置
 
-使用 Docker Compose 快速启动（推荐）：
-
-```yaml
-# docker-compose.yml
-version: '3'
-services:
-  temporal:
-    image: temporalio/auto-setup:latest
-    environment:
-      - DB=postgresql
-      - POSTGRES_PWD=temporalp
-      - POSTGRES_SEEDS=postgres
-    ports:
-      - "7233:7233"  # gRPC 端口
-    networks:
-      - temporal
-  
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_PASSWORD: temporalp
-      POSTGRES_DB: temporal
-    ports:
-      - "5432:5432"
-    networks:
-      - temporal
-
-networks:
-  temporal:
-    driver: bridge
-```
-
-运行：
-
-```bash
-docker-compose up -d
-```
-
-## 配置说明
-
-### application.yaml 关键选项
+编辑 `src/main/resources/application.yaml`，按实际环境填写：
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:mysql://127.0.0.1:3306/eh_automation?characterEncoding=utf8
-    username: root
+    url: jdbc:mysql://localhost:3306/eh_automation
+    username: your_user
     password: your_password
-  
   temporal:
     connection:
-      target: 127.0.0.1:7233          # Temporal Server 地址
-    namespace: default                 # 工作流命名空间
-    
-server:
-  port: 8001
+      target: localhost:7233
+      namespace: default
 
 eh-config:
-  # EHentai 站点 Cookie（从浏览器登录后复制）
-  cookies:
-    memberid: "your_memberid"
-    pass_hash: "your_pass_hash"
-    ipb_member_id: "your_ipb_member_id"
-    ipb_pass_hash: "your_ipb_pass_hash"
-  
-  # 代理配置（可选）
+  cookies: "ipb_member_id=xxx; ipb_pass_hash=xxx; ..."
   proxy:
-    enabled: false
-    host: ""
-    port: 0
-    username: ""
-    password: ""
-  
-  # Synology Download Station（可选）
+    host: 127.0.0.1
+    port: 7890
   synology:
-    enabled: false
-    host: "192.168.1.100:5000"
-    username: "admin"
-    password: "password"
-    folder: "downloads/eh"
-  
-  # Microsoft Graph API（邮件通知）
-  notification:
-    enabled: false
-    tenant_id: "your_tenant_id"
-    client_id: "your_client_id"
-    client_secret: "your_client_secret"
-    admin_email: "admin@yourtemplate.onmicrosoft.com"
-  
-  # Komga（媒体库集成，可选）
+    url: http://your-nas:5000
+    username: admin
+    password: your_password
   komga:
-    enabled: false
-    url: "http://komga.example.com"
-    api_key: "your_api_key"
-    library_id: "xxxx"
+    url: http://your-komga:25600
+    username: admin@example.com
+    password: your_password
+  notification:
+    tenant-id: xxx
+    client-id: xxx
+    client-secret: xxx
+    sender: admin@yourdomain.com
+
+security:
+  admin:
+    username: admin
+    password: your_password
 ```
 
-### 配置说明
+> 仅 `datasource`、`temporal`、`eh-config.cookies` 为必填项，其余按需配置。
 
-| 项 | 说明 | 必需 |
-|----|------|------|
-| `eh-config.cookies.*` | EHentai 登录 Cookie（从网页开发者工具复制） | ✅ |
-| `spring.temporal.connection.target` | Temporal Server 的 gRPC 地址 | ✅ |
-| `spring.datasource.*` | MySQL 连接信息 | ✅ |
-| `eh-config.proxy.*` | 代理配置 | ❌ |
-| `eh-config.synology.*` | 群晖下载任务推送 | ❌ |
-| `eh-config.notification.*` | 邮件通知 | ❌ |
-| `eh-config.komga.*` | Komga 媒体库集成 | ❌ |
-
-**安全建议**：
-
-- ⚠️ **不要**将真实凭据提交到 Git
-- 使用环境变量或 `.properties.local` 覆盖敏感信息
-- 在生产环境使用各服务的秘密管理方案（如 Vault、AWS Secrets Manager）
-
-## 编译与启动
-
-### 前置要求
-
-- JDK 17+
-- Maven 3.8+（推荐使用 IntelliJ IDEA 内置 Maven）
-- MySQL 5.7+ 正常运行
-- Temporal Server 正常运行
-
-### 编译
-
-使用 Maven 编译项目：
+### 3. 构建与运行
 
 ```bash
-mvn clean compile
-```
-
-### 启动方式
-
-#### 方式 1：IDE 启动（推荐）
-
-在 IntelliJ IDEA 中：
-
-1. 右键点击 `TemporalForJavaInEHDowApplication` 类
-2. 选择 `Run 'TemporalForJavaInEHDowApplication.main()'`
-
-#### 方式 2：Maven 命令行
-
-直接启动：
-
-```bash
-mvn clean spring-boot:run
-```
-
-#### 方式 3：打包运行
-
-```bash
+# 打包
 mvn clean package -DskipTests
+
+# 运行
 java -jar target/TemporalForJavaInEHDow-1.0-SNAPSHOT.jar
 ```
 
-### 启动验证
+或直接开发模式运行：
 
-应用启动成功后，控制台会输出：
-
-```
-c.c.c.TemporalForJavaInEHDowApplication : Started TemporalForJavaInEHDowApplication in 5.xxx seconds
+```bash
+mvn spring-boot:run
 ```
 
-服务可访问地址：`http://127.0.0.1:8001`
+### 4. 访问地址
+
+| 服务 | 地址 |
+|------|------|
+| 应用默认端口 | `http://127.0.0.1:8001` |
+| Swagger UI | `http://127.0.0.1:8001/swagger-ui/index.html` |
+| OpenAPI JSON | `http://127.0.0.1:8001/v3/api-docs` |
+
+## 认证
+
+所有业务接口受 JWT 保护。先调用登录接口获取 token，再在后续请求头中携带：
+
+```http
+Authorization: Bearer <jwt-token>
+```
+
+**登录示例：**
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your_password"}'
+```
 
 ## API 概览
 
-### 基础路径
+| 功能 | 方法 | 路径 | 认证 |
+| --- | --- | --- | --- |
+| 登录获取 Token | POST | `/api/auth/login` | 无 |
+| 启动自动化工作流 | POST | `/api/temporal/eh/start` | JWT |
+| 重试失败任务 | POST | `/api/temporal/eh/retry-failed` | JWT |
+| 测试邮件通知 | POST | `/api/temporal/eh/test-email` | JWT |
+| 构建 Komga 合集 | POST | `/api/temporal/eh/collections/build-by-tags` | JWT |
+| 同步标签到 Komga | POST | `/api/temporal/eh/sync-tags` | JWT |
+| 批量刷新 Komga 元数据 | POST | `/api/temporal/eh/batch-refresh-metadata` | JWT |
+| 批量更新文件大小 | POST | `/api/temporal/eh/batch-update-filesize` | JWT |
+| 统计概览 | GET | `/api/dashboard/stats` | JWT |
+| 下载状态分布 | GET | `/api/dashboard/status-distribution` | JWT |
+| 文件大小分布 | GET | `/api/dashboard/file-size-distribution` | JWT |
+| 抓取时间线 | GET | `/api/dashboard/crawl-timeline` | JWT |
+| 标签命名空间统计 | GET | `/api/dashboard/tag-stats` | JWT |
+| 画廊列表（分页） | GET | `/api/dashboard/galleries` | JWT |
+| 搜索联想 | GET | `/api/dashboard/suggestions` | JWT |
+| 标签翻译映射表 | GET | `/api/dashboard/tag-translations` | JWT |
+| 刷新翻译缓存 | POST | `/api/dashboard/tag-translations/refresh` | JWT |
+| 标签详情 | GET | `/api/dashboard/tag-detail` | JWT |
 
-所有接口统一前缀：`/api/temporal/eh`
-
-### 端点列表
-
-| 方法 | 路径 | 功能 | 异步 |
-|------|------|------|------|
-| `POST` | `/start` | 启动主工作流（搜索 + 下载） | ✅ |
-| `POST` | `/retry-failed` | 重试失败任务 | ✅ |
-| `POST` | `/test-email` | 测试邮件配置 | ❌ |
-
-**详细 API 参数、请求示例、响应格式见：[API_文档.md](API_文档.md)**
-
-## 故障排查
-
-### 常见问题
-
-#### 1. Temporal Server 连接失败
-
-```
-io.grpc.StatusRuntimeException: UNAVAILABLE: io exception
-```
-
-**解决**：确保 Temporal Server 运行在 `127.0.0.1:7233`
-
-```bash
-# 检查 Temporal Server 是否运行
-docker ps | grep temporal
-```
-
-#### 2. MySQL 连接失败
-
-```
-java.sql.SQLException: Client does not support authentication protocol
-```
-
-**解决**：检查 MySQL 版本与凭据，更新 `application.yaml` 中的数据库配置
-
-#### 3. EHentai 网站无法访问
-
-```
-ErrorType: IP_BANNED (不重试)
-```
-
-**解决**：检查网络连接，尝试更新代理配置或 Cookie
-
-#### 4. Synology 推送失败
-
-```
-ErrorType: SYNOLOGY_AUTH_FAILED (不重试)
-```
-
-**解决**：验证 Synology 地址、用户名、密码是否正确
-
-### 查看日志
-
-实时查看应用日志：
-
-```bash
-# 如使用 Maven 启动
-tail -f nohup.out
-
-# 如使用 Docker
-docker logs -f container_name
-```
-
-## 项目统计
-
-- **主要代码行数**：约 2000+ 行 （包含工作流、Activity、配置等）
-- **Activity 数量**：5 个（Scraper, Database, Synology, Komga, Notification）
-- **Workflow 数量**：3 个（Main, Retry, SingleGalleryDownload）
-- **REST 端点**：3 个
-- **数据库表**：1 个（eh_galleries）
-
-## 开发与扩展
-
-### 添加新的 Activity
-
-1. 在 `src/main/java/com/checker/temporalServices/activities/` 创建接口
-2. 在 `impl/` 下创建实现类（加 `@Component` 注解）
-3. 在工作流中调用
-
-示例：
-
-```java
-// 创建接口
-@ActivityInterface
-public interface MyNewActivity {
-    @ActivityMethod
-    void doSomething(String input);
-}
-
-// 创建实现
-@Component
-public class MyNewActivityImpl implements MyNewActivity {
-    @Override
-    public void doSomething(String input) {
-        // 业务逻辑
-    }
-}
-
-// 在工作流中使用
-MyNewActivity activity = Workflow.newActivityStub(MyNewActivity.class, options);
-activity.doSomething("input");
-```
-
-### 修改工作流重试策略
-
-编辑 `WorkflowSteps.java` 修改 `DEFAULT_OPTIONS` 和 `SCRAPER_OPTIONS`：
-
-```java
-static final ActivityOptions DEFAULT_OPTIONS = ActivityOptions.newBuilder()
-        .setStartToCloseTimeout(Duration.ofMinutes(5))
-        .setRetryOptions(RetryOptions.newBuilder()
-                .setInitialInterval(Duration.ofSeconds(10))
-                .setMaximumAttempts(3)  // 最多重试 3 次
-                .build())
-        .build();
-```
-
-## 相关资源
-
-- [Temporal 官方文档](https://docs.temporal.io/)
-- [Temporal Java SDK](https://github.com/temporalio/sdk-java)
-- [Spring Boot Temporal Starter](https://github.com/temporalio/temporal-spring-boot-starter)
-- [EHentai API 参考](https://ehwiki.org/wiki/API)
-- [MyBatis-Plus 文档](https://baomidou.com/)
-
-## 许可证
-
-MIT
-
-## 联动二次开发
-
-如需 Activity 扩展或新工作流集成，请参考上述"开发与扩展"部分或联系项目维护者。
-
-- `API_文档.md`
-
-## 工作流说明
-
-主流程（`EHAutomationWorkflow`）核心步骤：
-
-1. `scrapeGalleries` 抓取结果
-2. `saveToDatabase` 入库/更新
-3. `extractDownloadUrl` 解析直链
-4. `pushToSynology` 下发下载任务
-5. `checkSynologyTaskStatus` 轮询状态
-6. `updateGalleryStatus` 回写状态
-7. `fetchAndSaveMetadata` / `triggerKomgaLibraryScan` / `pushMetadataToKomga` 后处理
-
-重试流程（`RetryFailedDownloadWorkflow`）：
-
-- 从数据库提取失败记录后重新拉取直链并重推下载
-- 已下载但未入库的记录会走 Komga 补偿逻辑
-
-## 状态字段
-
-`eh_galleries` 中常见状态值：
-
-- `未下载`
-- `下载中`
-- `已下载`
-- `下载失败`
-- `已入库`
-- `阻断`
-
-## 常见排查
-
-1. 接口返回成功但无下载任务
-   - 检查 `eh-config.synology.*` 与下载目的地权限
-
-2. 工作流启动失败
-   - 检查 Temporal 地址是否可达、Task Queue 是否一致（`EHDownloadTaskQueue`）
-
-3. 下载状态长期不变化
-   - 检查群晖接口权限、网络代理、目标站点可访问性
-
-4. 邮件发送失败
-   - 检查 Microsoft Graph 的 `tenant-id/client-id/client-secret/sender-email`
-
-## 开发建议
-
-- 保持 `SearchOptions` 与接口文档参数同步
-- 仅在必要时调整 Activity 重试策略和不可重试异常类型
-- 为生产环境增加脱敏配置和密钥管理方案
-
-## 参考资料
-
-- 详细 API 文档：`API_文档.md`
-- Maven：`D:\IntelliJ IDEA 2024.2.0.1\plugins\maven\lib\maven3\bin`
+详细接口说明见 [API_文档.md](API_文档.md)。
