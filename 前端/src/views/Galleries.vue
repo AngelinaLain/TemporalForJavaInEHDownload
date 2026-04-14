@@ -66,60 +66,65 @@
 
     <!-- 数据表格 -->
     <el-card shadow="hover" style="margin-top: 16px">
-      <el-table :data="tableData" v-loading="loading" stripe style="width: 100%"
-                @sort-change="handleSortChange">
-        <el-table-column prop="gid" label="GID" width="110" />
-        <el-table-column prop="title" label="标题" min-width="280" show-overflow-tooltip />
-        <el-table-column prop="downloadStatus" label="状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag :type="statusTagType(row.downloadStatus)" size="small">
-              {{ row.downloadStatus }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="fileSizeMb" label="文件大小" width="120" align="right" sortable="custom">
-          <template #default="{ row }">
-            {{ row.fileSizeMb ? row.fileSizeMb.toFixed(1) + ' MB' : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="tags" label="标签" min-width="200">
-          <template #default="{ row }">
-            <template v-if="row.tags && row.tags.length">
-              <el-tag v-for="tag in row.tags.slice(0, 5)" :key="tag" size="small"
-                      class="tag-item" type="info" :title="tag">
-                {{ tagStore.translate(tag) }}
-              </el-tag>
-              <el-tag v-if="row.tags.length > 5" size="small" type="warning">
-                +{{ row.tags.length - 5 }}
+      <!-- 首次加载时显示骨架屏，避免空白闪现 -->
+      <el-skeleton v-if="firstLoad" :rows="10" animated style="padding: 8px 0" />
+
+      <template v-else>
+        <el-table :data="tableData" v-loading="loading" stripe style="width: 100%"
+                  @sort-change="handleSortChange">
+          <el-table-column prop="gid" label="GID" width="110" />
+          <el-table-column prop="title" label="标题" min-width="280" show-overflow-tooltip />
+          <el-table-column prop="downloadStatus" label="状态" width="110" align="center">
+            <template #default="{ row }">
+              <el-tag :type="statusTagType(row.downloadStatus)" size="small">
+                {{ row.downloadStatus }}
               </el-tag>
             </template>
-            <span v-else class="text-muted">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="crawledAt" label="抓取时间" width="170" sortable="custom">
-          <template #default="{ row }">
-            {{ formatDate(row.crawledAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="100" align="center" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+          </el-table-column>
+          <el-table-column prop="fileSizeMb" label="文件大小" width="120" align="right" sortable="custom">
+            <template #default="{ row }">
+              {{ row.fileSizeMb ? row.fileSizeMb.toFixed(1) + ' MB' : '-' }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="tags" label="标签" min-width="200">
+            <template #default="{ row }">
+              <template v-if="row.tags && row.tags.length">
+                <el-tag v-for="tag in row.tags.slice(0, 5)" :key="tag" size="small"
+                        class="tag-item" type="info" :title="tag">
+                  {{ tagStore.translate(tag) }}
+                </el-tag>
+                <el-tag v-if="row.tags.length > 5" size="small" type="warning">
+                  +{{ row.tags.length - 5 }}
+                </el-tag>
+              </template>
+              <span v-else class="text-muted">-</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="crawledAt" label="抓取时间" width="170" sortable="custom">
+            <template #default="{ row }">
+              {{ formatDate(row.crawledAt) }}
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100" align="center" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
 
-      <!-- 分页 -->
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @size-change="loadData"
-          @current-change="loadData"
-        />
-      </div>
+        <!-- 分页 -->
+        <div class="pagination-wrapper">
+          <el-pagination
+            v-model:current-page="pagination.page"
+            v-model:page-size="pagination.size"
+            :page-sizes="[20, 50, 100]"
+            :total="pagination.total"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="loadData"
+            @current-change="loadData"
+          />
+        </div>
+      </template>
     </el-card>
 
     <!-- 详情抽屉 -->
@@ -185,6 +190,7 @@ const tagStore = useTagStore()
 tagStore.loadTranslations()
 
 const loading = ref(false)
+const firstLoad = ref(true)   // 首次加载期间显示骨架屏，之后改用 v-loading
 const tableData = ref([])
 const drawerVisible = ref(false)
 const currentRow = ref(null)
@@ -240,6 +246,7 @@ const loadData = async () => {
     const res = await api.get('/dashboard/galleries', { params })
     tableData.value = res.data.records
     pagination.total = Number(res.data.total)
+    firstLoad.value = false
   } catch {
     // handled by interceptor
   } finally {

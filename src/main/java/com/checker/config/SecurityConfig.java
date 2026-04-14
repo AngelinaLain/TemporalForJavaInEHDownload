@@ -22,9 +22,12 @@ import java.util.Map;
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final SecurityProperties securityProperties;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter,
+                          SecurityProperties securityProperties) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+        this.securityProperties = securityProperties;
     }
 
     @Bean
@@ -55,10 +58,13 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        // 使用配置文件中明确列出的允许来源，避免 allowedOriginPatterns("*") 配合
+        // allowCredentials(true) 带来的安全风险。JWT 认证通过 Authorization Header
+        // 传递，不依赖 Cookie，因此无需开启 credentials。
+        config.setAllowedOrigins(securityProperties.getCors().getAllowedOrigins());
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"))    ;
         config.setAllowedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
+        config.setAllowCredentials(false);
         config.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

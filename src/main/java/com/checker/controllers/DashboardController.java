@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.checker.common.Result;
 import com.checker.entity.EhGalleriesEntity;
+import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.EhGalleriesService;
 import com.checker.service.EhTagTranslationService;
 import org.springframework.web.bind.annotation.*;
@@ -18,11 +19,14 @@ public class DashboardController {
 
     private final EhGalleriesService galleriesService;
     private final EhTagTranslationService tagTranslationService;
+    private final EhGalleriesMapper galleriesMapper;
 
     public DashboardController(EhGalleriesService galleriesService,
-                               EhTagTranslationService tagTranslationService) {
+                               EhTagTranslationService tagTranslationService,
+                               EhGalleriesMapper galleriesMapper) {
         this.galleriesService = galleriesService;
         this.tagTranslationService = tagTranslationService;
+        this.galleriesMapper = galleriesMapper;
     }
 
     /**
@@ -146,37 +150,20 @@ public class DashboardController {
     }
 
     /**
-     * 标签分类统计（取 Top 20 标签前缀分类）
+     * 标签命名空间统计（Top 20）。
+     * 使用 MySQL JSON_TABLE 在数据库侧聚合，避免全量加载画廊到内存。
      */
     @GetMapping("/tag-stats")
     public Result<List<Map<String, Object>>> getTagStats() {
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-        wrapper.isNotNull("tags").select("tags");
-        List<EhGalleriesEntity> galleries = galleriesService.list(wrapper);
-
-        // 统计标签命名空间: "female:", "male:", "language:", "artist:", etc.
-        Map<String, Long> namespaceCounts = new HashMap<>();
-        for (EhGalleriesEntity g : galleries) {
-            if (g.getTags() != null) {
-                for (String tag : g.getTags()) {
-                    String namespace = tag.contains(":") ? tag.substring(0, tag.indexOf(":")) : "misc";
-                    namespaceCounts.merge(namespace, 1L, Long::sum);
-                }
-            }
-        }
-
-        List<Map<String, Object>> result = namespaceCounts.entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
-                .limit(20)
-                .map(e -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("name", e.getKey());
-                    item.put("nameCn", tagTranslationService.translateNamespace(e.getKey()));
-                    item.put("value", e.getValue());
-                    return item;
-                })
-                .collect(Collectors.toList());
-
+        List<Map<String, Object>> rows = galleriesMapper.countTagNamespaces();
+        List<Map<String, Object>> result = rows.stream().map(row -> {
+            String ns = String.valueOf(row.get("namespace"));
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", ns);
+            item.put("nameCn", tagTranslationService.translateNamespace(ns));
+            item.put("value", ((Number) row.get("cnt")).longValue());
+            return item;
+        }).collect(Collectors.toList());
         return Result.success(result);
     }
 

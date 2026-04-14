@@ -64,7 +64,11 @@ const sizeChartRef = ref()
 const timelineChartRef = ref()
 const tagChartRef = ref()
 
-let charts = []
+// 保存图表实例，整个组件生命周期内只创建一次，刷新时仅调用 setOption
+let statusChart = null
+let sizeChart = null
+let timelineChart = null
+let tagChart = null
 let refreshTimer = null
 
 const statCards = computed(() => [
@@ -76,16 +80,9 @@ const statCards = computed(() => [
   { label: '总大小(GB)', value: stats.value.totalSizeGb ?? '-', icon: markRaw(DataLine), color: '#8B5CF6' }
 ])
 
-const initChart = (domRef, option) => {
-  const chart = echarts.init(domRef)
-  chart.setOption(option)
-  charts.push(chart)
-  return chart
-}
-
-const disposeCharts = () => {
-  charts.forEach(c => c.dispose())
-  charts = []
+const statusColors = {
+  '未下载': '#909399', '下载中': '#409EFF', '已下载': '#67C23A',
+  '下载失败': '#F56C6C', '已入库': '#E6A23C', '阻断': '#F56C6C', '已忽略': '#C0C4CC'
 }
 
 const loadData = async () => {
@@ -100,15 +97,8 @@ const loadData = async () => {
 
     stats.value = statsRes.data
 
-    // 刷新数据前先释放旧图表，避免重复初始化导致的内存泄漏和渲染叠加
-    disposeCharts()
-
-    // 饼图 - 状态分布
-    const statusColors = {
-      '未下载': '#909399', '下载中': '#409EFF', '已下载': '#67C23A',
-      '下载失败': '#F56C6C', '已入库': '#E6A23C', '阻断': '#F56C6C', '已忽略': '#C0C4CC'
-    }
-    initChart(statusChartRef.value, {
+    // 直接更新已有图表实例的数据，不 dispose/reinit，避免每次刷新闪烁
+    statusChart.setOption({
       tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
       legend: { bottom: 0 },
       series: [{
@@ -122,10 +112,9 @@ const loadData = async () => {
           itemStyle: { color: statusColors[item.name] || '#409EFF' }
         }))
       }]
-    })
+    }, true)
 
-    // 柱状图 - 文件大小分布
-    initChart(sizeChartRef.value, {
+    sizeChart.setOption({
       tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: sizeRes.data.labels },
       yAxis: { type: 'value', name: '数量' },
@@ -140,10 +129,9 @@ const loadData = async () => {
           borderRadius: [4, 4, 0, 0]
         }
       }]
-    })
+    }, true)
 
-    // 折线图 - 抓取时间线
-    initChart(timelineChartRef.value, {
+    timelineChart.setOption({
       tooltip: { trigger: 'axis' },
       xAxis: { type: 'category', data: timelineRes.data.dates, axisLabel: { rotate: 45 } },
       yAxis: { type: 'value', name: '数量' },
@@ -155,11 +143,10 @@ const loadData = async () => {
         lineStyle: { width: 2 },
         itemStyle: { color: '#667eea' }
       }]
-    })
+    }, true)
 
-    // 横向柱状图 - 标签分类
     const tagData = tagRes.data.reverse()
-    initChart(tagChartRef.value, {
+    tagChart.setOption({
       tooltip: { trigger: 'axis' },
       grid: { left: 100 },
       xAxis: { type: 'value' },
@@ -175,24 +162,27 @@ const loadData = async () => {
           borderRadius: [0, 4, 4, 0]
         }
       }]
-    })
+    }, true)
   } catch {
     // handled by interceptor
   }
 }
 
 const handleResize = () => {
-  charts.forEach(c => c.resize())
+  [statusChart, sizeChart, timelineChart, tagChart].forEach(c => c?.resize())
 }
 
 const startAutoRefresh = () => {
   if (refreshTimer) clearInterval(refreshTimer)
-  refreshTimer = setInterval(() => {
-    loadData()
-  }, 30000)
+  refreshTimer = setInterval(loadData, 30000)
 }
 
 onMounted(() => {
+  // 图表实例只在 mount 时创建一次
+  statusChart = echarts.init(statusChartRef.value)
+  sizeChart = echarts.init(sizeChartRef.value)
+  timelineChart = echarts.init(timelineChartRef.value)
+  tagChart = echarts.init(tagChartRef.value)
   loadData()
   startAutoRefresh()
   window.addEventListener('resize', handleResize)
@@ -204,7 +194,7 @@ onUnmounted(() => {
     refreshTimer = null
   }
   window.removeEventListener('resize', handleResize)
-  disposeCharts()
+  ;[statusChart, sizeChart, timelineChart, tagChart].forEach(c => c?.dispose())
 })
 </script>
 

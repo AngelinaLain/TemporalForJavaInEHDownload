@@ -41,5 +41,4 @@ build/
 /前端/node_modules/
 /前端/dist/
 src/main/resources/application.yaml
-src/main/resources/application.yaml
 .idea/

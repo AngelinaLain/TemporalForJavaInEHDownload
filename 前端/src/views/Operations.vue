@@ -305,20 +305,6 @@ const calcFilterCats = () => {
     .reduce((sum, cat) => sum + cat.code, 0)
 }
 
-const nsMap = {
-  female: { label: '女', color: '#ad0024' },
-  male: { label: '男', color: '#0044bb' },
-  parody: { label: '原作', color: '#6600aa' },
-  character: { label: '角色', color: '#b08000' },
-  group: { label: '团队', color: '#007a00' },
-  artist: { label: '绘师', color: '#bb1100' },
-  cosplayer: { label: 'Cos', color: '#555555' },
-  mixed: { label: '混合', color: '#888' },
-  other: { label: '其他', color: '#777' },
-  reclass: { label: '重分类', color: '#006699' },
-  language: { label: '语言', color: '#444' },
-}
-
 const escapeHtml = (str) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
 const highlightMatch = (text, query) => {
@@ -334,7 +320,7 @@ const buildSuggestionItem = (key, val, query) => {
   const colonIdx = key.indexOf(':')
   const ns = colonIdx > -1 ? key.substring(0, colonIdx) : 'other'
   const original = colonIdx > -1 ? key.substring(colonIdx + 1) : key
-  const nsInfo = nsMap[ns] || nsMap.other
+  const nsInfo = tagStore.getNsInfo(ns)
   return { value: key, label: val, ns: nsInfo.label, nsColor: nsInfo.color, translated: val, original, query }
 }
 

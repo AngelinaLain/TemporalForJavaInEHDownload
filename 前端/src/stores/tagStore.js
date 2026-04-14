@@ -1,6 +1,24 @@
 import { defineStore } from 'pinia'
 import api from '../api'
 
+/**
+ * 命名空间 UI 信息：标签搜索下拉中显示的简短标签和颜色。
+ * Operations.vue 直接引用此常量，消除重复定义。
+ */
+export const NS_INFO = {
+  female:    { label: '女',    color: '#ad0024' },
+  male:      { label: '男',    color: '#0044bb' },
+  parody:    { label: '原作',  color: '#6600aa' },
+  character: { label: '角色',  color: '#b08000' },
+  group:     { label: '团队',  color: '#007a00' },
+  artist:    { label: '绘师',  color: '#bb1100' },
+  cosplayer: { label: 'Cos',   color: '#555555' },
+  mixed:     { label: '混合',  color: '#888888' },
+  other:     { label: '其他',  color: '#777777' },
+  reclass:   { label: '重分类',color: '#006699' },
+  language:  { label: '语言',  color: '#444444' },
+}
+
 export const useTagStore = defineStore('tags', {
   state: () => ({
     /** @type {Record<string, string>} namespace:tag → 中文名 */
@@ -69,6 +87,10 @@ export const useTagStore = defineStore('tags', {
     },
     translateNs(ns) {
       return NS_MAP[ns?.toLowerCase()] || ns
+    },
+    /** 返回命名空间的 UI 展示信息（简短标签 + 颜色），供搜索下拉使用 */
+    getNsInfo(ns) {
+      return NS_INFO[ns?.toLowerCase()] || { label: ns || 'other', color: '#888888' }
     }
   }
 })
