@@ -1,0 +1,29 @@
+server:
+  port: 8081
+spring:
+  application:
+    name: scraper-worker
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 10.10.10.175:8848 # 局域网 Nacos
+  temporal:
+    connection:
+      target: 10.10.10.161:7233
+    namespace: default
+    workers-auto-discovery:
+      packages:
+        - com.checker
+
+eh-config:
+  cookies:
+    member-id: ${EH_MEMBER_ID:4674255}
+    pass-hash: ${EH_PASS_HASH:0345da71457857378639a3a7f2eb045a}
+    sk: ${EH_SK:u2szd0pu6r7o3t3suf36iq1mr641}
+    star: ${EH_STAR:1-2516af5cd7}
+  proxy:
+    host: "10.10.10.32"
+    port: 7893
+    username: ${PROXY_USERNAME:Clash}
+    password: ${PROXY_PASSWORD:azWPzWfP}
+    type: "http"
