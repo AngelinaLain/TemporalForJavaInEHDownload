@@ -271,4 +271,4 @@ curl -X POST http://127.0.0.1:8001/api/auth/login \
 | 刷新翻译缓存 | POST | `/api/dashboard/tag-translations/refresh` | JWT |
 | 标签详情 | GET | `/api/dashboard/tag-detail` | JWT |
 
-详细接口说明见 [API_文档.md](API_文档.md)，后续优化规划见 [修复意见.md](修复意见.md)。
+详细接口说明见 [API_文档.md](API_文档.md)。
