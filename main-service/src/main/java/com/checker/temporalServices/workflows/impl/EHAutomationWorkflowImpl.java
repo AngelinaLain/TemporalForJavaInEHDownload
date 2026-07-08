@@ -47,7 +47,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     private final ScraperActivity scraperActivity = Workflow.newActivityStub(
             ScraperActivity.class,
             ActivityOptions.newBuilder()
-                    .setTaskQueue("EH_SCRAPER_TASK_QUEUE") // 关键：指定由旁路由节点执行
+                    .setTaskQueue(Constants.SCRAPER_TASK_QUEUE) // 关键：指定由旁路由节点执行
                     .setStartToCloseTimeout(Duration.ofMinutes(30)) // 爬虫可能较慢，给足超时
                     .setRetryOptions(RetryOptions.newBuilder()
                             .setMaximumAttempts(3)

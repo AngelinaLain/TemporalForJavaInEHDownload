@@ -1,6 +1,6 @@
 spring:
   application:
-    name: scraper-worker
+    name: main-service
   cloud:
     nacos:
       discovery:
@@ -74,7 +74,7 @@ eh-config:
     client-secret: ${GRAPH_CLIENT_SECRET:g4W8Q~nzMeftYkOLJ3kiKPZkV1barzFIyMFyGc6a}
     sender-email: ehbo@renl57.onmicrosoft.com
   komga:
-    url: http://10.10.10.40:3001
+    url: http://10.10.10.40:3000
     api-key: ${KOMGA_API_KEY:71c80c96520247c5bd7bb893b337eaee}
     library-id: 0PWD8X2S9169Y
   # 工作流运行时参数（可在线调整，无需重新编译）

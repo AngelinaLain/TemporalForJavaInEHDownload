@@ -1,5 +1,6 @@
 package com.checker.temporalServices.activities.impl;
 
+import com.checker.common.Constants;
 import com.checker.temporalServices.activities.AiActivity;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +15,7 @@ import java.util.Map;
 
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = "EH_TASK_QUEUE") // 主服务队列
+@ActivityImpl(taskQueues = Constants.AI_TASK_QUEUE) // 主服务队列
 public class AiActivityImpl implements AiActivity {
 
     @Autowired

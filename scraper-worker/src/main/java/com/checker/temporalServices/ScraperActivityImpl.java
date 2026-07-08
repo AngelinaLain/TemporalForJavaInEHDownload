@@ -37,7 +37,7 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Component
-@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
+@ActivityImpl(taskQueues = Constants.SCRAPER_TASK_QUEUE)
 public class ScraperActivityImpl implements ScraperActivity {
 
     @Autowired

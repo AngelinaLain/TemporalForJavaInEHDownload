@@ -58,7 +58,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                         gallery.getGid(), gallery.getToken());
                 WorkflowSteps.buildKomgaImportTask(
                         komgaActivity, notificationActivity, gallery, log,
-                        "⚠️ Komga 补偿入库超时", "尝试补偿入库依然失败: " + gallery.getTitle(),
+                        "⚠️ Komga 补偿入库超时", "尝试补偿入库依然失败: " + gallery.getTitle(), 
                         settings.getKomgaImportMaxRetries(), settings.getKomgaImportPollIntervalSeconds()
                 ).get();*/
                 ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()

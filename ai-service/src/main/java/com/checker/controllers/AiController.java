@@ -1,7 +1,10 @@
 package com.checker.controllers;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.ChatClient;
 import org.springframework.ai.chat.prompt.PromptTemplate;
+import org.springframework.ai.retry.TransientAiException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +20,8 @@ import java.util.Map;
 @RequestMapping("/api/ai")
 public class AiController {
 
+    private static final Logger log = LoggerFactory.getLogger(AiController.class);
+
     @Autowired
     private ChatClient chatClient;
 
@@ -30,9 +35,15 @@ public class AiController {
         try {
             String response = chatClient.call(template.create()).getResult().getOutput().getContent();
             return ResponseEntity.ok(response);
-        } catch (RestClientException | org.springframework.web.reactive.function.client.WebClientRequestException e) {
-            // 透传 503 异常，通知主服务挂起
+        } catch (RestClientException | org.springframework.web.reactive.function.client.WebClientRequestException |
+                 TransientAiException e) {
+            // 捕获网络异常及 Spring AI 包装的远端 500 异常
+            log.warn("GPU节点调用失败 (网络或远端服务异常): {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("GPU节点离线或未响应");
+        } catch (Exception e) {
+            // 兜底捕获其他未知异常，防止穿透
+            log.error("AI 摘要生成发生未知内部错误", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("内部服务错误");
         }
     }
 }

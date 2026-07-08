@@ -1,6 +1,7 @@
 package com.checker.temporalServices.workflows.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.checker.common.Constants;
 import com.checker.common.ErrorType;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.DatabaseActivity;
@@ -49,7 +50,8 @@ class WorkflowSteps {
      * 给 LLM 推理留出足够的超时时间，失败最多重试 2 次。
      */
     static final ActivityOptions AI_OPTIONS = ActivityOptions.newBuilder()
-            .setTaskQueue("EH_TASK_QUEUE")
+            .setTaskQueue(Constants.AI_TASK_QUEUE)
+            .setScheduleToCloseTimeout(Duration.ofMinutes(4))
             .setStartToCloseTimeout(Duration.ofMinutes(3))
             .setRetryOptions(RetryOptions.newBuilder()
                     .setInitialInterval(Duration.ofSeconds(15))
@@ -64,6 +66,7 @@ class WorkflowSteps {
      * Cookie 失效、配额超限、IP 封禁等致命错误直接标记为不可重试，交由 Workflow 层通知人工介入。
      */
     static final ActivityOptions SCRAPER_OPTIONS = ActivityOptions.newBuilder()
+            .setTaskQueue(Constants.SCRAPER_TASK_QUEUE)
             .setStartToCloseTimeout(Duration.ofMinutes(15))
             .setHeartbeatTimeout(Duration.ofSeconds(30))
             .setRetryOptions(RetryOptions.newBuilder()

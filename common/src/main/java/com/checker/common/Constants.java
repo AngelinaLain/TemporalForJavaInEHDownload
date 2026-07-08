@@ -7,6 +7,8 @@ public final class Constants {
 
     // ─── Temporal ────────────────────────────────────────────────
     public static final String TASK_QUEUE = "EHDownloadTaskQueue";
+    public static final String SCRAPER_TASK_QUEUE = "EH_SCRAPER_TASK_QUEUE";
+    public static final String AI_TASK_QUEUE = "EH_TASK_QUEUE";
 
     // ─── EHentai URLs ───────────────────────────────────────────
     public static final String EHENTAI_BASE_URL = "https://e-hentai.org/";

@@ -47,7 +47,7 @@ public class KomgaApiClient {
     }
 
     /**
-     * 根据 Tag 搜索画廊 (Series) ID 列表
+     * 根据 Tag 搜索画廊 (Series) ID 列表 
      */
     public List<String> findSeriesIdsByTag(String tag) throws Exception {
         // 【关键修复】对查询参数进行 URL 编码
@@ -88,8 +88,14 @@ public class KomgaApiClient {
         try (Response response = httpClient.newCall(request).execute()) {
             if (!response.isSuccessful()) return null;
 
-            JsonNode root = objectMapper.readTree(response.body().string());
-            JsonNode content = root.get("content");
+            JsonNode root = null;
+            if (response.body() != null) {
+                root = objectMapper.readTree(response.body().string());
+            }
+            JsonNode content = null;
+            if (root != null) {
+                content = root.get("content");
+            }
             if (content != null && content.isArray() && !content.isEmpty()) {
                 return content.get(0);
             }
