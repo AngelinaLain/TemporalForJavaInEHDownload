@@ -126,12 +126,12 @@ ai-service                     (独立，Web + Nacos + Spring AI，不依赖 com
 
 | 组件 | 默认地址 |
 | --- | --- |
-| Nacos Discovery | `10.10.10.175:8848` |
-| Temporal Server | `10.10.10.161:7233`（namespace: `default`） |
-| MySQL | `10.10.10.161:3306/eh_automation` |
-| Synology | `https://10.10.10.40:5001` |
-| Komga | `http://10.10.10.40:3000` |
-| 代理 (Clash) | `10.10.10.32:7893` |
+| Nacos Discovery | `172.0.0.1:8848` |
+| Temporal Server | `172.0.0.1:7233`（namespace: `default`） |
+| MySQL | `172.0.0.1:3306/eh_automation` |
+| Synology | `https://172.0.0.1:5001` |
+| Komga | `http://172.0.0.1:3000` |
+| 代理 (Clash) | `172.0.0.1:7893` |
 | AI 端点 (LM Studio) | `http://10.10.10.50:1234` |
 
 > 以上为默认值，均可通过 `application.yaml` 或环境变量覆盖。
