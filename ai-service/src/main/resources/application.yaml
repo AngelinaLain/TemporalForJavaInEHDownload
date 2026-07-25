@@ -1,0 +1,17 @@
+server:
+  port: 8082
+spring:
+  application:
+    name: eh-ai-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 10.10.10.175:8848 # 局域网 Nacos
+  ai:
+    openai:
+      # 指向实际运行 LLM (如 LM Studio) 的机器 IP
+      base-url: http://10.10.10.50:1234
+      api-key: "not-needed"
+      chat:
+        options:
+          model: "google/gemma-4-26b-a4b"

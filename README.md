@@ -1,17 +1,21 @@
-# TemporalForJavaInEHDow
+# GalleryImport (TemporalForJavaInEHDow)
 
-基于 **Spring Boot + Temporal** 的 EHentai 自动化下载与 Komga 入库系统。通过 REST API 触发异步工作流，完成从搜索抓取、Synology 下载推送到 Komga 元数据同步的全链路自动化。
+基于 **Spring Boot 3.2.4 + Spring Cloud Alibaba + Temporal** 的 EHentai 自动化下载与 Komga 入库系统。
+采用 **Maven 多模块 / 微服务** 架构，通过 Nacos 服务发现 + Temporal 工作流编排，完成从
+「搜索抓取 → Synology 下载 → Komga 元数据刮削与合集 → 邮件通知」的全链路自动化。
+
 
 ## 核心功能
 
-- EHentai 画廊搜索与数据抓取，支持多维度过滤
-- Temporal 异步工作流，内置重试与容错机制
-- MySQL 持久化画廊状态与元数据
-- Synology Download Station 下载任务推送
-- Komga 自动入库、标签同步与合集管理
+- EHentai / ExHentai 画廊搜索与数据抓取（多维度过滤，独立爬虫 Worker）
+- Temporal 异步工作流：子工作流隔离 + 滑动窗口并发 + 惰性直链提取 + 补偿队列
+- MySQL 持久化画廊状态与元数据（MyBatis-Plus）
+- Synology Download Station 下载任务推送与文件重命名
+- Komga 自动入库、异步轮询元数据、标签同步与合集管理
+- AI 标签翻译服务（Spring AI，可指向本地 LM Studio / OpenAI 兼容端点）
 - Microsoft Graph API 邮件通知
 - JWT 认证 + Swagger UI
-- Dashboard 统计面板（状态分布、时间线、标签分析）
+- Vue3 Dashboard 后台（状态分布、时间线、标签分析、运维操作）
 
 ## 技术栈
 
@@ -19,45 +23,128 @@
 | --- | --- |
 | 语言 / 运行时 | Java 17 |
 | 框架 | Spring Boot 3.2.4 |
-| 工作流引擎 | Temporal Java SDK |
-| ORM | MyBatis-Plus |
+| 微服务 | Spring Cloud 2023.0.1 + Spring Cloud Alibaba 2023.0.1.0（Nacos Discovery + LoadBalancer） |
+| 工作流引擎 | Temporal Java SDK 1.31.0 |
+| ORM | MyBatis-Plus 3.5.5 |
 | 数据库 | MySQL 8+ |
 | HTTP 客户端 | OkHttp3 |
-| 工具库 | Hutool |
-| 安全 | Spring Security + JWT |
+| 工具库 | Hutool 5.8.38、Jsoup 1.17.2、JSch 0.1.55 |
+| AI | Spring AI 0.8.1（OpenAI 兼容 starter） |
+| 安全 | Spring Security + JWT (jjwt 0.12.5) |
+| 缓存 | Caffeine |
 | API 文档 | Springdoc OpenAPI (Swagger) |
+| 前端 | Vue 3.4 + Vite 5 + Pinia + ECharts 5 + Axios |
 
-## 目录结构
+## 模块结构
+
+顶层 `pom.xml` 为聚合父 POM（`packaging=pom`），继承 `spring-boot-starter-parent`，聚合以下模块：
 
 ```text
-src/main/java/com/checker/
-├── TemporalForJavaInEHDowApplication.java
-├── common/                    # 通用工具：Result、ResultCode、ErrorType、枚举等
-├── config/                    # JWT、Security、网络、Workflow 配置
-├── controllers/
-│   ├── AuthController.java    # 登录认证
-│   ├── EHAutomationController.java  # 工作流触发接口
-│   └── DashboardController.java     # 统计看板接口
-├── dto/                       # 请求数据对象：SearchOptions、KomgaCollectionRequest 等
-├── entity/                    # 数据库实体：EhGalleriesEntity
-├── mapper/                    # MyBatis-Plus Mapper
-├── service/                   # 业务逻辑层
-└── temporalServices/
-    ├── activities/            # Temporal Activity 接口与实现
-    ├── workflows/             # Temporal Workflow 接口与实现
-    └── workers/               # Temporal Worker 注册
+GalleryImport/                     # 父 POM：统一依赖版本管理
+├── common/                        # 公共库 (jar)：被 main-service / scraper-worker 依赖
+│   └── com.checker
+│       ├── common/                # Result、ResultCode、ErrorType、Constants、
+│       │                          #   DownloadStatus、EhNetworkClient
+│       ├── config/                # EhNetworkConfig（Cookie/代理配置）
+│       ├── dto/                   # ArchiveDownloadInfo、SearchOptions   ← 单一来源
+│       ├── entity/                # EhGalleriesEntity                     ← 单一来源
+│       └── temporalServices/activities/ScraperActivity   # 爬虫 Activity 接口 ← 单一来源
+│
+├── main-service/                  # 主控服务 (jar)，端口 8001
+│   └── com.checker
+│       ├── MainServiceApplication.java
+│       ├── config/                # JWT、Security、Cache、MybatisPlus、Network、EhWorkflow
+│       ├── controllers/           # Auth / EHAutomation / Dashboard
+│       ├── clients/               # KomgaApiClient、SynologyApiClient
+│       ├── dto/                   # KomgaCollectionRequest、WorkflowSettings（本模块特有）
+│       ├── mapper/                # EhGalleriesMapper
+│       ├── service/               # EhGalleries / EhTagTranslation / KomgaSync / KomgaCollection
+│       └── temporalServices/
+│           ├── activities/        # Database / Komga / Notification / Synology / Ai（接口 + impl）
+│           └── workflows/         # EHAutomation / SingleGalleryDownload /
+│                                  #   RetryFailedDownload / KomgaImport（接口 + impl + WorkflowSteps）
+│
+├── scraper-worker/                # 爬虫 Worker (jar)，端口 8081
+│   └── com.checker
+│       ├── ScraperWorkerApplication.java
+│       └── temporalServices/ScraperActivityImpl.java   # 实现 common 的 ScraperActivity
+│
+├── ai-service/                    # AI 服务 (jar)，端口 8082（独立，不依赖 common）
+│   └── com.checker
+│       ├── AiServiceApplication.java
+│       └── controllers/AiController.java
+│
+└── 前端/                          # eh-admin：Vue3 + Vite 后台，端口 8002（Nginx）/ 5173（dev）
+    └── src
+        ├── api/index.js
+        ├── layout/AdminLayout.vue
+        ├── router/index.js
+        ├── stores/tagStore.js
+        └── views/  Dashboard.vue | Galleries.vue | Operations.vue | Login.vue
 ```
+
+### 模块依赖关系
+
+```text
+common  ←──  main-service      (完整业务：Web / Security / MyBatis / Temporal 编排)
+   ↑
+   └──────  scraper-worker     (仅 Temporal，注册 ScraperActivityImpl)
+
+ai-service                     (独立，Web + Nacos + Spring AI，不依赖 common)
+前端                            (通过 /api 反代 main-service:8001)
+```
+
+## Temporal 工作流拓扑
+
+三条 **Task Queue** 实现职责隔离（定义于 `common.Constants`）：
+
+| Task Queue 常量 | 值 | 由谁消费 | 用途 |
+| --- | --- | --- | --- |
+| `TASK_QUEUE` | `EHDownloadTaskQueue` | main-service | 主工作流、DB/Komga/Synology/Notification Activity |
+| `SCRAPER_TASK_QUEUE` | `EH_SCRAPER_TASK_QUEUE` | scraper-worker | 爬虫抓取（旁路由节点执行，带心跳） |
+| `AI_TASK_QUEUE` | `EH_TASK_QUEUE` | ai-service / AiActivityImpl | LLM 标签翻译 |
+
+**工作流清单：**
+
+| 工作流 | 说明 |
+| --- | --- |
+| `EHAutomationWorkflow` | 主流程：抓取 → 批量分类（跳过/补偿/新下载）→ 滑动窗口派发子工作流 → 汇总通知 |
+| `SingleGalleryDownloadWorkflow` | 单画廊子工作流：隔离下载/轮询逻辑，规避主工作流历史 5 万条上限 |
+| `RetryFailedDownloadWorkflow` | 失败任务重试 |
+| `KomgaImportWorkflow` | Komga 入库子流程 |
+
+**关键设计（见 `EHAutomationWorkflowImpl` / `WorkflowSteps`）：**
+- 子工作流隔离，避免主工作流历史爆炸
+- 滑动窗口并发（`WorkflowSettings.maxConcurrency`，运行时可调）
+- 惰性直链提取，防止排队过久链接过期
+- 批量 DB 查询/保存，替代逐条 Activity 调用
+- 分级重试：DB 快速重试 3 次；爬虫指数退避（30s→…→30min，最多 5 次）+ 30s 心跳；
+  Cookie 失效 / IP 封禁 / 配额超限等致命错误标记为不可重试，交由人工介入
+- Komga 入库异步轮询（默认 20 次 × 15 秒），超时发邮件告警
+
+## 基础设施依赖
+
+| 组件 | 默认地址 |
+| --- | --- |
+| Nacos Discovery | `172.0.0.1:8848` |
+| Temporal Server | `172.0.0.1:7233`（namespace: `default`） |
+| MySQL | `172.0.0.1:3306/eh_automation` |
+| Synology | `https://172.0.0.1:5001` |
+| Komga | `http://172.0.0.1:3000` |
+| 代理 (Clash) | `172.0.0.1:7893` |
+| AI 端点 (LM Studio) | `http://10.10.10.50:1234` |
+
+> 以上为默认值，均可通过 `application.yaml` 或环境变量覆盖。
 
 ## 快速启动
 
 ### 依赖要求
 
-- JDK 17
-- MySQL 8+
-- Temporal Server（本地或远程）
-- Synology Download Station（可选）
-- Komga（可选）
-- Microsoft 365 / Graph API（可选，用于邮件通知）
+- JDK 17、Maven 3.9+
+- MySQL 8+、Temporal Server、Nacos
+- Synology Download Station、Komga（可选）
+- OpenAI 兼容 LLM 端点（可选，AI 标签翻译）
+- Microsoft 365 / Graph API（可选，邮件通知）
 
 ### 1. 初始化数据库
 
@@ -89,86 +176,76 @@ CREATE TABLE `eh_galleries` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
-### 2. 修改配置
+### 2. 配置
 
-编辑 `src/main/resources/application.yaml`，按实际环境填写：
+各模块 `src/main/resources/application.yaml` 已内置局域网默认值，敏感项建议用环境变量覆盖：
 
-```yaml
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/eh_automation
-    username: your_user
-    password: your_password
-  temporal:
-    connection:
-      target: localhost:7233
-      namespace: default
+- `main-service`：`DB_PASSWORD`、`JWT_SECRET`、`ADMIN_USERNAME/PASSWORD`、
+  `EH_MEMBER_ID/EH_PASS_HASH/EH_SK/EH_STAR`、`PROXY_*`、`SYNOLOGY_*`、
+  `GRAPH_*`、`KOMGA_API_KEY` 等
+- `scraper-worker`：`EH_*`、`PROXY_*`
+- `ai-service`：`spring.ai.openai.base-url` / `model`
 
-eh-config:
-  cookies: "ipb_member_id=xxx; ipb_pass_hash=xxx; ..."
-  proxy:
-    host: 127.0.0.1
-    port: 7890
-  synology:
-    url: http://your-nas:5000
-    username: admin
-    password: your_password
-  komga:
-    url: http://your-komga:25600
-    username: admin@example.com
-    password: your_password
-  notification:
-    tenant-id: xxx
-    client-id: xxx
-    client-secret: xxx
-    sender: admin@yourdomain.com
+`main-service` 的工作流运行时参数（`eh-config.workflow`）可在线调整，无需重新编译：
+`max-concurrency`、`komga-import-max-retries`、`komga-import-poll-interval-seconds`、
+`download-poll-interval-minutes`、`download-cooldown-seconds`。
 
-security:
-  admin:
-    username: admin
-    password: your_password
-```
-
-> 仅 `datasource`、`temporal`、`eh-config.cookies` 为必填项，其余按需配置。
-
-### 3. 构建与运行
+### 3. 构建
 
 ```bash
-# 打包
+# 在项目根目录，聚合构建全部模块
 mvn clean package -DskipTests
-
-# 运行
-java -jar target/TemporalForJavaInEHDow-1.0-SNAPSHOT.jar
 ```
 
-或直接开发模式运行：
+### 4. 运行（需先启动 Nacos + Temporal + MySQL）
 
 ```bash
-mvn spring-boot:run
+# 主控服务（8001）
+java -jar main-service/target/main-service-1.0-SNAPSHOT.jar
+
+# 爬虫 Worker（8081）
+java -jar scraper-worker/target/scraper-worker-1.0-SNAPSHOT.jar
+
+# AI 服务（8082，可选）
+java -jar ai-service/target/ai-service-1.0-SNAPSHOT.jar
+
+# 前端（dev）
+cd 前端 && npm install && npm run dev   # http://127.0.0.1:5173
 ```
 
-### 4. 访问地址
+### 5. Docker Compose（后端 + 前端）
+
+```bash
+docker compose up -d
+# backend  → :8001
+# frontend → :8002（Nginx 反代 /api → backend:8001）
+```
+
+> 注：`docker-compose.yml` 目前仅编排 `main-service`（backend）与前端；
+> `scraper-worker`、`ai-service`、Nacos、Temporal、MySQL 需另行部署。
+
+### 6. 访问地址
 
 | 服务 | 地址 |
-|------|------|
-| 应用默认端口 | `http://127.0.0.1:8001` |
+| --- | --- |
+| 主控 API | `http://127.0.0.1:8001` |
 | Swagger UI | `http://127.0.0.1:8001/swagger-ui/index.html` |
 | OpenAPI JSON | `http://127.0.0.1:8001/v3/api-docs` |
+| 前端（Docker） | `http://127.0.0.1:8002` |
+| 前端（dev） | `http://127.0.0.1:5173` |
 
 ## 认证
 
-所有业务接口受 JWT 保护。先调用登录接口获取 token，再在后续请求头中携带：
+所有业务接口受 JWT 保护。先登录获取 token，再在请求头携带：
 
 ```http
 Authorization: Bearer <jwt-token>
 ```
 
-**登录示例：**
-
 ```bash
 curl -X POST http://127.0.0.1:8001/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"your_password"}'
+  -d '{"username":"admin","password":"***"}'
 ```
 
 ## API 概览
