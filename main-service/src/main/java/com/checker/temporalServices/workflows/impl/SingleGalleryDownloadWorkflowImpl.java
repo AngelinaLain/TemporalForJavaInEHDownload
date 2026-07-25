@@ -3,6 +3,7 @@ package com.checker.temporalServices.workflows.impl;
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.ErrorType;
+import com.checker.common.SynologyTaskStatus;
 import com.checker.dto.ArchiveDownloadInfo;
 import com.checker.dto.WorkflowSettings;
 import com.checker.entity.EhGalleriesEntity;
@@ -75,7 +76,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                         "⚠️ Komga 入库超时",
                         "未识别或尝试补偿入库失败: " + gallery.getTitle()
                 ));
-                // 3. 🌟关键点：等待子工作流在 Temporal 服务端“启动”成功
+                // 3.等待子工作流在 Temporal 服务端“启动”成功
                 // 确保后台任务已被服务器接管，随后当前下载工作流就可以放心地立刻 return 结束
                 Promise<WorkflowExecution> executionPromise =
                         Workflow.getWorkflowExecution(komgaWorkflow);
@@ -123,9 +124,9 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                 Workflow.sleep(Duration.ofSeconds(estimatedWaitSeconds));
 
                 while (true) {
-                    String status = synologyActivity.checkSynologyTaskStatus(synologyTaskId, downloadUrl);
+                    SynologyTaskStatus status = synologyActivity.checkSynologyTaskStatus(synologyTaskId, downloadUrl);
 
-                    if ("finished".equalsIgnoreCase(status)) {
+                    if (status == SynologyTaskStatus.FINISHED) {
                         databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADED.getValue());
 
                         ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
@@ -142,7 +143,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                                 "⚠️ Komga 入库超时",
                                 "未识别或尝试补偿入库失败: " + gallery.getTitle()
                         ));
-                        // 3. 🌟关键点：等待子工作流在 Temporal 服务端“启动”成功
+                        // 3. 等待子工作流在 Temporal 服务端“启动”成功
                         // 确保后台任务已被服务器接管，随后当前下载工作流就可以放心地立刻 return 结束
                         Promise<WorkflowExecution> executionPromise =
                                 Workflow.getWorkflowExecution(komgaWorkflow);
@@ -150,11 +151,11 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
 
                         return true; // 成功，退出 retry 块
 
-                    } else if ("error".equalsIgnoreCase(status)) {
+                    } else if (status == SynologyTaskStatus.ERROR) {
                         log.warn("⚠️ 拦截到群晖异常或伪装文件，抛出异常触发 Temporal 重试...");
                         // 抛出 ApplicationFailure 异常。
                         // Temporal 捕获到后，会自动等待 15 秒并重新执行这段 Lambda 代码
-                        throw ApplicationFailure.newFailure("Synology returned error or fake file", "SYNOLOGY_DOWNLOAD_ERROR");
+                        throw ApplicationFailure.newFailure("Synology returned error or fake file", ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
                     } else {
                         Workflow.sleep(Duration.ofSeconds(20));
                     }
@@ -169,12 +170,11 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                         ErrorType.IP_BANNED.getCode().equals(errorType) ||
                         ErrorType.COOKIE_EXPIRED.getCode().equals(errorType) ||
                         ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode().equals(errorType)) {
-
                     databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.BLOCKED.getValue());
                     notificationActivity.sendEmailAlert("❌ EHentai 抓取阻断", "致命错误: " + appFailure.getOriginalMessage());
                     throw e; // 抛出异常阻断父工作流
                 }
-                if ("SYNOLOGY_DOWNLOAD_ERROR".equals(errorType)) {
+                if (ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode().equals(errorType)) {
                     log.error("❌ 拦截到伪装小文件，已直接放弃重试，GID: {}", gallery.getGid());
                     databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOAD_FAILED.getValue());
                     return; // 直接 return 结束当前子工作流，释放并发槽位

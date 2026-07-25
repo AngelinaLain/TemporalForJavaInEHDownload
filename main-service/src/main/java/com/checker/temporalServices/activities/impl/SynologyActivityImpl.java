@@ -8,6 +8,7 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checker.common.Constants;
 import com.checker.common.ErrorType;
+import com.checker.common.SynologyTaskStatus;
 import com.checker.clients.SynologyApiClient;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
@@ -21,6 +22,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import static com.checker.common.SynologyTaskStatus.*;
 
 /**
  * 群晖 Activity 实现：负责与 Synology DownloadStation / FileStation 交互（任务推送、状态轮询、文件重命名）
@@ -71,7 +74,7 @@ public class SynologyActivityImpl implements SynologyActivity {
     }
 
     @Override
-    public String checkSynologyTaskStatus(Long gid, String downloadUrl) {
+    public SynologyTaskStatus checkSynologyTaskStatus(Long gid, String downloadUrl) {
         String sid = synologyApiClient.getSynologySid();
         Map<String, Object> form = new HashMap<>();
         form.put("api", "SYNO.DownloadStation.Task");
@@ -86,13 +89,13 @@ public class SynologyActivityImpl implements SynologyActivity {
         JSONObject jsonObj = JSONUtil.parseObj(response);
         if (!jsonObj.getBool("success", false)) {
             log.warn("❌ 群晖 list 接口调用失败, GID: {}", gid);
-            return "error";
+            return ERROR;
         }
 
         JSONArray tasks = jsonObj.getByPath("data.tasks", JSONArray.class);
         if (tasks == null || tasks.isEmpty()) {
             log.warn("⚠️ 任务列表为空, GID: {} (可能已被删除)", gid);
-            return "finished";
+            return FINISHED;
         }
 
         for (int i = 0; i < tasks.size(); i++) {
@@ -102,7 +105,8 @@ public class SynologyActivityImpl implements SynologyActivity {
                 String status = task.getStr("status", "").toLowerCase();
                 log.info("🔍 找到匹配任务, GID: {}, status: {}", gid, status);
 
-                if ("finished".equals(status) || "seeding".equals(status) || "extracted".equals(status)) {
+                SynologyTaskStatus taskStatus = SynologyTaskStatus.fromApiStatus(status);
+                if (taskStatus != null && taskStatus.isCompleted()) {
 
                     // 获取群晖 API 返回的任务文件总大小 (bytes)
                     long fileSize = task.getLong("size", 0L);
@@ -110,7 +114,7 @@ public class SynologyActivityImpl implements SynologyActivity {
                     if (fileSize > 0 && fileSize < 5120) {
                         log.error("❌ 拦截到伪装文件！下载状态虽为 finished，但体积极小 ({} bytes)，判定为错误网页。GID: {}", fileSize, gid);
                         synologyApiClient.deleteDownloadTask(task.getStr("id"));
-                        return "error"; // 强制返回 error，让 Temporal 触发告警并重试
+                        return ERROR; // 强制返回 error，让 Temporal 触发告警并重试
                     }
 
                     // ... 原有的正常记录文件名的逻辑 ...
@@ -122,13 +126,13 @@ public class SynologyActivityImpl implements SynologyActivity {
                         galleriesMapper.updateById(updateFile);
                         log.info("💾 已记录群晖真实完整文件名: {}", taskTitle);
                     }
-                    return "finished";
+                    return FINISHED;
 
-                } else if ("error".equals(status) || "broken".equals(status) || "file_not_found".equals(status)) {
+                } else if (taskStatus != null && taskStatus.isError()) {
                     log.warn("❌ 任务异常, GID: {}", gid);
-                    return "error";
+                    return ERROR;
                 } else {
-                    return "downloading";
+                    return DOWNLOADING;
                 }
             }
         }
@@ -137,9 +141,9 @@ public class SynologyActivityImpl implements SynologyActivity {
         // 兜底检查：去物理硬盘看一眼文件到底在不在（通过前缀匹配或后缀）
         Double actualSize = synologyApiClient.getFileSizeMbViaSSH(gid);
         if (actualSize != null && actualSize > 0.0) {
-            return "finished"; // 文件确实在，说明是下载完被清除了
+            return FINISHED; // 文件确实在，说明是下载完被清除了
         } else {
-            return "error";    // 文件不在，说明任务丢失或被异常删除，必须重试
+            return ERROR;    // 文件不在，说明任务丢失或被异常删除，必须重试
         }
     }
 

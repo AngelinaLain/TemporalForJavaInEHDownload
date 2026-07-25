@@ -1,5 +1,6 @@
 package com.checker.temporalServices.activities;
 
+import com.checker.common.SynologyTaskStatus;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
@@ -23,10 +24,10 @@ public interface SynologyActivity {
     /**
      * 通过 URI 匹配轮询群晖任务状态
      *
-     * @return "finished" / "downloading" / "error"
+     * @return {@link SynologyTaskStatus} 枚举值
      */
     @ActivityMethod
-    String checkSynologyTaskStatus(Long gid, String downloadUrl);
+    SynologyTaskStatus checkSynologyTaskStatus(Long gid, String downloadUrl);
 
     /**
      * 通过 FileStation API（失败则 SSH）对物理文件重命名为 [GID] 标题格式

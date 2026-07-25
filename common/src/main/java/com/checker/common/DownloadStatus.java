@@ -9,7 +9,8 @@ public enum DownloadStatus {
     DOWNLOADED("已下载"),
     DOWNLOAD_FAILED("下载失败"),
     IMPORTED("已入库"),
-    BLOCKED("阻断");
+    BLOCKED("阻断"),
+    IGNORED("已忽略");
 
     private final String value;
 

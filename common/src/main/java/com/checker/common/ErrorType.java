@@ -47,7 +47,11 @@ public enum ErrorType {
     /**
      * Cookie 已失效，需人工介入更新，不应自动重试
      */
-    COOKIE_EXPIRED;
+    COOKIE_EXPIRED,
+    /**
+     * 群晖下载错误（伪装小文件或任务异常）
+     */
+    SYNOLOGY_DOWNLOAD_ERROR;
 
     public String getCode() {
         return name();

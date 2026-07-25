@@ -84,6 +84,8 @@ class WorkflowSteps {
             .build();
 
     /**
+     * 暂时没有用到此函数的地方
+     * -------
      * 下载完成后的 Komga 入库前置三步骤：
      * <ol>
      *   <li>向 EHentai 请求标签数据并写入数据库</li>
@@ -91,6 +93,7 @@ class WorkflowSteps {
      *   <li>触发 Komga 库扫描</li>
      * </ol>
      */
+    @Deprecated(since = "0.1", forRemoval = false)
     static void postDownloadKomgaProcess(
             KomgaActivity komgaActivity,
             DatabaseActivity databaseActivity,
@@ -105,6 +108,8 @@ class WorkflowSteps {
     }
 
     /**
+     * 暂时没有用到此函数的地方
+     * -------
      * 构建 Komga 异步轮询入库任务。
      * 超时后通过 {@code notificationActivity} 发送邮件告警。
      *
@@ -115,6 +120,7 @@ class WorkflowSteps {
      * @param pollIntervalSeconds 轮询间隔秒数（来自 WorkflowSettings）
      * @return Promise&lt;Void&gt; 供调用方加入 {@code Promise.allOf()} 等待
      */
+    @Deprecated(since = "0.1", forRemoval = false)
     static Promise<Void> buildKomgaImportTask(
             KomgaActivity komgaActivity,
             NotificationActivity notificationActivity,

@@ -3,6 +3,7 @@ package com.checker.controllers;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.checker.common.DownloadStatus;
 import com.checker.common.Result;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
@@ -36,21 +37,10 @@ public class DashboardController {
     public Result<Map<String, Object>> getStats() {
         long total = galleriesService.count();
 
-        QueryWrapper<EhGalleriesEntity> downloadedWrapper = new QueryWrapper<>();
-        downloadedWrapper.eq("download_status", "已下载");
-        long downloaded = galleriesService.count(downloadedWrapper);
-
-        QueryWrapper<EhGalleriesEntity> importedWrapper = new QueryWrapper<>();
-        importedWrapper.eq("download_status", "已入库");
-        long imported = galleriesService.count(importedWrapper);
-
-        QueryWrapper<EhGalleriesEntity> failedWrapper = new QueryWrapper<>();
-        failedWrapper.eq("download_status", "下载失败");
-        long failed = galleriesService.count(failedWrapper);
-
-        QueryWrapper<EhGalleriesEntity> pendingWrapper = new QueryWrapper<>();
-        pendingWrapper.eq("download_status", "未下载");
-        long pending = galleriesService.count(pendingWrapper);
+        long downloaded = countByStatus(DownloadStatus.DOWNLOADED);
+        long imported = countByStatus(DownloadStatus.IMPORTED);
+        long failed = countByStatus(DownloadStatus.DOWNLOAD_FAILED);
+        long pending = countByStatus(DownloadStatus.PENDING);
 
         QueryWrapper<EhGalleriesEntity> sizeWrapper = new QueryWrapper<>();
         sizeWrapper.isNotNull("file_size_mb").select("COALESCE(SUM(file_size_mb), 0) as file_size_mb");
@@ -77,20 +67,26 @@ public class DashboardController {
     @GetMapping("/status-distribution")
     public Result<List<Map<String, Object>>> getStatusDistribution() {
         List<Map<String, Object>> result = new ArrayList<>();
-        String[] statuses = {"未下载", "下载中", "已下载", "下载失败", "已入库", "阻断", "已忽略"};
 
-        for (String status : statuses) {
-            QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-            wrapper.eq("download_status", status);
-            long count = galleriesService.count(wrapper);
+        for (DownloadStatus status : DownloadStatus.values()) {
+            long count = countByStatus(status);
             if (count > 0) {
                 Map<String, Object> item = new LinkedHashMap<>();
-                item.put("name", status);
+                item.put("name", status.getValue());
                 item.put("value", count);
                 result.add(item);
             }
         }
         return Result.success(result);
+    }
+
+    /**
+     * 按下载状态统计画廊数量
+     */
+    private long countByStatus(DownloadStatus status) {
+        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
+        wrapper.eq("download_status", status.getValue());
+        return galleriesService.count(wrapper);
     }
 
     /**
