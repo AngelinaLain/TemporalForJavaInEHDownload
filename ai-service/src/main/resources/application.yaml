@@ -1,17 +1,18 @@
 server:
   port: 8082
 spring:
+  config:
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
   application:
     name: eh-ai-service
   cloud:
     nacos:
       discovery:
-        server-addr: 10.10.10.175:8848 # 局域网 Nacos
+        server-addr: ${NACOS_SERVER_ADDR}
   ai:
     openai:
-      # 指向实际运行 LLM (如 LM Studio) 的机器 IP
-      base-url: http://10.10.10.50:1234
-      api-key: "not-needed"
+      base-url: ${AI_BASE_URL}
+      api-key: ${AI_API_KEY}
       chat:
         options:
-          model: "google/gemma-4-26b-a4b"
+          model: ${AI_MODEL}

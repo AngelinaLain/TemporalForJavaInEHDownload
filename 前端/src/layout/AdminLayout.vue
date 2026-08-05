@@ -65,7 +65,7 @@ import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation } fr
 const route = useRoute()
 const router = useRouter()
 const isCollapse = ref(false)
-const username = localStorage.getItem('username') || 'admin'
+const username = localStorage.getItem('username') || ''
 
 const handleCommand = (command) => {
   if (command === 'logout') {

@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * EHentai 自动化工作流 REST 控制器
@@ -134,7 +133,7 @@ public class EHAutomationController {
     @PostMapping("/sync-tags")
     public Result<String> syncTagsToKomga() {
         /* 异步执行 */
-        CompletableFuture.runAsync(() -> komgaSyncService.syncTagsToKomga());
+        komgaSyncService.startTagSync();
         return Result.success("同步任务已在后台启动，请查看控制台日志！");
     }
 

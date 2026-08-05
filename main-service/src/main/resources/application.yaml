@@ -1,18 +1,24 @@
 spring:
+  config:
+    import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
   application:
     name: main-service
   cloud:
     nacos:
       discovery:
-        server-addr: 10.10.10.175:8848 # 局域网 Nacos
+        server-addr: ${NACOS_SERVER_ADDR}
   datasource:
-    url: jdbc:mysql://10.10.10.161:3306/eh_automation?serverTimezone=UTC
-    username: root
-    password: ${DB_PASSWORD:root}
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME:eh_automation}?serverTimezone=UTC
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 1
   temporal:
     connection:
-      target: 10.10.10.161:7233
+      target: ${TEMPORAL_HOST}:${TEMPORAL_PORT:7233}
     namespace: default
     workers-auto-discovery:
       packages:
@@ -36,47 +42,42 @@ server:
 # 安全配置
 security:
   jwt:
-    secret: ${JWT_SECRET:ehAutomationSecretKeyForJwtToken2024MustBeLongEnoughForHS512_89012}
+    secret: ${JWT_SECRET}
     expiration: 86400000  # 24小时(毫秒)
   admin:
-    username: ${ADMIN_USERNAME:admin}
-    password: ${ADMIN_PASSWORD:admin123}
+    username: ${ADMIN_USERNAME}
+    password-hash: ${ADMIN_PASSWORD_HASH}
   cors:
-    allowed-origins:
-      - "http://localhost:5173"
-      - "http://127.0.0.1:5173"
-      - "http://localhost:8001"
-      - "http://127.0.0.1:8001"
-      - "http://10.10.10.40:8001"
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:8002,http://127.0.0.1:8002}
 
 eh-config:
   cookies:
-    member-id: ${EH_MEMBER_ID:4674255}
-    pass-hash: ${EH_PASS_HASH:0345da71457857378639a3a7f2eb045a}
-    sk: ${EH_SK:u2szd0pu6r7o3t3suf36iq1mr641}
-    star: ${EH_STAR:1-2516af5cd7}
+    member-id: ${EH_MEMBER_ID}
+    pass-hash: ${EH_PASS_HASH}
+    sk: ${EH_SK}
+    star: ${EH_STAR}
   # 代理信息
   proxy:
-    host: "10.10.10.32"
-    port: 7893
-    username: ${PROXY_USERNAME:Clash}
-    password: ${PROXY_PASSWORD:azWPzWfP}
-    type: "http"
+    host: ${PROXY_HOST}
+    port: ${PROXY_PORT:7893}
+    username: ${PROXY_USERNAME}
+    password: ${PROXY_PASSWORD}
+    type: ${PROXY_TYPE:http}
   synology:
-    url: "https://10.10.10.40:5001"
-    username: ${SYNOLOGY_USERNAME:5465541}
-    password: ${SYNOLOGY_PASSWORD:Gcz@15271348205}
-    destination: "n8n_bot/EHentai"
+    url: ${SYNOLOGY_URL}
+    username: ${SYNOLOGY_USERNAME}
+    password: ${SYNOLOGY_PASSWORD}
+    destination: ${SYNOLOGY_DESTINATION}
   notification:
-    admin-email: "15272888596@163.com"
-    tenant-id: ${GRAPH_TENANT_ID:a5f69b32-f12b-407f-b81e-a2b7057367dc}
-    client-id: ${GRAPH_CLIENT_ID:ab36780f-0903-4fa2-9dfa-8a699fc4a2c4}
-    client-secret: ${GRAPH_CLIENT_SECRET:g4W8Q~nzMeftYkOLJ3kiKPZkV1barzFIyMFyGc6a}
-    sender-email: ehbo@renl57.onmicrosoft.com
+    admin-email: ${NOTIFICATION_ADMIN_EMAIL}
+    tenant-id: ${GRAPH_TENANT_ID}
+    client-id: ${GRAPH_CLIENT_ID}
+    client-secret: ${GRAPH_CLIENT_SECRET}
+    sender-email: ${GRAPH_SENDER_EMAIL}
   komga:
-    url: http://10.10.10.40:3000
-    api-key: ${KOMGA_API_KEY:71c80c96520247c5bd7bb893b337eaee}
-    library-id: 0PWD8X2S9169Y
+    url: ${KOMGA_URL}
+    api-key: ${KOMGA_API_KEY}
+    library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
     # 最大子工作流个数

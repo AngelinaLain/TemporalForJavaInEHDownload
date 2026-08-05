@@ -8,11 +8,12 @@ import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.EhGalleriesService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -23,11 +24,15 @@ import java.util.stream.Collectors;
 public class EhGalleriesServiceImpl extends ServiceImpl<EhGalleriesMapper, EhGalleriesEntity> implements EhGalleriesService {
     @Autowired
     private SynologyApiClient synologyApiClient;
+
+    @Autowired
+    @Qualifier("backgroundTaskExecutor")
+    private TaskExecutor backgroundTaskExecutor;
     @Override
     public void batchUpdateFileSizes() {
         log.info("🚀 开始后台批量获取并补全画廊文件大小...");
 
-        CompletableFuture.runAsync(() -> {
+        backgroundTaskExecutor.execute(() -> {
             // 1. 查找所有 fileSizeMb 为空或为 0，并且存在文件名的记录
             QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
             wrapper.isNotNull("filename")

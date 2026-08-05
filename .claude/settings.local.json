@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c \"\\\\\"D:\\\\IntelliJ IDEA 2024.2.0.1\\\\plugins\\\\maven\\\\lib\\\\maven3\\\\bin\\\\mvn.cmd\\\\\" spring-boot:run -f \\\\\"c:\\\\Users\\\\Angelina\\\\Desktop 2\\\\IDEA-WorkArea\\\\TemporalForJavaInEHDow\\\\pom.xml\\\\\"\")",
+      "Bash(powershell -Command \"& 'D:\\\\IntelliJ IDEA 2024.2.0.1\\\\plugins\\\\maven\\\\lib\\\\maven3\\\\bin\\\\mvn.cmd' 'spring-boot:run' '-f' 'c:\\\\Users\\\\Angelina\\\\Desktop 2\\\\IDEA-WorkArea\\\\TemporalForJavaInEHDow\\\\pom.xml' 2>&1\")",
+      "Bash(powershell -Command \"Get-Content 'c:\\\\Users\\\\Angelina\\\\Desktop 2\\\\IDEA-WorkArea\\\\TemporalForJavaInEHDow\\\\src\\\\main\\\\resources\\\\application.yaml'\")",
+      "Bash(powershell -Command \"Get-Content 'C:\\\\Users\\\\Angelina\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Angelina-Desktop-2-IDEA-WorkArea-TemporalForJavaInEHDow\\\\2d8dfdc7-aa8d-4bc9-ab80-6bb6a2fd78b2\\\\tasks\\\\b0j3su8uj.output' | Select-String -Pattern 'WeakKey|secret|ERROR|Exception|0 bits' | Select-Object -Last 20\")"
+    ]
+  }
+}

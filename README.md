@@ -148,6 +148,8 @@ ai-service                     (独立，Web + Nacos + Spring AI，不依赖 com
 
 ### 1. 初始化数据库
 
+> `main-service` 启动时会通过 Flyway 自动建表并执行后续迁移。下面的建表 SQL 仅用于查看初始结构，请不要在由 Flyway 管理的数据库中手动执行；既有部署首次升级前请先备份数据库。
+
 ```sql
 CREATE DATABASE IF NOT EXISTS `eh_automation`
   CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -178,13 +180,19 @@ CREATE TABLE `eh_galleries` (
 
 ### 2. 配置
 
-各模块 `src/main/resources/application.yaml` 已内置局域网默认值，敏感项建议用环境变量覆盖：
+当前版本不包含真实凭据或局域网地址；所有部署配置均通过环境变量提供。首次部署时：
 
-- `main-service`：`DB_PASSWORD`、`JWT_SECRET`、`ADMIN_USERNAME/PASSWORD`、
-  `EH_MEMBER_ID/EH_PASS_HASH/EH_SK/EH_STAR`、`PROXY_*`、`SYNOLOGY_*`、
-  `GRAPH_*`、`KOMGA_API_KEY` 等
-- `scraper-worker`：`EH_*`、`PROXY_*`
-- `ai-service`：`spring.ai.openai.base-url` / `model`
+```bash
+cp .env.example .env
+# 编辑 .env，填入实际配置；该文件已经被 Git 忽略
+```
+
+`main-service` 和 `scraper-worker` 需要 `NACOS_SERVER_ADDR`、数据库、Temporal、EH、代理等
+变量；`ai-service` 还需要 `AI_BASE_URL`、`AI_API_KEY` 与 `AI_MODEL`。生产环境应通过
+部署平台的 Secret/环境变量注入，而不是复制 `.env`。JWT 密钥至少 32 个字符；管理员只配置
+`ADMIN_PASSWORD_HASH`（BCrypt 哈希），不要在配置中保留明文密码。缺少或不合规时主服务会拒绝启动。
+
+> 任何曾被提交到旧版本配置文件中的凭据均应立即轮换；从工作区删除它们并不会清除 Git 历史。
 
 `main-service` 的工作流运行时参数（`eh-config.workflow`）可在线调整，无需重新编译：
 `max-concurrency`、`komga-import-max-retries`、`komga-import-poll-interval-seconds`、
@@ -216,13 +224,13 @@ cd 前端 && npm install && npm run dev   # http://127.0.0.1:5173
 ### 5. Docker Compose（后端 + 前端）
 
 ```bash
+# 先按上一节创建并填写 .env
 docker compose up -d
 # backend  → :8001
 # frontend → :8002（Nginx 反代 /api → backend:8001）
 ```
 
-> 注：`docker-compose.yml` 目前仅编排 `main-service`（backend）与前端；
-> `scraper-worker`、`ai-service`、Nacos、Temporal、MySQL 需另行部署。
+> 注：`docker-compose.yml` 现编排主服务、爬虫 Worker、AI 服务和前端；Nacos、Temporal、MySQL 仍需独立部署。
 
 ### 6. 访问地址
 

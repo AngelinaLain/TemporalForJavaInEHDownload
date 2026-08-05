@@ -7,6 +7,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.*;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -15,8 +18,8 @@ import java.net.Proxy;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -36,6 +39,7 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
 
     private static final int INITIAL_CAPACITY = 66667;
     private final EhNetworkConfig netConfig;
+    private final TaskExecutor backgroundTaskExecutor;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /** namespace:tag → 中文翻译 */
@@ -48,6 +52,7 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
     private volatile Map<String, String> nsMap = Map.of();
 
     private final AtomicLong lastFetchTime = new AtomicLong(0);
+    private final AtomicBoolean refreshScheduled = new AtomicBoolean(false);
 
     private static final Map<String, String> NS_CHINESE = Map.ofEntries(
             Map.entry("reclass", "重新分类"),
@@ -65,20 +70,16 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
             Map.entry("temp", "临时")
     );
 
-    public EhTagTranslationServiceImpl(EhNetworkConfig netConfig) {
+    public EhTagTranslationServiceImpl(EhNetworkConfig netConfig,
+                                       @Qualifier("backgroundTaskExecutor") TaskExecutor backgroundTaskExecutor) {
         this.netConfig = netConfig;
+        this.backgroundTaskExecutor = backgroundTaskExecutor;
     }
 
     @PostConstruct
     public void init() {
         // 异步加载，不阻塞启动
-        CompletableFuture.runAsync(() -> {
-            try {
-                fetchAndBuild();
-            } catch (Exception e) {
-                log.warn("⚠️ 启动时加载 EhTag 翻译数据库失败，标签将保持英文显示: {}", e.getMessage());
-            }
-        });
+        scheduleRefresh("启动时加载 EhTag 翻译数据库失败，标签将保持英文显示");
     }
 
     @Override
@@ -142,13 +143,27 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
 
     private void ensureFresh() {
         if (System.currentTimeMillis() - lastFetchTime.get() > CACHE_TTL_MS) {
-            CompletableFuture.runAsync(() -> {
+            scheduleRefresh("后台刷新翻译数据库失败");
+        }
+    }
+
+    private void scheduleRefresh(String failureMessage) {
+        if (!refreshScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            backgroundTaskExecutor.execute(() -> {
                 try {
                     fetchAndBuild();
                 } catch (Exception e) {
-                    log.warn("⚠️ 后台刷新翻译数据库失败: {}", e.getMessage());
+                    log.warn("{}: {}", failureMessage, e.getMessage());
+                } finally {
+                    refreshScheduled.set(false);
                 }
             });
+        } catch (TaskRejectedException e) {
+            refreshScheduled.set(false);
+            log.warn("翻译缓存刷新任务被拒绝: {}", failureMessage);
         }
     }
 

@@ -3,7 +3,6 @@ package com.checker.controllers;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.checker.common.DownloadStatus;
 import com.checker.common.Result;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
@@ -35,89 +34,59 @@ public class DashboardController {
      */
     @GetMapping("/stats")
     public Result<Map<String, Object>> getStats() {
-        long total = galleriesService.count();
-
-        long downloaded = countByStatus(DownloadStatus.DOWNLOADED);
-        long imported = countByStatus(DownloadStatus.IMPORTED);
-        long failed = countByStatus(DownloadStatus.DOWNLOAD_FAILED);
-        long pending = countByStatus(DownloadStatus.PENDING);
-
-        QueryWrapper<EhGalleriesEntity> sizeWrapper = new QueryWrapper<>();
-        sizeWrapper.isNotNull("file_size_mb").select("COALESCE(SUM(file_size_mb), 0) as file_size_mb");
-        Map<String, Object> sizeMap = galleriesService.getMap(sizeWrapper);
-        double totalSizeMb = 0;
-        if (sizeMap != null && sizeMap.get("file_size_mb") != null) {
-            totalSizeMb = ((Number) sizeMap.get("file_size_mb")).doubleValue();
-        }
-
+        Map<String, Object> overview = galleriesMapper.getDashboardOverview();
         Map<String, Object> stats = new LinkedHashMap<>();
-        stats.put("total", total);
-        stats.put("downloaded", downloaded);
-        stats.put("imported", imported);
-        stats.put("failed", failed);
-        stats.put("pending", pending);
-        stats.put("totalSizeGb", Math.round(totalSizeMb / 1024 * 100.0) / 100.0);
-
+        stats.put("total", toLong(overview.get("total")));
+        stats.put("downloaded", toLong(overview.get("downloaded")));
+        stats.put("imported", toLong(overview.get("imported")));
+        stats.put("failed", toLong(overview.get("failed")));
+        stats.put("pending", toLong(overview.get("pending")));
+        stats.put("totalSizeGb", Math.round(toDouble(overview.get("total_size_mb")) / 1024 * 100.0) / 100.0);
         return Result.success(stats);
     }
-
     /**
      * 下载状态分布（饼图）
      */
     @GetMapping("/status-distribution")
     public Result<List<Map<String, Object>>> getStatusDistribution() {
         List<Map<String, Object>> result = new ArrayList<>();
-
-        for (DownloadStatus status : DownloadStatus.values()) {
-            long count = countByStatus(status);
-            if (count > 0) {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("name", status.getValue());
-                item.put("value", count);
-                result.add(item);
-            }
+        for (Map<String, Object> row : galleriesMapper.countByDownloadStatus()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("name", String.valueOf(row.get("status")));
+            item.put("value", toLong(row.get("cnt")));
+            result.add(item);
         }
         return Result.success(result);
     }
 
-    /**
-     * 按下载状态统计画廊数量
-     */
-    private long countByStatus(DownloadStatus status) {
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-        wrapper.eq("download_status", status.getValue());
-        return galleriesService.count(wrapper);
+    private long toLong(Object value) {
+        return value instanceof Number number ? number.longValue() : 0L;
     }
 
+    private double toDouble(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0.0;
+    }
     /**
      * 文件大小分布（柱状图）
      */
     @GetMapping("/file-size-distribution")
     public Result<Map<String, Object>> getFileSizeDistribution() {
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-        wrapper.isNotNull("file_size_mb").gt("file_size_mb", 0);
-        List<EhGalleriesEntity> galleries = galleriesService.list(wrapper);
-
-        // 按大小分桶: <50MB, 50-100, 100-200, 200-500, 500-1000, >1GB
+        Map<String, Object> buckets = galleriesMapper.getFileSizeBuckets();
         String[] labels = {"<50MB", "50-100MB", "100-200MB", "200-500MB", "500MB-1GB", ">1GB"};
-        long[] counts = new long[6];
-
-        for (EhGalleriesEntity g : galleries) {
-            double size = g.getFileSizeMb();
-            if (size < 50) counts[0]++;
-            else if (size < 100) counts[1]++;
-            else if (size < 200) counts[2]++;
-            else if (size < 500) counts[3]++;
-            else if (size < 1024) counts[4]++;
-            else counts[5]++;
-        }
+        long[] counts = {
+                toLong(buckets.get("lt_50")),
+                toLong(buckets.get("from_50_to_100")),
+                toLong(buckets.get("from_100_to_200")),
+                toLong(buckets.get("from_200_to_500")),
+                toLong(buckets.get("from_500_to_1024")),
+                toLong(buckets.get("ge_1024"))
+        };
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("labels", labels);
         result.put("data", counts);
         return Result.success(result);
     }
-
     /**
      * 抓取时间线（按日统计）
      */
@@ -187,7 +156,9 @@ public class DashboardController {
         }
         wrapper.orderByDesc("crawled_at");
 
-        IPage<EhGalleriesEntity> pageResult = galleriesService.page(new Page<>(page, size), wrapper);
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.min(Math.max(size, 1), 100);
+        IPage<EhGalleriesEntity> pageResult = galleriesService.page(new Page<>(safePage, safeSize), wrapper);
         return Result.success(pageResult);
     }
 

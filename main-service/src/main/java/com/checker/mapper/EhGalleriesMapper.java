@@ -15,6 +15,38 @@ import java.util.Map;
 public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
 
     /**
+     * 一次查询获取仪表盘概览，避免按状态逐条 COUNT。
+     */
+    @Select("SELECT COUNT(*) AS total, " +
+            "COALESCE(SUM(CASE WHEN download_status = 'DOWNLOADED' THEN 1 ELSE 0 END), 0) AS downloaded, " +
+            "COALESCE(SUM(CASE WHEN download_status = 'IMPORTED' THEN 1 ELSE 0 END), 0) AS imported, " +
+            "COALESCE(SUM(CASE WHEN download_status = 'DOWNLOAD_FAILED' THEN 1 ELSE 0 END), 0) AS failed, " +
+            "COALESCE(SUM(CASE WHEN download_status = 'PENDING' THEN 1 ELSE 0 END), 0) AS pending, " +
+            "COALESCE(SUM(file_size_mb), 0) AS total_size_mb " +
+            "FROM eh_galleries")
+    Map<String, Object> getDashboardOverview();
+
+    /**
+     * 数据库侧按下载状态分组，避免枚举状态时产生 N 次 COUNT 查询。
+     */
+    @Select("SELECT download_status AS status, COUNT(*) AS cnt " +
+            "FROM eh_galleries GROUP BY download_status")
+    List<Map<String, Object>> countByDownloadStatus();
+
+    /**
+     * 数据库侧计算文件大小分布，避免加载所有画廊实体到 JVM。
+     */
+    @Select("SELECT " +
+            "COALESCE(SUM(CASE WHEN file_size_mb > 0 AND file_size_mb < 50 THEN 1 ELSE 0 END), 0) AS lt_50, " +
+            "COALESCE(SUM(CASE WHEN file_size_mb >= 50 AND file_size_mb < 100 THEN 1 ELSE 0 END), 0) AS from_50_to_100, " +
+            "COALESCE(SUM(CASE WHEN file_size_mb >= 100 AND file_size_mb < 200 THEN 1 ELSE 0 END), 0) AS from_100_to_200, " +
+            "COALESCE(SUM(CASE WHEN file_size_mb >= 200 AND file_size_mb < 500 THEN 1 ELSE 0 END), 0) AS from_200_to_500, " +
+            "COALESCE(SUM(CASE WHEN file_size_mb >= 500 AND file_size_mb < 1024 THEN 1 ELSE 0 END), 0) AS from_500_to_1024, " +
+            "COALESCE(SUM(CASE WHEN file_size_mb >= 1024 THEN 1 ELSE 0 END), 0) AS ge_1024 " +
+            "FROM eh_galleries")
+    Map<String, Object> getFileSizeBuckets();
+
+    /**
      * 使用 JSON_TABLE 在数据库侧展开 tags 数组并按命名空间聚合计数，
      * 避免将全部画廊加载到内存后在 Java 侧遍历。
      */

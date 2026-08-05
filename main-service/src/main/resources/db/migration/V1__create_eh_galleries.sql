@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `eh_galleries` (
+  `gid` BIGINT NOT NULL,
+  `token` VARCHAR(255) NULL,
+  `title` VARCHAR(500) NULL,
+  `filename` VARCHAR(500) NULL,
+  `gallery_url` VARCHAR(500) NULL,
+  `search_query` VARCHAR(500) NULL,
+  `crawled_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `download_status` VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+  `_trace_pages_crawled` INT NULL,
+  `_trace_stop_reason` VARCHAR(200) NULL,
+  `_trace_last_next_cursor` VARCHAR(500) NULL,
+  `_trace_request_url_chain` TEXT NULL,
+  `_trace_first_page_title` VARCHAR(500) NULL,
+  `_trace_page_trace` JSON NULL,
+  `tags` JSON NULL,
+  `komga_book_id` VARCHAR(255) NULL,
+  `file_size_mb` DOUBLE NULL,
+  PRIMARY KEY (`gid`),
+  KEY `idx_eh_galleries_download_status` (`download_status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

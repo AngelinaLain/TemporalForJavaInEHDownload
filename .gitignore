@@ -42,3 +42,8 @@ build/
 /前端/dist/
 src/main/resources/application.yaml
 .idea/
+
+# Local secrets and per-developer configuration
+/.env
+/.env.*
+!/.env.example

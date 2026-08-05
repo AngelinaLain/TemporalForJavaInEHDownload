@@ -2,13 +2,13 @@ spring:
   application:
     name: temporal-eh-download
   datasource:
-    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:eh_automation}?serverTimezone=UTC
-    username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:}
+    url: jdbc:mysql://${DB_HOST}:${DB_PORT:3306}/${DB_NAME:eh_automation}?serverTimezone=UTC
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   temporal:
     connection:
-      target: ${TEMPORAL_HOST:localhost}:${TEMPORAL_PORT:7233}
+      target: ${TEMPORAL_HOST}:${TEMPORAL_PORT:7233}
     namespace: default
     workers-auto-discovery:
       packages:
@@ -32,41 +32,41 @@ server:
 # 安全配置
 security:
   jwt:
-    secret: ${JWT_SECRET:}
+    secret: ${JWT_SECRET}
     expiration: 86400000  # 24小时(毫秒)
   admin:
-    username: ${ADMIN_USERNAME:}
-    password: ${ADMIN_PASSWORD:}
+    username: ${ADMIN_USERNAME}
+    password-hash: ${ADMIN_PASSWORD_HASH}
 
 eh-config:
   # Cookie 信息
   cookies:
-    member-id: ${EH_MEMBER_ID:}
-    pass-hash: ${EH_PASS_HASH:}
-    sk: ${EH_SK:}
-    star: ${EH_STAR:}
+    member-id: ${EH_MEMBER_ID}
+    pass-hash: ${EH_PASS_HASH}
+    sk: ${EH_SK}
+    star: ${EH_STAR}
   # 代理信息
   proxy:
-    host: ${PROXY_HOST:}
+    host: ${PROXY_HOST}
     port: ${PROXY_PORT:}
-    username: ${PROXY_USERNAME:}
-    password: ${PROXY_PASSWORD:}
+    username: ${PROXY_USERNAME}
+    password: ${PROXY_PASSWORD}
     type: "http"
   synology:
-    url: ${SYNOLOGY_URL:}
-    username: ${SYNOLOGY_USERNAME:}
-    password: ${SYNOLOGY_PASSWORD:}
-    destination: ${SYNOLOGY_DESTINATION:}
+    url: ${SYNOLOGY_URL}
+    username: ${SYNOLOGY_USERNAME}
+    password: ${SYNOLOGY_PASSWORD}
+    destination: ${SYNOLOGY_DESTINATION}
   notification:
-    admin-email: ${NOTIFICATION_ADMIN_EMAIL:}
-    tenant-id: ${GRAPH_TENANT_ID:}
-    client-id: ${GRAPH_CLIENT_ID:}
-    client-secret: ${GRAPH_CLIENT_SECRET:}
-    sender-email: ${GRAPH_SENDER_EMAIL:}
+    admin-email: ${NOTIFICATION_ADMIN_EMAIL}
+    tenant-id: ${GRAPH_TENANT_ID}
+    client-id: ${GRAPH_CLIENT_ID}
+    client-secret: ${GRAPH_CLIENT_SECRET}
+    sender-email: ${GRAPH_SENDER_EMAIL}
   komga:
-    url: ${KOMGA_URL:}
-    api-key: ${KOMGA_API_KEY:}
-    library-id: ${KOMGA_LIBRARY_ID:}
+    url: ${KOMGA_URL}
+    api-key: ${KOMGA_API_KEY}
+    library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
     # 最大子工作流个数

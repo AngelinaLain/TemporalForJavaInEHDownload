@@ -3,38 +3,48 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        MODULE: main-service
+        SERVICE_PORT: 8001
     container_name: eh-backend
     restart: unless-stopped
     ports:
       - "8001:8001"
-    environment:
-      # 数据库
-      SPRING_DATASOURCE_URL: jdbc:mysql://${DB_HOST:-10.10.10.161}:3306/eh_automation?serverTimezone=UTC
-      SPRING_DATASOURCE_USERNAME: ${DB_USERNAME:-root}
-      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-root}
-      # Temporal
-      SPRING_TEMPORAL_CONNECTION_TARGET: ${TEMPORAL_HOST:-10.10.10.161}:7233
-      # 安全
-      JWT_SECRET: ${JWT_SECRET:-ehAutomationSecretKeyForJwtToken2024MustBeLongEnoughForHS256}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
-      # EHentai Cookies
-      EH_MEMBER_ID: ${EH_MEMBER_ID:-4674255}
-      EH_PASS_HASH: ${EH_PASS_HASH:-0345da71457857378639a3a7f2eb045a}
-      EH_SK: ${EH_SK:-u2szd0pu6r7o3t3suf36iq1mr641}
-      EH_STAR: ${EH_STAR:-1-2516af5cd7}
-      # 代理
-      PROXY_USERNAME: ${PROXY_USERNAME:-Clash}
-      PROXY_PASSWORD: ${PROXY_PASSWORD:-azWPzWfP}
-      # 群晖
-      SYNOLOGY_USERNAME: ${SYNOLOGY_USERNAME:-5465541}
-      SYNOLOGY_PASSWORD: ${SYNOLOGY_PASSWORD:-}
-      # Microsoft Graph
-      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
-      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
-      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:-}
-      # Komga
-      KOMGA_API_KEY: ${KOMGA_API_KEY:-}
+    # .env is Git-ignored; host environment variables override values in it.
+    env_file:
+      - .env
+    networks:
+      - eh-net
+
+  scraper-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODULE: scraper-worker
+        SERVICE_PORT: 8081
+    container_name: eh-scraper-worker
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    networks:
+      - eh-net
+
+  ai-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MODULE: ai-service
+        SERVICE_PORT: 8082
+    container_name: eh-ai-service
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    env_file:
+      - .env
     networks:
       - eh-net
 
