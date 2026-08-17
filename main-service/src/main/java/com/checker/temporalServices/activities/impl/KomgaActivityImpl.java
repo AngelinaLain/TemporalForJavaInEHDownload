@@ -121,7 +121,8 @@ public class KomgaActivityImpl implements KomgaActivity {
         Map<String, Object> metadata = komgaApiClient.buildBookMetadata(gallery);
 
         try {
-            komgaApiClient.patchBookMetadata(bookId, metadata);
+            // 幂等操作：PATCH 前先 GET 比对，元数据一致则跳过，Temporal 重试不会产生重复标签
+            komgaApiClient.patchBookMetadataIfChanged(bookId, metadata);
         } catch (Exception e) {
             log.error("❌ Komga PATCH 异常, GID: {}, BookID: {}", gid, bookId, e);
             throw ApplicationFailure.newFailure(

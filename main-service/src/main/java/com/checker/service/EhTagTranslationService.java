@@ -1,5 +1,6 @@
 package com.checker.service;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -14,6 +15,16 @@ public interface EhTagTranslationService {
      * @return 中文翻译，找不到时返回原始标签
      */
     String translate(String tag);
+
+    /**
+     * 批量翻译标签：
+     * 先走本地词典与 Redis 共享缓存，未命中的部分合并为单个 AI Prompt 批量翻译
+     * （AI 熔断/失败时静默降级，只返回本地命中结果）。
+     *
+     * @param tags 待翻译标签列表
+     * @return 原文 → 译文 映射
+     */
+    Map<String, String> translateBatch(List<String> tags);
 
     /**
      * 获取完整的翻译映射表（namespace:tag → 中文名）

@@ -8,6 +8,7 @@
 ## 核心功能
 
 - EHentai / ExHentai 画廊搜索与数据抓取（多维度过滤，独立爬虫 Worker）
+- 作品级汉化去重：以 EH 原始标题和核心标签生成指纹，保留记录但只下载评分/页数更优的首选版本
 - Temporal 异步工作流：子工作流隔离 + 滑动窗口并发 + 惰性直链提取 + 补偿队列
 - MySQL 持久化画廊状态与元数据（MyBatis-Plus）
 - Synology Download Station 下载任务推送与文件重命名
@@ -118,6 +119,7 @@ ai-service                     (独立，Web + Nacos + Spring AI，不依赖 com
 - 滑动窗口并发（`WorkflowSettings.maxConcurrency`，运行时可调）
 - 惰性直链提取，防止排队过久链接过期
 - 批量 DB 查询/保存，替代逐条 Activity 调用
+- 下载前批量查询 EH gdata；同作品其他汉化版本标记为“已忽略”，可在画廊列表切换查看
 - 分级重试：DB 快速重试 3 次；爬虫指数退避（30s→…→30min，最多 5 次）+ 30s 心跳；
   Cookie 失效 / IP 封禁 / 配额超限等致命错误标记为不可重试，交由人工介入
 - Komga 入库异步轮询（默认 20 次 × 15 秒），超时发邮件告警

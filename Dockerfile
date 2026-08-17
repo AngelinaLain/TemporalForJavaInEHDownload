@@ -21,3 +21,13 @@ RUN mvn -B -pl "$MODULE" -am package -DskipTests
 # ── 阶段 2：仅复制对应服务的可执行 JAR ──
 FROM eclipse-temurin:17-jre
 ARG MODULE=main-service
+ARG SERVICE_PORT=8080
+
+WORKDIR /app
+ENV SERVICE_PORT=${SERVICE_PORT}
+
+# 只复制目标模块打包出的可执行 JAR（-am 产物同目录下唯一 jar 即本服务）
+COPY --from=builder /build/${MODULE}/target/*.jar /app/app.jar
+
+EXPOSE ${SERVICE_PORT}
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

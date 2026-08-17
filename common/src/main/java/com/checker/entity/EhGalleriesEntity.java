@@ -33,6 +33,31 @@ public class EhGalleriesEntity implements Serializable {
     private String title;
 
     /**
+     * EH gdata 返回的原始标题（通常为日文），用于跨汉化版本归组。
+     */
+    private String originalTitle;
+
+    /** EH gdata 返回的页数。 */
+    private Integer pageCount;
+
+    /** EH gdata 返回的社区评分。 */
+    private Double rating;
+
+    /**
+     * 基于原始标题与核心标签计算的 SHA-256 作品指纹。
+     * 为空表示元数据不足，不能安全地自动去重。
+     */
+    private String dedupeKey;
+
+    /**
+     * 同一作品中被选为首选版本的 GID；为空代表该记录是首选版本。
+     */
+    private Long duplicateOfGid;
+
+    /** 自动归组的置信度（0-100）。 */
+    private Integer dedupeConfidence;
+
+    /**
      * 清理后的安全文件名
      */
     private String filename;
@@ -111,4 +136,11 @@ public class EhGalleriesEntity implements Serializable {
      * AI 生成的内容概述（中文，约 150 字）
      */
     private String summary;
+
+    /**
+     * 记录最后更新时间，供 Komga 增量同步（时间戳比对）使用。
+     * 由 MetaObjectHandler 自动填充，数据库侧亦有 ON UPDATE CURRENT_TIMESTAMP 兜底。
+     */
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private Date updatedAt;
 }

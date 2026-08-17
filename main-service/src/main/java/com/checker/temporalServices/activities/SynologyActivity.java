@@ -1,6 +1,7 @@
 package com.checker.temporalServices.activities;
 
 import com.checker.common.SynologyTaskStatus;
+import com.checker.dto.SynologyDownloadResult;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
@@ -28,6 +29,22 @@ public interface SynologyActivity {
      */
     @ActivityMethod
     SynologyTaskStatus checkSynologyTaskStatus(Long gid, String downloadUrl);
+
+    /**
+     * 长轮询等待下载完成：把原工作流里的 Workflow.sleep + 状态轮询下沉到 Activity 内部，
+     * 通过心跳向 Temporal UI 实时上报进度。
+     * <p>
+     * 超时与重试策略由工作流侧的 ActivityOptions 指定（WorkflowSteps.SYNO_LONG_OPTIONS）：
+     * StartToCloseTimeout 48 小时 + HeartbeatTimeout 5 分钟，
+     * 认证/配额/封禁/伪装文件类致命错误直接标记不可重试。
+     *
+     * @param gid                  画廊 ID
+     * @param downloadUrl          下载直链（用于任务匹配）
+     * @param estimatedWaitSeconds 按预估大小计算的首次等待秒数
+     * @return 最终任务状态与物理文件实际大小
+     */
+    @ActivityMethod
+    SynologyDownloadResult waitForDownloadComplete(Long gid, String downloadUrl, long estimatedWaitSeconds);
 
     /**
      * 通过 FileStation API（失败则 SSH）对物理文件重命名为 [GID] 标题格式

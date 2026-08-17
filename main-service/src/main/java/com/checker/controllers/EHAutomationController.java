@@ -14,6 +14,7 @@ import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -24,9 +25,12 @@ import java.util.UUID;
 
 /**
  * EHentai 自动化工作流 REST 控制器
+ * <p>
+ * 全部端点为敏感操作，要求管理员角色（@PreAuthorize）。
  */
 @RestController
 @RequestMapping("/api/temporal/eh")
+@PreAuthorize("hasRole('ADMIN')")
 public class EHAutomationController {
 
     @Autowired

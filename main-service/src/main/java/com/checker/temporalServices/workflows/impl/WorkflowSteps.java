@@ -84,6 +84,27 @@ class WorkflowSteps {
             .build();
 
     /**
+     * 群晖长轮询 Activity 专用配置：把下载等待与状态轮询整体下沉到 Activity 内部，
+     * 48 小时 StartToClose + 5 分钟心跳，避免 Workflow 层 sleep 轮询占用事件历史。
+     */
+    static final ActivityOptions SYNO_LONG_OPTIONS = ActivityOptions.newBuilder()
+            .setTaskQueue(Constants.TASK_QUEUE)
+            .setStartToCloseTimeout(Duration.ofHours(48))
+            .setHeartbeatTimeout(Duration.ofMinutes(5))
+            .setRetryOptions(RetryOptions.newBuilder()
+                    .setInitialInterval(Duration.ofSeconds(15))
+                    .setMaximumAttempts(3)
+                    .setDoNotRetry(
+                            ErrorType.QUOTA_EXCEEDED.getCode(),
+                            ErrorType.IP_BANNED.getCode(),
+                            ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode(),
+                            ErrorType.SYNOLOGY_AUTH_FAILED.getCode(),
+                            ErrorType.COOKIE_EXPIRED.getCode(),
+                            ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode()
+                    ).build())
+            .build();
+
+    /**
      * 暂时没有用到此函数的地方
      * -------
      * 下载完成后的 Komga 入库前置三步骤：

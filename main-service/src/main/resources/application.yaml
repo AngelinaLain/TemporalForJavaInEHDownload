@@ -12,6 +12,12 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DB:0}
+      password: ${REDIS_PASSWORD:}
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -23,6 +29,10 @@ spring:
     workers-auto-discovery:
       packages:
         - com.checker
+  threads:
+    virtual:
+      # 仅 Java 21+ 可开启（Spring Boot 3.2 特性），Java 17 下由 VirtualThreadConfig 自动回退
+      enabled: ${VIRTUAL_THREADS_ENABLED:false}
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   type-aliases-package: com.checker.entity
@@ -90,3 +100,58 @@ eh-config:
     download-poll-interval-minutes: 5
     # 每次下载后的等待时间 [秒]
     download-cooldown-seconds: 10
+  # EHentai API 全局限流（Resilience4j 令牌桶，防止被封禁）
+  rate-limit:
+    enabled: true
+    limit-for-period: 30        # 每个刷新周期允许 30 个请求
+    limit-refresh-period-seconds: 60
+    timeout-duration-seconds: 30
+    proxy-cooldown-seconds: 300 # 403/502 后当前代理冷却 5 分钟
+  # 多代理轮换池（可选，配置后优先于单一 proxy 使用）
+  # proxy-pool:
+  #   - host: ${PROXY_HOST}
+  #     port: ${PROXY_PORT:7893}
+  #     username: ${PROXY_USERNAME}
+  #     password: ${PROXY_PASSWORD}
+  # 多账号 Cookie 轮转池（可选，配置后优先于单一 cookies 使用）
+  # cookie-pool:
+  #   - member-id: ${EH_MEMBER_ID}
+  #     pass-hash: ${EH_PASS_HASH}
+  #     sk: ${EH_SK}
+  #     star: ${EH_STAR}
+
+# Jasypt 配置加密：配置 ${ENC(密文)} 占位符时使用；留空则明文直读
+jasypt:
+  encryptor:
+    password: ${JASYPT_PASSWORD:}
+
+# Resilience4j 断路器：AI 端点连续失败自动熔断 → 本地词典降级
+resilience4j:
+  circuitbreaker:
+    instances:
+      aiSummary:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 2
+      aiTagTranslation:
+        sliding-window-size: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 120s
+        permitted-number-of-calls-in-half-open-state: 2
+
+# 可观测性：Actuator + Prometheus + Zipkin 链路追踪
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}

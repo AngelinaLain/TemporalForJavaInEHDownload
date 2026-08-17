@@ -61,6 +61,90 @@ services:
     networks:
       - eh-net
 
+  # ── Redis：JWT 黑名单 / AI 翻译缓存跨实例共享 ──
+  redis:
+    image: redis:7-alpine
+    container_name: eh-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - eh-net
+
+  # ── 可观测性（可选：docker compose --profile observability up -d 启用） ──
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: eh-prometheus
+    profiles: ["observability"]
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - eh-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: eh-grafana
+    profiles: ["observability"]
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - eh-net
+
+  zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: eh-zipkin
+    profiles: ["observability"]
+    restart: unless-stopped
+    ports:
+      - "9411:9411"
+    networks:
+      - eh-net
+
+  loki:
+    image: grafana/loki:latest
+    container_name: eh-loki
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "3100:3100"
+    networks:
+      - eh-net
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: eh-promtail
+    profiles: ["observability"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./deploy/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    networks:
+      - eh-net
+
 networks:
   eh-net:
     driver: bridge
+
+volumes:
+  redis-data:
+  grafana-data:
+

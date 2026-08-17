@@ -29,3 +29,34 @@ eh-config:
     username: ${PROXY_USERNAME}
     password: ${PROXY_PASSWORD}
     type: ${PROXY_TYPE:http}
+  # EHentai API 全局限流（Resilience4j 令牌桶，防止被封禁）
+  rate-limit:
+    enabled: true
+    limit-for-period: 30
+    limit-refresh-period-seconds: 60
+    timeout-duration-seconds: 30
+    proxy-cooldown-seconds: 300
+  # 多代理轮换池（可选，配置后优先于单一 proxy 使用）
+  # proxy-pool:
+  #   - host: ${PROXY_HOST}
+  #     port: ${PROXY_PORT:7893}
+  #     username: ${PROXY_USERNAME}
+  #     password: ${PROXY_PASSWORD}
+  # 多账号 Cookie 轮转池（可选，配置后优先于单一 cookies 使用）
+  # cookie-pool:
+  #   - member-id: ${EH_MEMBER_ID}
+  #     pass-hash: ${EH_PASS_HASH}
+  #     sk: ${EH_SK}
+  #     star: ${EH_STAR}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:1.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}

@@ -54,6 +54,7 @@ import * as echarts from 'echarts'
 import { Files, FolderChecked, WarningFilled, Clock, CircleCheck, DataLine } from '@element-plus/icons-vue'
 import api from '../api'
 import { useTagStore } from '../stores/tagStore'
+import { getStatusMeta } from '../constants/status'
 
 const tagStore = useTagStore()
 tagStore.loadTranslations()
@@ -80,10 +81,6 @@ const statCards = computed(() => [
   { label: '总大小(GB)', value: stats.value.totalSizeGb ?? '-', icon: markRaw(DataLine), color: '#8B5CF6' }
 ])
 
-const statusColors = {
-  '未下载': '#909399', '下载中': '#409EFF', '已下载': '#67C23A',
-  '下载失败': '#F56C6C', '已入库': '#E6A23C', '阻断': '#F56C6C', '已忽略': '#C0C4CC'
-}
 
 const loadData = async () => {
   try {
@@ -109,7 +106,8 @@ const loadData = async () => {
         label: { show: true, formatter: '{b}\n{c}' },
         data: statusRes.data.map(item => ({
           ...item,
-          itemStyle: { color: statusColors[item.name] || '#409EFF' }
+          name: getStatusMeta(item.name).label,
+          itemStyle: { color: getStatusMeta(item.name).color }
         }))
       }]
     }, true)

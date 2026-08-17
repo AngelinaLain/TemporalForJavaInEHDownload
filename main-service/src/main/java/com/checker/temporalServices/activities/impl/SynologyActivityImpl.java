@@ -10,10 +10,13 @@ import com.checker.common.Constants;
 import com.checker.common.ErrorType;
 import com.checker.common.SynologyTaskStatus;
 import com.checker.clients.SynologyApiClient;
+import com.checker.dto.SynologyDownloadResult;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.config.EhNetworkConfig;
 import com.checker.temporalServices.activities.SynologyActivity;
+import io.temporal.activity.Activity;
+import io.temporal.activity.ActivityExecutionContext;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -144,6 +147,52 @@ public class SynologyActivityImpl implements SynologyActivity {
             return FINISHED; // 文件确实在，说明是下载完被清除了
         } else {
             return ERROR;    // 文件不在，说明任务丢失或被异常删除，必须重试
+        }
+    }
+
+
+    @Override
+    public SynologyDownloadResult waitForDownloadComplete(Long gid, String downloadUrl, long estimatedWaitSeconds) {
+        ActivityExecutionContext context = Activity.getExecutionContext();
+        context.heartbeat("任务已推送，等待下载完成");
+
+        // 1. 按预估大小先等一段下载时间（30 秒切片 + 心跳，Temporal UI 可见进度）
+        long waitedSeconds = 0;
+        long waitTarget = Math.max(estimatedWaitSeconds, 10);
+        while (waitedSeconds < waitTarget) {
+            try {
+                Thread.sleep(30_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw ApplicationFailure.newFailure("等待下载完成时线程被中断", ErrorType.SYNOLOGY_API_ERROR.getCode());
+            }
+            waitedSeconds += 30;
+            context.heartbeat("预估等待中: " + waitedSeconds + "/" + waitTarget + " 秒");
+        }
+
+        // 2. 轮询状态直到 FINISHED 或 ERROR（每次心跳上报，供 Temporal UI 实时展示）
+        int pollCount = 0;
+        while (true) {
+            pollCount++;
+            SynologyTaskStatus status = checkSynologyTaskStatus(gid, downloadUrl);
+            context.heartbeat("轮询第 " + pollCount + " 次, 当前状态: " + status);
+
+            if (status == SynologyTaskStatus.FINISHED) {
+                Double actualSizeMb = synologyApiClient.getFileSizeMbViaSSH(gid);
+                log.info("✅ 下载完成, GID: {}, 物理文件大小: {} MB", gid, actualSizeMb);
+                return new SynologyDownloadResult(SynologyTaskStatus.FINISHED, actualSizeMb, null);
+            }
+            if (status == SynologyTaskStatus.ERROR) {
+                log.warn("⚠️ 拦截到群晖异常或伪装文件，抛出异常触发 Temporal 重试, GID: {}", gid);
+                throw ApplicationFailure.newFailure("Synology returned error or fake file",
+                        ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
+            }
+            try {
+                Thread.sleep(20_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw ApplicationFailure.newFailure("轮询等待时线程被中断", ErrorType.SYNOLOGY_API_ERROR.getCode());
+            }
         }
     }
 

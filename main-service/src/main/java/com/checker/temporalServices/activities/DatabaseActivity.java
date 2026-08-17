@@ -26,6 +26,16 @@ public interface DatabaseActivity {
     void saveGalleriesBatch(List<EhGalleriesEntity> galleries);
 
     /**
+     * 为已有画廊回填 gdata 元数据和作品指纹，不修改其下载状态。
+     */
+    void updateGalleryDeduplicationMetadata(List<EhGalleriesEntity> galleries);
+
+    /**
+     * 查询指定作品指纹中已存在的首选版本（不含被标记为重复的版本）。
+     */
+    List<EhGalleriesEntity> findPreferredGalleriesByDedupeKeys(List<String> dedupeKeys);
+
+    /**
      * 更新指定画廊的下载状态
      */
     @ActivityMethod

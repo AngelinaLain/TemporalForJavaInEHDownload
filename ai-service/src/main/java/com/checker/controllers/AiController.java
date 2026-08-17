@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.ChatClient;
@@ -14,6 +15,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.client.RestClientException;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -24,6 +28,8 @@ public class AiController {
 
     @Autowired
     private ChatClient chatClient;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostMapping("/generate-summary")
     public ResponseEntity<String> generateSummary(@RequestBody Map<String, Object> request) {
@@ -45,5 +51,71 @@ public class AiController {
             log.error("AI 摘要生成发生未知内部错误", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("内部服务错误");
         }
+    }
+
+    /**
+     * 批量标签翻译：将多个 Tag 合并为单个 Prompt 批量请求，节约 Token 并降低延迟。
+     * 请求体: {"tags": ["artist:aaa", "language:chinese", ...]}
+     * 响应:   {"artist:aaa": "艺术家:某某", ...}
+     */
+    @PostMapping("/batch-translate-tags")
+    public ResponseEntity<Map<String, String>> batchTranslateTags(@RequestBody Map<String, Object> request) {
+        Object tagsObj = request.get("tags");
+        List<String> tags = new ArrayList<>();
+        if (tagsObj instanceof List<?> list) {
+            for (Object item : list) {
+                if (item != null) tags.add(String.valueOf(item));
+            }
+        }
+        if (tags.isEmpty()) {
+            return ResponseEntity.ok(Map.of());
+        }
+
+        String joined = String.join("\n", tags);
+        String prompt = "你是 EHentai 标签翻译助手。请将以下每一行标签翻译为简体中文，"
+                + "保持「命名空间:标签名」的格式（命名空间与标签名均翻译为中文），"
+                + "每行输出对应输入一行，不要输出任何解释或编号：\n" + joined;
+
+        try {
+            String output = chatClient.call(prompt);
+            Map<String, String> result = parseLinesToMap(tags, output);
+            return ResponseEntity.ok(result);
+        } catch (RestClientException | org.springframework.web.reactive.function.client.WebClientRequestException |
+                 TransientAiException e) {
+            log.warn("批量标签翻译调用失败: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of());
+        } catch (Exception e) {
+            log.error("批量标签翻译发生未知内部错误", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of());
+        }
+    }
+
+    /**
+     * 将模型输出按行对应回输入标签；行数不匹配时尝试按 JSON 解析，最终兜底返回空映射。
+     */
+    private Map<String, String> parseLinesToMap(List<String> tags, String output) {
+        Map<String, String> result = new LinkedHashMap<>();
+        if (output == null || output.isBlank()) return result;
+
+        List<String> lines = output.lines()
+                .map(String::trim)
+                .filter(line -> !line.isEmpty())
+                .toList();
+        if (lines.size() == tags.size()) {
+            for (int i = 0; i < tags.size(); i++) {
+                result.put(tags.get(i), lines.get(i));
+            }
+            return result;
+        }
+
+        // 模型可能返回 JSON，尝试兜底解析
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, String> parsed = objectMapper.readValue(output, Map.class);
+            result.putAll(parsed);
+        } catch (Exception e) {
+            log.warn("批量翻译输出解析失败，行数 {} != {}，返回空映射", lines.size(), tags.size());
+        }
+        return result;
     }
 }
