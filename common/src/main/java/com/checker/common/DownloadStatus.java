@@ -10,6 +10,7 @@ public enum DownloadStatus {
     PARTIAL("不完整"),
     DOWNLOAD_FAILED("下载失败"),
     IMPORTED("已入库"),
+    REVIEW_REQUIRED("待去重审核"),
     BLOCKED("阻断"),
     IGNORED("已忽略");
 

@@ -24,6 +24,12 @@ const routes = [
         meta: { title: '画廊列表' }
       },
       {
+        path: 'dedupe-reviews',
+        name: 'DedupeReviews',
+        component: () => import('../views/DedupeReviews.vue'),
+        meta: { title: '去重审核' }
+      },
+      {
         path: 'operations',
         name: 'Operations',
         component: () => import('../views/Operations.vue'),

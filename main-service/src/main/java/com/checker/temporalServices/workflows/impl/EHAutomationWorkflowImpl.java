@@ -67,6 +67,10 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
+        int dedupeV2Version = Workflow.getVersion(
+                "candidate-score-deduplication", Workflow.DEFAULT_VERSION, 1);
+        int dedupeBackfillVersion = Workflow.getVersion(
+                "gallery-dedupe-history-backfill", Workflow.DEFAULT_VERSION, 1);
 
         // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
@@ -75,6 +79,11 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         List<EhGalleriesEntity> galleries = deduplicateByGid(scraperActivity.scrapeGalleries(searchOptions));
         if (galleries == null || galleries.isEmpty()) {
             return;
+        }
+
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                && dedupeBackfillVersion != Workflow.DEFAULT_VERSION) {
+            databaseActivity.backfillGalleryDeduplicationMetadata();
         }
 
         // 批量查询已有记录，并先给同 GID 的历史记录回填本次抓到的作品指纹。
@@ -87,15 +96,6 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 .filter(gallery -> existingMap.containsKey(gallery.getGid()))
                 .toList();
         databaseActivity.updateGalleryDeduplicationMetadata(knownGalleries);
-
-        List<String> dedupeKeys = galleries.stream()
-                .filter(GalleryDeduplication::isIdentifiable)
-                .map(EhGalleriesEntity::getDedupeKey)
-                .toList();
-        Map<String, List<EhGalleriesEntity>> persistedPreferredByKey = databaseActivity
-                .findPreferredGalleriesByDedupeKeys(dedupeKeys)
-                .stream()
-                .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
 
         /* 还没下载、需要参与本轮作品级去重的记录 */
         List<EhGalleriesEntity> candidates = new ArrayList<>();
@@ -121,40 +121,51 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         }
 
         List<EhGalleriesEntity> toDownload = new ArrayList<>();
-        Map<String, List<EhGalleriesEntity>> candidatesByKey = candidates.stream()
+        List<String> candidateKeys = candidates.stream()
                 .filter(GalleryDeduplication::isIdentifiable)
-                .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
+                .map(EhGalleriesEntity::getCandidateKey)
+                .distinct()
+                .toList();
 
-        // 元数据不足的画廊不会被自动归组，仍按原流程下载。
-        candidates.stream()
-                .filter(gallery -> !GalleryDeduplication.isIdentifiable(gallery))
-                .forEach(toDownload::add);
-
-        for (Map.Entry<String, List<EhGalleriesEntity>> entry : candidatesByKey.entrySet()) {
-            List<EhGalleriesEntity> group = entry.getValue();
-            Set<Long> currentGids = group.stream().map(EhGalleriesEntity::getGid).collect(Collectors.toSet());
-            List<EhGalleriesEntity> persisted = persistedPreferredByKey
-                    .getOrDefault(entry.getKey(), List.of())
-                    .stream()
-                    .filter(gallery -> !currentGids.contains(gallery.getGid()))
+        if (dedupeV2Version == Workflow.DEFAULT_VERSION) {
+            // 旧 Workflow 历史必须保留原来的精确 dedupe_key 决策和命令序列。
+            List<String> dedupeKeys = galleries.stream()
+                    .filter(EHAutomationWorkflowImpl::hasLegacyDedupeKey)
+                    .map(EhGalleriesEntity::getDedupeKey)
                     .toList();
+            Map<String, List<EhGalleriesEntity>> persistedPreferredByKey = databaseActivity
+                    .findPreferredGalleriesByDedupeKeys(dedupeKeys)
+                    .stream()
+                    .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
+            Map<String, List<EhGalleriesEntity>> candidatesByKey = candidates.stream()
+                    .filter(EHAutomationWorkflowImpl::hasLegacyDedupeKey)
+                    .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
 
-            if (!persisted.isEmpty()) {
-                EhGalleriesEntity preferred = choosePersistedPreferred(persisted);
-                group.forEach(gallery -> markAsDuplicate(gallery, preferred));
-                log.info("🔁 作品已有首选版本，跳过 {} 个汉化版本，保留 GID: {}", group.size(), preferred.getGid());
-                continue;
+            candidates.stream()
+                    .filter(gallery -> !hasLegacyDedupeKey(gallery))
+                    .forEach(toDownload::add);
+            for (Map.Entry<String, List<EhGalleriesEntity>> entry : candidatesByKey.entrySet()) {
+                List<EhGalleriesEntity> group = entry.getValue();
+                Set<Long> currentGids = group.stream().map(EhGalleriesEntity::getGid).collect(Collectors.toSet());
+                List<EhGalleriesEntity> persisted = persistedPreferredByKey
+                        .getOrDefault(entry.getKey(), List.of())
+                        .stream()
+                        .filter(gallery -> !currentGids.contains(gallery.getGid()))
+                        .toList();
+                if (!persisted.isEmpty()) {
+                    EhGalleriesEntity preferred = choosePersistedPreferred(persisted);
+                    group.forEach(gallery -> markAsDuplicate(gallery, preferred));
+                    continue;
+                }
+                EhGalleriesEntity preferred = GalleryDeduplication.choosePreferred(group);
+                toDownload.add(preferred);
+                group.stream()
+                        .filter(gallery -> !gallery.getGid().equals(preferred.getGid()))
+                        .forEach(gallery -> markAsDuplicate(gallery, preferred));
             }
-
-            EhGalleriesEntity preferred = GalleryDeduplication.choosePreferred(group);
-            toDownload.add(preferred);
-            group.stream()
-                    .filter(gallery -> !gallery.getGid().equals(preferred.getGid()))
-                    .forEach(gallery -> markAsDuplicate(gallery, preferred));
-            if (group.size() > 1) {
-                log.info("🔁 发现 {} 个同作品汉化版本，选择 GID: {}（评分 {}，{} 页）",
-                        group.size(), preferred.getGid(), preferred.getRating(), preferred.getPageCount());
-            }
+        } else {
+            // V2 先保存全部候选；真正的匹配、动态首选和并发认领在数据库 Activity 内原子完成。
+            toDownload.addAll(candidates);
         }
 
         // 首选版本和被跳过的版本都入库；后者以“已忽略 + duplicate_of_gid”保留供前端查看。
@@ -181,6 +192,13 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             while (running.size() >= settings.getMaxConcurrency()) {
                 Promise.anyOf(running).get();
                 running.removeIf(Promise::isCompleted);
+            }
+
+            if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                    && !task.compensateOnly
+                    && !databaseActivity.claimGalleryForDownload(task.gallery.getGid())) {
+                log.info("⏭️ 数据库原子去重判定跳过 GID: {}", task.gallery.getGid());
+                continue;
             }
 
             ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
@@ -211,6 +229,10 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             }
         }
 
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION && !candidateKeys.isEmpty()) {
+            databaseActivity.reconcileGalleryDeduplication(candidateKeys);
+        }
+
         if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
             // 兼容正在运行的旧 Workflow 历史。
             notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
@@ -239,6 +261,10 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
     private static boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
         return status.getValue().equals(gallery.getDownloadStatus()) || status.name().equals(gallery.getDownloadStatus());
+    }
+
+    private static boolean hasLegacyDedupeKey(EhGalleriesEntity gallery) {
+        return gallery != null && gallery.getDedupeKey() != null && !gallery.getDedupeKey().isBlank();
     }
 
     private static EhGalleriesEntity choosePersistedPreferred(List<EhGalleriesEntity> galleries) {

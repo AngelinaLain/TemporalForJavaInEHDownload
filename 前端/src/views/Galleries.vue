@@ -157,6 +157,12 @@
           <el-descriptions-item label="评分 / 页数">
             {{ currentRow.rating ?? '-' }} / {{ currentRow.pageCount ?? '-' }}
           </el-descriptions-item>
+          <el-descriptions-item label="匹配分数 / 算法版本">
+            {{ currentRow.dedupeMatchScore ?? '-' }} / V{{ currentRow.dedupeAlgorithmVersion ?? '-' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="匹配理由">
+            {{ currentRow.dedupeMatchReason || '-' }}
+          </el-descriptions-item>
           <el-descriptions-item label="文件名">{{ currentRow.filename }}</el-descriptions-item>
           <el-descriptions-item label="画廊链接">
             <a :href="currentRow.galleryUrl" target="_blank" rel="noopener">{{ currentRow.galleryUrl }}</a>

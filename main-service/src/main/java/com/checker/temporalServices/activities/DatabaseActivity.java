@@ -31,9 +31,24 @@ public interface DatabaseActivity {
     void updateGalleryDeduplicationMetadata(List<EhGalleriesEntity> galleries);
 
     /**
+     * 分批回填升级前历史记录的候选键。无法安全识别的记录也会写入当前算法版本，
+     * 避免后续工作流反复扫描。
+     */
+    void backfillGalleryDeduplicationMetadata();
+
+    /**
      * 查询指定作品指纹中已存在的首选版本（不含被标记为重复的版本）。
      */
     List<EhGalleriesEntity> findPreferredGalleriesByDedupeKeys(List<String> dedupeKeys);
+
+    /**
+     * 原子判断该画廊是否是候选组当前应下载的版本。方法内部按 candidate_key 加数据库锁，
+     * 同时写入首选关系、匹配分数/理由，并把获准版本置为 DOWNLOADING。
+     */
+    boolean claimGalleryForDownload(Long gid);
+
+    /** 子流程结束后根据最终状态重新选择首选版本，失败版本不会压住健康版本。 */
+    void reconcileGalleryDeduplication(List<String> candidateKeys);
 
     /**
      * 更新指定画廊的下载状态

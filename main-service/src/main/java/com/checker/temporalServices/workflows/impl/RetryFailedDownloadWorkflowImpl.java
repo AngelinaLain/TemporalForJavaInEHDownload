@@ -41,6 +41,15 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
+        int dedupeV2Version = Workflow.getVersion(
+                "candidate-score-deduplication", Workflow.DEFAULT_VERSION, 1);
+        int dedupeBackfillVersion = Workflow.getVersion(
+                "gallery-dedupe-history-backfill", Workflow.DEFAULT_VERSION, 1);
+
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                && dedupeBackfillVersion != Workflow.DEFAULT_VERSION) {
+            databaseActivity.backfillGalleryDeduplicationMetadata();
+        }
 
         // 加载运行时配置
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
@@ -64,6 +73,12 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
             }
 
             boolean compensateOnly = DownloadStatus.DOWNLOADED.getValue().equals(gallery.getDownloadStatus());
+            if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                    && !compensateOnly
+                    && !databaseActivity.claimGalleryForDownload(gallery.getGid())) {
+                log.info("数据库原子去重判定跳过重试 GID: {}", gallery.getGid());
+                continue;
+            }
 
             ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
                     .setWorkflowId("retry-gallery-" + gallery.getGid())
@@ -91,6 +106,15 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
             } catch (Exception e) {
                 log.error("等待子工作流完成时发生异常", e);
             }
+        }
+
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION) {
+            List<String> candidateKeys = failedGalleries.stream()
+                    .map(EhGalleriesEntity::getCandidateKey)
+                    .filter(key -> key != null && !key.isBlank())
+                    .distinct()
+                    .toList();
+            databaseActivity.reconcileGalleryDeduplication(candidateKeys);
         }
 
         if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {

@@ -5,6 +5,7 @@ export const STATUS_OPTIONS = Object.freeze([
   { value: 'PARTIAL', label: '不完整', type: 'warning', color: '#E6A23C' },
   { value: 'DOWNLOAD_FAILED', label: '下载失败', type: 'danger', color: '#F56C6C' },
   { value: 'IMPORTED', label: '已入库', type: 'warning', color: '#E6A23C' },
+  { value: 'REVIEW_REQUIRED', label: '待去重审核', type: 'warning', color: '#D97706' },
   { value: 'BLOCKED', label: '阻断', type: 'danger', color: '#F56C6C' },
   { value: 'IGNORED', label: '已忽略', type: 'info', color: '#C0C4CC' }
 ])
