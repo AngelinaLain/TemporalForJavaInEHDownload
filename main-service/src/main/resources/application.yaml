@@ -90,8 +90,8 @@ eh-config:
     library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
-    # 最大子工作流个数
-    max-concurrency: 6
+    # 最大子工作流个数（并发下载太猛会触发 hath.network CDN 429，控制在 3）
+    max-concurrency: 3
     # komga最大尝试次数
     komga-import-max-retries: 20
     # 多少时间轮询komga的元数据状态 [秒]
@@ -103,9 +103,9 @@ eh-config:
   # EHentai API 全局限流（Resilience4j 令牌桶，防止被封禁）
   rate-limit:
     enabled: true
-    limit-for-period: 30        # 每个刷新周期允许 30 个请求
+    limit-for-period: 60        # 每个刷新周期允许 60 个请求（约 1 次/秒）
     limit-refresh-period-seconds: 60
-    timeout-duration-seconds: 30
+    timeout-duration-seconds: 120 # 拿不到令牌时最多排队等 120 秒
     proxy-cooldown-seconds: 300 # 403/502 后当前代理冷却 5 分钟
   # 多代理轮换池（可选，配置后优先于单一 proxy 使用）
   # proxy-pool:
@@ -119,6 +119,23 @@ eh-config:
   #     pass-hash: ${EH_PASS_HASH}
   #     sk: ${EH_SK}
   #     star: ${EH_STAR}
+  # EhTagTranslation 翻译数据库自定义镜像（可选，优先于内置 raw.githubusercontent/jsDelivr 镜像）
+  # tag-db:
+  #   urls:
+  #     - https://your-internal-mirror/db.text.json
+  # 群晖 SMB/CIFS 共享（本地下载后上传首选方式）
+  smb:
+    host: ${SMB_HOST:}
+    share: ${SMB_SHARE:}
+    path: ${SMB_PATH:}
+    username: ${SMB_USERNAME:}
+    password: ${SMB_PASSWORD:}
+    domain: ${SMB_DOMAIN:}
+  # 下载模式
+  download:
+    # local：本地下载 + 注入 ComicInfo.xml + 上传群晖（默认）；downloadstation：沿用群晖 DownloadStation
+    mode: ${DOWNLOAD_MODE:local}
+    temp-dir: ${DOWNLOAD_TEMP_DIR:}
 
 # Jasypt 配置加密：配置 ${ENC(密文)} 占位符时使用；留空则明文直读
 jasypt:
@@ -151,7 +168,8 @@ management:
       show-details: when_authorized
   tracing:
     sampling:
-      probability: ${TRACING_SAMPLE_RATE:1.0}
+      # 默认 0 不采样（避免本地无 Zipkin 时刷屏报错）；需要链路追踪时设 TRACING_SAMPLE_RATE=1.0 并启动 Zipkin
+      probability: ${TRACING_SAMPLE_RATE:0.0}
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}

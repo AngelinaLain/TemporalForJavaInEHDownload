@@ -13,6 +13,11 @@ services:
     # .env is Git-ignored; host environment variables override values in it.
     env_file:
       - .env
+    environment:
+      # 断点文件必须跨容器重启保留；可通过 .env 覆盖为宿主机挂载路径。
+      DOWNLOAD_TEMP_DIR: ${DOWNLOAD_TEMP_DIR:-/data/download-cache}
+    volumes:
+      - download-cache:/data/download-cache
     networks:
       - eh-net
 
@@ -98,10 +103,22 @@ services:
       - "3000:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      # 允许前端 iframe 内嵌展示大盘
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      # 匿名只读访问，便于免登录在监控大盘页面直接展示
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      # 登录后/匿名用户默认直达监控大盘
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/galleryimport-overview.json
     volumes:
       - grafana-data:/var/lib/grafana
+      # 预置 Prometheus / Loki 数据源，开箱即用
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      # 预置监控仪表盘
+      - ./deploy/grafana/dashboards:/etc/grafana/dashboards:ro
     depends_on:
       - prometheus
+      - loki
     networks:
       - eh-net
 
@@ -147,4 +164,4 @@ networks:
 volumes:
   redis-data:
   grafana-data:
-
+  download-cache:

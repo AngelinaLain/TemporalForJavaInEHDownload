@@ -39,6 +39,8 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
     @Override
     public void retryFailedTasks() {
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
 
         // 加载运行时配置
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
@@ -51,6 +53,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
 
         // 滑动窗口并发控制：派发子工作流
         List<Promise<Void>> running = new ArrayList<>();
+        int startedChildren = 0;
 
         for (EhGalleriesEntity gallery : failedGalleries) {
             if (fatalErrorOccurred) break;
@@ -78,6 +81,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                 }
             });
             running.add(promise);
+            startedChildren++;
         }
 
         // 等待所有剩余子工作流完成
@@ -89,6 +93,16 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
             }
         }
 
-        notificationActivity.sendEmailAlert("重试流程结束", "本次共重试了 " + failedGalleries.size() + " 个画廊");
+        if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+            // 兼容正在运行的旧 Workflow 历史。
+            notificationActivity.sendEmailAlert("重试流程结束", "本次共重试了 " + failedGalleries.size() + " 个画廊");
+        } else {
+            List<Long> gids = failedGalleries.stream().map(EhGalleriesEntity::getGid).toList();
+            List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(gids);
+            String content = WorkflowSteps.buildBatchNotificationContent(
+                    "重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
+                    fatalErrorOccurred, finalStates);
+            notificationActivity.sendEmailAlert("重试流程汇总", content);
+        }
     }
 }

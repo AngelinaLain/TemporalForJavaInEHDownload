@@ -110,6 +110,12 @@
             <artifactId>jasypt-spring-boot-starter</artifactId>
         </dependency>
 
+        <!-- SMB/CIFS：本地下载后上传群晖 Komga 库目录（首选方式） -->
+        <dependency>
+            <groupId>com.hierynomus</groupId>
+            <artifactId>smbj</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

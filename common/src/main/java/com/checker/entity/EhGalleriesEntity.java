@@ -133,6 +133,11 @@ public class EhGalleriesEntity implements Serializable {
     private Double fileSizeMb;
 
     /**
+     * 本地下载已完成的字节数（用于前端展示下载进度）。
+     */
+    private Long downloadedBytes;
+
+    /**
      * AI 生成的内容概述（中文，约 150 字）
      */
     private String summary;

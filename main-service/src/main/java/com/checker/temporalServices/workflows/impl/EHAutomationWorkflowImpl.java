@@ -65,6 +65,8 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     @Override
     public void executeAutomation(SearchOptions searchOptions) {
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
 
         // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
@@ -170,6 +172,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
         // 滑动窗口并发控制：派发子工作流
         List<Promise<Void>> running = new ArrayList<>();
+        int startedChildren = 0;
 
         for (GalleryTask task : tasks) {
             if (fatalErrorOccurred) break;
@@ -196,6 +199,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 }
             });
             running.add(promise);
+            startedChildren++;
         }
 
         // 等待所有剩余子工作流完成
@@ -207,7 +211,17 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             }
         }
 
-        notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
+        if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+            // 兼容正在运行的旧 Workflow 历史。
+            notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
+        } else {
+            List<Long> taskGids = tasks.stream().map(task -> task.gallery.getGid()).toList();
+            List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(taskGids);
+            String content = WorkflowSteps.buildBatchNotificationContent(
+                    "抓取流程", galleries.size(), tasks.size(), startedChildren,
+                    fatalErrorOccurred, finalStates);
+            notificationActivity.sendEmailAlert("抓取流程汇总", content);
+        }
     }
 
     private static List<EhGalleriesEntity> deduplicateByGid(List<EhGalleriesEntity> galleries) {

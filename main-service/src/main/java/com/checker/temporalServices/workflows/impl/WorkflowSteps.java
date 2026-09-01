@@ -2,6 +2,7 @@ package com.checker.temporalServices.workflows.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.checker.common.Constants;
+import com.checker.common.DownloadStatus;
 import com.checker.common.ErrorType;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.DatabaseActivity;
@@ -16,6 +17,9 @@ import io.temporal.workflow.Workflow;
 import org.slf4j.Logger;
 
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Temporal 工作流共享工具类 — 非 Spring Bean，包内可见。
@@ -105,6 +109,88 @@ class WorkflowSteps {
             .build();
 
     /**
+     * 本地导入 Activity 专用配置：本地下载大文件可能耗时极长，
+     * 48 小时 StartToClose + 5 分钟心跳。下载器内部已处理连接级重试，外层 Workflow.retry
+     * 还会重新提取过期直链，因此 Activity 本身不再叠加重试，避免 3×3 放大为 9 次执行。
+     */
+    static final ActivityOptions LOCAL_IMPORT_OPTIONS = ActivityOptions.newBuilder()
+            .setTaskQueue(Constants.TASK_QUEUE)
+            .setStartToCloseTimeout(Duration.ofHours(48))
+            .setHeartbeatTimeout(Duration.ofMinutes(5))
+            .setRetryOptions(RetryOptions.newBuilder()
+                    .setInitialInterval(Duration.ofSeconds(15))
+                    .setMaximumAttempts(1)
+                    .setDoNotRetry(
+                            ErrorType.QUOTA_EXCEEDED.getCode(),
+                            ErrorType.IP_BANNED.getCode(),
+                            ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode(),
+                            ErrorType.SYNOLOGY_AUTH_FAILED.getCode(),
+                            ErrorType.COOKIE_EXPIRED.getCode()
+                    ).build())
+            .build();
+
+    /**
+     * 在父工作流等待全部已启动的子工作流结束后，按数据库最终状态生成一封汇总邮件。
+     * 这里只拼装确定性文本，不执行任何外部 I/O，适合在 Workflow 代码中调用。
+     */
+    static String buildBatchNotificationContent(String flowName, int discovered, int planned, int started,
+                                                boolean stoppedByFatalError,
+                                                List<EhGalleriesEntity> finalStates) {
+        Map<String, Integer> statusCounts = new LinkedHashMap<>();
+        for (DownloadStatus status : DownloadStatus.values()) {
+            statusCounts.put(status.getValue(), 0);
+        }
+        int unknown = 0;
+        if (finalStates != null) {
+            for (EhGalleriesEntity gallery : finalStates) {
+                String normalized = normalizeDownloadStatus(gallery.getDownloadStatus());
+                if (normalized == null) {
+                    unknown++;
+                } else {
+                    statusCounts.computeIfPresent(normalized, (key, count) -> count + 1);
+                }
+            }
+        }
+
+        int stateRecords = finalStates == null ? 0 : finalStates.size();
+        int notStarted = Math.max(planned - started, 0);
+        StringBuilder content = new StringBuilder()
+                .append(flowName).append("已结束，全部已启动子流程均已完成。\n")
+                .append("本次发现: ").append(discovered).append(" 个画廊\n")
+                .append("计划子流程: ").append(planned).append(" 个\n")
+                .append("实际启动: ").append(started).append(" 个\n")
+                .append("未启动: ").append(notStarted).append(" 个\n")
+                .append("最终状态记录: ").append(stateRecords).append(" 条\n\n")
+                .append("状态汇总:\n");
+
+        statusCounts.forEach((status, count) -> {
+            if (count > 0) {
+                content.append("- ").append(status).append(": ").append(count).append("\n");
+            }
+        });
+        if (unknown > 0) {
+            content.append("- 未知状态: ").append(unknown).append("\n");
+        }
+        if (stateRecords < planned) {
+            content.append("- 未查询到状态记录: ").append(planned - stateRecords).append("\n");
+        }
+        if (stoppedByFatalError) {
+            content.append("\n⚠️ 检测到致命错误，后续尚未启动的子流程已停止派发。");
+        }
+        return content.toString().trim();
+    }
+
+    private static String normalizeDownloadStatus(String value) {
+        if (value == null) return null;
+        for (DownloadStatus status : DownloadStatus.values()) {
+            if (status.getValue().equals(value) || status.name().equals(value)) {
+                return status.getValue();
+            }
+        }
+        return null;
+    }
+
+    /**
      * 暂时没有用到此函数的地方
      * -------
      * 下载完成后的 Komga 入库前置三步骤：
@@ -151,6 +237,8 @@ class WorkflowSteps {
             String timeoutContent,
             int maxRetries,
             int pollIntervalSeconds) {
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
         return Async.procedure(() -> {
             boolean isImportedToKomga = false;
             int currentTry = 0;
@@ -165,7 +253,9 @@ class WorkflowSteps {
             }
             if (!isImportedToKomga) {
                 log.warn("[⚠️ Komga 入库超时] GID: {}, 标题: {}", gallery.getGid(), gallery.getTitle());
-                notificationActivity.sendEmailAlert(timeoutSubject, timeoutContent);
+                if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+                    notificationActivity.sendEmailAlert(timeoutSubject, timeoutContent);
+                }
             }
         });
     }

@@ -17,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -76,6 +77,17 @@ public class DatabaseActivityImpl implements DatabaseActivity {
 
         int inserted = 0;
         if (!toInsert.isEmpty()) {
+            // insertBatchSomeColumn 不会触发 MetaObjectHandler 自动填充，
+            // 且会原样写入 null 值，故插入前兜底补全时间字段（crawled_at 为 NOT NULL）。
+            Date now = new Date();
+            for (EhGalleriesEntity gallery : toInsert) {
+                if (gallery.getCrawledAt() == null) {
+                    gallery.setCrawledAt(now);
+                }
+                if (gallery.getUpdatedAt() == null) {
+                    gallery.setUpdatedAt(now);
+                }
+            }
             inserted = galleriesMapper.insertBatchSomeColumn(toInsert);
         }
         boolean updated = true;
@@ -170,6 +182,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .komgaImportPollIntervalSeconds(workflowConfig.getKomgaImportPollIntervalSeconds())
                 .downloadPollIntervalMinutes(workflowConfig.getDownloadPollIntervalMinutes())
                 .downloadCooldownSeconds(workflowConfig.getDownloadCooldownSeconds())
+                .downloadMode(workflowConfig.getDownloadMode())
                 .build();
     }
 

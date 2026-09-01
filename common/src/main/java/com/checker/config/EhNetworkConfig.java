@@ -20,6 +20,9 @@ public class EhNetworkConfig {
     private Notification notification = new Notification();
     private Komga komga = new Komga();
     private RateLimit rateLimit = new RateLimit();
+    private TagDb tagDb = new TagDb();
+    private Smb smb = new Smb();
+    private Download download = new Download();
 
     /** 多代理轮换池：配置后优先于单一 proxy 使用，遇到 403/502 自动冷却并切换 */
     private List<Proxy> proxyPool = new ArrayList<>();
@@ -120,5 +123,49 @@ public class EhNetworkConfig {
         private String url;
         private String libraryId;
         private String apiKey;
+    }
+
+    /**
+     * EhTagTranslation 翻译数据库下载配置
+     */
+    @Data
+    public static class TagDb {
+        /**
+         * 自定义翻译数据库镜像地址（可选）。
+         * 配置后优先于内置默认镜像使用，可指向自建/内网镜像以规避网络限制。
+         */
+        private List<String> urls = new ArrayList<>();
+    }
+
+    /**
+     * 群晖 SMB/CIFS 共享配置：本地下载后上传到 Komga 库目录的首选方式。
+     */
+    @Data
+    public static class Smb {
+        private String host;
+        /** 共享名，如 "video" 或 "komga" */
+        private String share;
+        /** 共享内的相对目录，如 "/docker/komga/library" */
+        private String path;
+        private String username;
+        private String password;
+        private String domain;
+    }
+
+    /**
+     * 下载模式配置
+     */
+    @Data
+    public static class Download {
+        /**
+         * 下载模式：
+         * <ul>
+         *   <li>{@code local}：本地下载 + 注入 ComicInfo.xml + 上传群晖（默认，更可靠）</li>
+         *   <li>{@code downloadstation}：沿用群晖 DownloadStation 下载（兜底）</li>
+         * </ul>
+         */
+        private String mode = "local";
+        /** 本地下载临时目录（默认系统临时目录） */
+        private String tempDir;
     }
 }

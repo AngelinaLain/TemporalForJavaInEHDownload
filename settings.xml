@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+  <mirrors>
+    <mirror>
+      <id>aliyun-central</id>
+      <mirrorOf>central</mirrorOf>
+      <name>Aliyun Central Mirror</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+    </mirror>
+  </mirrors>
+  <profiles>
+    <profile>
+      <id>network</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <properties>
+        <maven.wagon.http.retryHandler.count>10</maven.wagon.http.retryHandler.count>
+        <maven.wagon.http.retryHandler.count.default>10</maven.wagon.http.retryHandler.count.default>
+        <maven.wagon.http.connectionTimeout>30000</maven.wagon.http.connectionTimeout>
+        <maven.wagon.http.readTimeout>120000</maven.wagon.http.readTimeout>
+      </properties>
+    </profile>
+  </profiles>
+</settings>

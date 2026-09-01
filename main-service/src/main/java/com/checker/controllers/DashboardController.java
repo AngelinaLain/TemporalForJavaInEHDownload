@@ -8,6 +8,7 @@ import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.EhGalleriesService;
 import com.checker.service.EhTagTranslationService;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,13 +23,16 @@ public class DashboardController {
     private final EhGalleriesService galleriesService;
     private final EhTagTranslationService tagTranslationService;
     private final EhGalleriesMapper galleriesMapper;
+    private final JdbcTemplate jdbcTemplate;
 
     public DashboardController(EhGalleriesService galleriesService,
                                EhTagTranslationService tagTranslationService,
-                               EhGalleriesMapper galleriesMapper) {
+                               EhGalleriesMapper galleriesMapper,
+                               JdbcTemplate jdbcTemplate) {
         this.galleriesService = galleriesService;
         this.tagTranslationService = tagTranslationService;
         this.galleriesMapper = galleriesMapper;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     /**
@@ -68,6 +72,59 @@ public class DashboardController {
     private double toDouble(Object value) {
         return value instanceof Number number ? number.doubleValue() : 0.0;
     }
+
+    /**
+     * 本地下载进度：返回处于「下载中」的画廊及其已下载字节数/预估大小/百分比。
+     */
+    @GetMapping("/download-progress")
+    public Result<List<Map<String, Object>>> getDownloadProgress() {
+        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
+        wrapper.eq("download_status", "DOWNLOADING").or().eq("download_status", "下载中");
+        List<EhGalleriesEntity> downloading = galleriesService.list(wrapper);
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (EhGalleriesEntity gallery : downloading) {
+            long downloadedBytes = gallery.getDownloadedBytes() != null ? gallery.getDownloadedBytes() : 0L;
+            double sizeMb = gallery.getFileSizeMb() != null ? gallery.getFileSizeMb() : 0.0;
+            long totalBytes = (long) (sizeMb * 1024 * 1024);
+            double percent = totalBytes > 0 ? Math.min(100.0, downloadedBytes * 100.0 / totalBytes) : 0.0;
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("gid", gallery.getGid());
+            item.put("title", gallery.getTitle());
+            item.put("downloadedBytes", downloadedBytes);
+            item.put("totalBytes", totalBytes);
+            item.put("sizeMb", sizeMb);
+            item.put("percent", Math.round(percent * 10) / 10.0);
+            result.add(item);
+        }
+        return Result.success(result);
+    }
+
+    /**
+     * 数据库连接状态：SELECT 1 探活 + 基础统计。
+     */
+    @GetMapping("/db-status")
+    public Result<Map<String, Object>> getDbStatus() {
+        Map<String, Object> status = new LinkedHashMap<>();
+        try {
+            Integer probe = jdbcTemplate.queryForObject("SELECT 1", Integer.class);
+            status.put("connected", probe != null && probe == 1);
+        } catch (Exception e) {
+            status.put("connected", false);
+            status.put("error", e.getMessage());
+        }
+        try {
+            Map<String, Object> overview = galleriesMapper.getDashboardOverview();
+            status.put("total", toLong(overview.get("total")));
+            status.put("totalSizeGb", Math.round(toDouble(overview.get("total_size_mb")) / 1024 * 100.0) / 100.0);
+        } catch (Exception ignored) {
+            status.put("total", 0L);
+            status.put("totalSizeGb", 0.0);
+        }
+        return Result.success(status);
+    }
+
     /**
      * 文件大小分布（柱状图）
      */
@@ -205,6 +262,7 @@ public class DashboardController {
             case "PENDING", "未下载" -> "PENDING";
             case "DOWNLOADING", "下载中" -> "DOWNLOADING";
             case "DOWNLOADED", "已下载" -> "DOWNLOADED";
+            case "PARTIAL", "不完整" -> "PARTIAL";
             case "DOWNLOAD_FAILED", "下载失败" -> "DOWNLOAD_FAILED";
             case "IMPORTED", "已入库" -> "IMPORTED";
             case "BLOCKED", "阻断" -> "BLOCKED";
@@ -218,6 +276,7 @@ public class DashboardController {
             case "PENDING" -> "未下载";
             case "DOWNLOADING" -> "下载中";
             case "DOWNLOADED" -> "已下载";
+            case "PARTIAL" -> "不完整";
             case "DOWNLOAD_FAILED" -> "下载失败";
             case "IMPORTED" -> "已入库";
             case "BLOCKED" -> "阻断";

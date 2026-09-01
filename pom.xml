@@ -35,6 +35,8 @@
     <hutool.version>5.8.38</hutool.version>
     <jjwt.version>0.12.5</jjwt.version>
     <jsoup.version>1.17.2</jsoup.version>
+    <smbj.version>0.12.2</smbj.version>
+    <lombok.version>1.18.42</lombok.version>
   </properties>
 
   <dependencyManagement>
@@ -103,6 +105,12 @@
         <version>3.0.5</version>
       </dependency>
 
+      <dependency>
+        <groupId>com.hierynomus</groupId>
+        <artifactId>smbj</artifactId>
+        <version>${smbj.version}</version>
+      </dependency>
+
     </dependencies>
   </dependencyManagement>
 
@@ -124,6 +132,7 @@
       <groupId>org.projectlombok</groupId>
       <artifactId>lombok</artifactId>
       <optional>true</optional>
+      <version>${lombok.version}</version>
     </dependency>
   </dependencies>
   <repositories>

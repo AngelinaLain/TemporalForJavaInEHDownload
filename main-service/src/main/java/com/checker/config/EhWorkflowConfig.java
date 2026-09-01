@@ -21,4 +21,9 @@ public class EhWorkflowConfig {
     private int downloadPollIntervalMinutes = 5;
     /** 单本画廊下载完成后的冷却等待（秒） */
     private int downloadCooldownSeconds = 10;
+    /**
+     * 下载模式：{@code local} 本地下载+ComicInfo 注入+上传群晖（默认）；
+     * {@code downloadstation} 沿用群晖 DownloadStation 下载（兜底）。
+     */
+    private String downloadMode = "local";
 }

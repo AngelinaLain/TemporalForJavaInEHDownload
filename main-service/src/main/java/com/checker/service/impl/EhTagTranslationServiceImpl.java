@@ -41,8 +41,17 @@ import java.util.concurrent.atomic.AtomicLong;
 @Service
 public class EhTagTranslationServiceImpl implements EhTagTranslationService {
 
-    private static final String DB_URL =
-            "https://raw.githubusercontent.com/EhTagTranslation/DatabaseReleases/master/db.text.json";
+    /**
+     * 内置翻译数据库镜像列表（按顺序尝试）。
+     * raw.githubusercontent.com 在国内经常不可达，故把 jsDelivr 系列 CDN 作为回退镜像。
+     * 可通过 eh-config.tag-db.urls 配置自定义镜像（优先于内置默认）。
+     */
+    private static final List<String> DEFAULT_DB_URLS = List.of(
+            "https://raw.githubusercontent.com/EhTagTranslation/DatabaseReleases/master/db.text.json",
+            "https://cdn.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases@master/db.text.json",
+            "https://fastly.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases@master/db.text.json",
+            "https://gcore.jsdelivr.net/gh/EhTagTranslation/DatabaseReleases@master/db.text.json"
+    );
 
     private static final long CACHE_TTL_MS = 24 * 60 * 60 * 1000L; // 24小时
 
@@ -303,11 +312,44 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         // 双重检查，避免并发重复拉取
         if (System.currentTimeMillis() - lastFetchTime.get() < 60_000) return;
 
-        log.info("📥 开始从 GitHub 拉取 EhTagTranslation 数据库...");
+        log.info("📥 开始拉取 EhTagTranslation 数据库...");
 
         OkHttpClient client = buildHttpClient();
+        IOException lastError = null;
+        for (String dbUrl : buildCandidateUrls()) {
+            try {
+                if (fetchFrom(client, dbUrl)) {
+                    return;
+                }
+            } catch (IOException e) {
+                lastError = e;
+                log.warn("⚠️ 从 {} 拉取失败: {}，尝试下一个镜像...", dbUrl, e.getMessage());
+            }
+        }
+        throw new IOException("所有翻译数据库镜像均不可用", lastError);
+    }
+
+    /**
+     * 组装候选下载地址：自定义镜像（eh-config.tag-db.urls）优先，其次内置默认镜像。
+     */
+    private List<String> buildCandidateUrls() {
+        List<String> result = new ArrayList<>();
+        List<String> custom = netConfig.getTagDb() != null ? netConfig.getTagDb().getUrls() : null;
+        if (custom != null && !custom.isEmpty()) {
+            custom.stream().filter(url -> url != null && !url.isBlank()).forEach(result::add);
+        }
+        result.addAll(DEFAULT_DB_URLS);
+        return result;
+    }
+
+    /**
+     * 从指定 URL 拉取并解析翻译数据库。
+     *
+     * @return true 表示解析成功并已更新内存映射；false 表示内容为空（结构可能已变更）
+     */
+    private boolean fetchFrom(OkHttpClient client, String dbUrl) throws IOException {
         Request request = new Request.Builder()
-                .url(DB_URL)
+                .url(dbUrl)
                 .header("Accept", "application/json")
                 .build();
 
@@ -344,11 +386,18 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
                 }
             }
 
+            if (tempTagMap.isEmpty()) {
+                log.warn("⚠️ 翻译数据库解析结果为空（可能文件结构已变更），来源: {}", dbUrl);
+                return false;
+            }
+
             tagMap = Map.copyOf(tempTagMap);
             tagDescMap = Map.copyOf(tempDescMap);
             nsMap = Map.copyOf(NS_CHINESE);
             lastFetchTime.set(System.currentTimeMillis());
-            log.info("✅ EhTag 翻译数据库加载成功，共 {} 条翻译记录，{} 条描述记录", tagMap.size(), tagDescMap.size());
+            log.info("✅ EhTag 翻译数据库加载成功（来源 {}），共 {} 条翻译记录，{} 条描述记录",
+                    dbUrl, tagMap.size(), tagDescMap.size());
+            return true;
         }
     }
 
