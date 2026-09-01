@@ -4,12 +4,14 @@ import com.checker.common.Result;
 import com.checker.config.JwtTokenProvider;
 import com.checker.config.SecurityProperties;
 import com.checker.service.LoginAttemptService;
+import com.checker.service.TokenBlacklistService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -25,15 +27,18 @@ public class AuthController {
     private final SecurityProperties securityProperties;
     private final PasswordEncoder passwordEncoder;
     private final LoginAttemptService loginAttemptService;
+    private final TokenBlacklistService tokenBlacklistService;
 
     public AuthController(JwtTokenProvider jwtTokenProvider,
                           SecurityProperties securityProperties,
                           PasswordEncoder passwordEncoder,
-                          LoginAttemptService loginAttemptService) {
+                          LoginAttemptService loginAttemptService,
+                          TokenBlacklistService tokenBlacklistService) {
         this.jwtTokenProvider = jwtTokenProvider;
         this.securityProperties = securityProperties;
         this.passwordEncoder = passwordEncoder;
         this.loginAttemptService = loginAttemptService;
+        this.tokenBlacklistService = tokenBlacklistService;
     }
 
     @PostMapping("/login")
@@ -58,6 +63,30 @@ public class AuthController {
 
         loginAttemptService.recordFailure(username, clientAddress);
         return Result.error(401, "用户名或密码错误");
+    }
+
+    /**
+     * 注销：将当前 Token 加入黑名单（Redis，降级为本地缓存），使其立即失效，
+     * 直到 Token 自然过期后黑名单条目自动清理。
+     */
+    @PostMapping("/logout")
+    public Result<String> logout(HttpServletRequest request) {
+        String token = resolveToken(request);
+        if (StringUtils.hasText(token) && jwtTokenProvider.validateToken(token)) {
+            tokenBlacklistService.blacklist(
+                    jwtTokenProvider.getJtiFromToken(token),
+                    jwtTokenProvider.getExpirationFromToken(token));
+            return Result.success("注销成功，Token 已失效");
+        }
+        return Result.error(400, "未携带有效 Token");
+    }
+
+    private String resolveToken(HttpServletRequest request) {
+        String bearerToken = request.getHeader("Authorization");
+        if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
+            return bearerToken.substring(7);
+        }
+        return null;
     }
 
     @Data

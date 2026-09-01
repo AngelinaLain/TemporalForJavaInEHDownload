@@ -16,3 +16,15 @@ spring:
       chat:
         options:
           model: ${AI_MODEL}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLE_RATE:0.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}

@@ -28,6 +28,18 @@ const routes = [
         name: 'Operations',
         component: () => import('../views/Operations.vue'),
         meta: { title: '工作流操作' }
+      },
+      {
+        path: 'monitoring',
+        name: 'Monitoring',
+        component: () => import('../views/Monitoring.vue'),
+        meta: { title: '监控大盘' }
+      },
+      {
+        path: 'workflows',
+        name: 'Workflows',
+        component: () => import('../views/Workflows.vue'),
+        meta: { title: '流程监控' }
       }
     ]
   }

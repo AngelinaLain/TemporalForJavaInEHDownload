@@ -28,6 +28,8 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
 
     @Override
     public void waitForImport(EhGalleriesEntity gallery, int maxRetries, int pollIntervalSeconds, String timeoutSubject, String timeoutContent) {
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
 
         // ==========================================
         // 1. 核心修复：执行原来的 postDownloadKomgaProcess 逻辑
@@ -80,7 +82,10 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
 
         if (!isImportedToKomga) {
             log.warn("[⚠️ Komga 入库超时] GID: {}, 标题: {}", gallery.getGid(), gallery.getTitle());
-            notificationActivity.sendEmailAlert(timeoutSubject, timeoutContent);
+            if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+                // 仅兼容旧 Workflow 历史；新流程由最外层父工作流统一汇总发信。
+                notificationActivity.sendEmailAlert(timeoutSubject, timeoutContent);
+            }
         }
     }
 }

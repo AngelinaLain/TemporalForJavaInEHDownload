@@ -2,11 +2,13 @@ package com.checker;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 /**
  * Spring Boot 启动类，EHentai 自动化下载工作流应用程序入口
  */
 @SpringBootApplication
+@EnableAsync
 public class MainServiceApplication {
 
     /**

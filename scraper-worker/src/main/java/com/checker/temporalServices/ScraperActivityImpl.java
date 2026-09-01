@@ -4,8 +4,12 @@ import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
+import cn.hutool.json.JSONArray;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
+import com.checker.common.GalleryDeduplication;
 import com.checker.common.EhNetworkClient;
 import com.checker.common.ErrorType;
 import com.checker.dto.ArchiveDownloadInfo;
@@ -28,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -47,6 +52,7 @@ public class ScraperActivityImpl implements ScraperActivity {
     private static final Pattern GALLERY_PATTERN = Pattern.compile("https://e-hentai\\.org/g/(\\d+)/([a-z0-9]+)/");
     private static final int DELAY_MS = 3000;
     private static final int MAX_SAFE_PAGES = 100; // 防止网站结构突变导致无限死循环的安全阈值
+    private static final int METADATA_BATCH_SIZE = 25; // EH gdata 单次请求上限
 
     @Override
     public List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions) {
@@ -92,10 +98,89 @@ public class ScraperActivityImpl implements ScraperActivity {
         String finalCursor = lastNextCursor;
         allResults.forEach(r -> r.setTraceLastNextCursor(finalCursor));
 
+        enrichGalleryMetadata(allResults);
         log.info("抓取完成，共提取到 {} 个有效画廊。", allResults.size());
         return allResults;
     }
 
+    /**
+     * 在下载排队前通过 EH gdata 补全作品识别需要的元数据。
+     * 元数据查询失败不会阻断普通抓取，只会跳过本次作品级去重。
+     */
+    private void enrichGalleryMetadata(List<EhGalleriesEntity> galleries) {
+        List<EhGalleriesEntity> candidates = galleries.stream()
+                .filter(gallery -> gallery.getGid() != null && StrUtil.isNotBlank(gallery.getToken()))
+                .toList();
+        if (candidates.isEmpty()) {
+            return;
+        }
+
+        Map<Long, EhGalleriesEntity> galleriesByGid = candidates.stream()
+                .collect(Collectors.toMap(EhGalleriesEntity::getGid, gallery -> gallery, (left, right) -> left));
+
+        for (int offset = 0; offset < candidates.size(); offset += METADATA_BATCH_SIZE) {
+            List<EhGalleriesEntity> batch = candidates.subList(offset, Math.min(offset + METADATA_BATCH_SIZE, candidates.size()));
+            try {
+                JSONObject request = JSONUtil.createObj();
+                request.set("method", "gdata");
+                request.set("namespace", 1);
+                request.set("gidlist", JSONUtil.parseArray(batch.stream()
+                        .map(gallery -> List.of(gallery.getGid(), gallery.getToken()))
+                        .toList()));
+
+                JSONObject response = JSONUtil.parseObj(ehNetworkClient.postJson(Constants.EHENTAI_API_URL, request.toString()));
+                JSONArray metadataList = response.getJSONArray("gmetadata");
+                if (metadataList == null || metadataList.isEmpty()) {
+                    log.warn("EH gdata 未返回元数据，本批 {} 条将不参与作品级去重", batch.size());
+                    continue;
+                }
+
+                for (int index = 0; index < metadataList.size(); index++) {
+                    JSONObject metadata = metadataList.getJSONObject(index);
+                    Long gid = metadata.getLong("gid");
+                    EhGalleriesEntity gallery = galleriesByGid.get(gid);
+                    if (gallery == null) {
+                        continue;
+                    }
+                    gallery.setOriginalTitle(StrUtil.blankToDefault(metadata.getStr("title_jpn"), null));
+                    gallery.setPageCount(parseInteger(metadata.getStr("filecount")));
+                    gallery.setRating(parseDouble(metadata.getStr("rating")));
+                    JSONArray tags = metadata.getJSONArray("tags");
+                    if (tags != null) {
+                        gallery.setTags(tags.toList(String.class));
+                    }
+                    GalleryDeduplication.populateIdentity(gallery);
+                }
+            } catch (Exception exception) {
+                log.warn("EH gdata 元数据查询失败，本批 {} 条将按普通画廊处理: {}", batch.size(), exception.getMessage());
+            }
+        }
+
+        long identified = galleries.stream().filter(GalleryDeduplication::isIdentifiable).count();
+        log.info("作品级去重元数据补全完成：{}/{} 条具备可靠作品指纹", identified, galleries.size());
+    }
+
+    private Integer parseInteger(String value) {
+        if (StrUtil.isBlank(value)) {
+            return null;
+        }
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Double parseDouble(String value) {
+        if (StrUtil.isBlank(value)) {
+            return null;
+        }
+        try {
+            return Double.valueOf(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
     /**
      * 提取出的 URL 拼接逻辑
      */
@@ -189,6 +274,9 @@ public class ScraperActivityImpl implements ScraperActivity {
         String archiveUrl = String.format("%s?gid=%d&token=%s", Constants.EHENTAI_ARCHIVER_URL, gid, token);
         ArchiveDownloadInfo info = new ArchiveDownloadInfo();
 
+        // 心跳上报：直链提取涉及两次串行 HTTP 调用 + 多次正则解析，耗时可能超过心跳超时阈值
+        Activity.getExecutionContext().heartbeat("正在获取归档页面元数据: " + gid);
+
         // 1. 🌟 先发起 GET 请求，获取归档页面元数据（包含文件大小）
         log.info("正在获取归档页面元数据: {}", archiveUrl);
         String prepareHtml = ehNetworkClient.getHtml(archiveUrl);
@@ -233,6 +321,8 @@ public class ScraperActivityImpl implements ScraperActivity {
         }
 
         info.setEstimatedSizeMb(finalSizeMb);
+
+        Activity.getExecutionContext().heartbeat("正在提交下载表单获取直链: " + gid);
 
         // 2. 🌟 发起 POST 请求，模拟点击下载获取真实直链
         Map<String, Object> form = new HashMap<>();

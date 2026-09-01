@@ -15,6 +15,44 @@
       </el-col>
     </el-row>
 
+    <!-- 下载进度 + 数据库状态 -->
+    <el-row :gutter="20" class="chart-row">
+      <el-col :xs="24" :lg="14">
+        <el-card shadow="hover">
+          <template #header>本地下载进度</template>
+          <div v-if="downloads.length === 0" class="empty-hint">暂无进行中的下载</div>
+          <div v-else class="download-list">
+            <div v-for="d in downloads" :key="d.gid" class="download-item">
+              <div class="download-title">
+                <span class="gid">[{{ d.gid }}]</span>
+                <span class="title">{{ d.title }}</span>
+                <span class="percent">{{ d.percent }}%</span>
+              </div>
+              <el-progress :percentage="d.percent" :stroke-width="12" :show-text="false" />
+              <div class="download-size">
+                {{ formatBytes(d.downloadedBytes) }} / {{ formatBytes(d.totalBytes) }}
+                <span v-if="d.sizeMb">（预估 {{ d.sizeMb }} MB）</span>
+              </div>
+            </div>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :xs="24" :lg="10">
+        <el-card shadow="hover">
+          <template #header>数据库状态</template>
+          <div v-if="dbStatus.connected">
+            <div class="db-row"><el-tag type="success">连接正常</el-tag></div>
+            <div class="db-row">总画廊数：{{ dbStatus.total ?? '-' }}</div>
+            <div class="db-row">总大小：{{ dbStatus.totalSizeGb ?? '-' }} GB</div>
+          </div>
+          <div v-else>
+            <div class="db-row"><el-tag type="danger">连接失败</el-tag></div>
+            <div v-if="dbStatus.error" class="db-row error">{{ dbStatus.error }}</div>
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- 图表区域 -->
     <el-row :gutter="20" class="chart-row">
       <el-col :xs="24" :lg="12">
@@ -54,11 +92,14 @@ import * as echarts from 'echarts'
 import { Files, FolderChecked, WarningFilled, Clock, CircleCheck, DataLine } from '@element-plus/icons-vue'
 import api from '../api'
 import { useTagStore } from '../stores/tagStore'
+import { getStatusMeta } from '../constants/status'
 
 const tagStore = useTagStore()
 tagStore.loadTranslations()
 
 const stats = ref({})
+const downloads = ref([])
+const dbStatus = ref({})
 const statusChartRef = ref()
 const sizeChartRef = ref()
 const timelineChartRef = ref()
@@ -70,6 +111,7 @@ let sizeChart = null
 let timelineChart = null
 let tagChart = null
 let refreshTimer = null
+let progressTimer = null
 
 const statCards = computed(() => [
   { label: '总画廊数', value: stats.value.total ?? '-', icon: markRaw(Files), color: '#409EFF' },
@@ -80,10 +122,6 @@ const statCards = computed(() => [
   { label: '总大小(GB)', value: stats.value.totalSizeGb ?? '-', icon: markRaw(DataLine), color: '#8B5CF6' }
 ])
 
-const statusColors = {
-  '未下载': '#909399', '下载中': '#409EFF', '已下载': '#67C23A',
-  '下载失败': '#F56C6C', '已入库': '#E6A23C', '阻断': '#F56C6C', '已忽略': '#C0C4CC'
-}
 
 const loadData = async () => {
   try {
@@ -109,7 +147,8 @@ const loadData = async () => {
         label: { show: true, formatter: '{b}\n{c}' },
         data: statusRes.data.map(item => ({
           ...item,
-          itemStyle: { color: statusColors[item.name] || '#409EFF' }
+          name: getStatusMeta(item.name).label,
+          itemStyle: { color: getStatusMeta(item.name).color }
         }))
       }]
     }, true)
@@ -172,9 +211,37 @@ const handleResize = () => {
   [statusChart, sizeChart, timelineChart, tagChart].forEach(c => c?.resize())
 }
 
+const formatBytes = (bytes) => {
+  const b = Number(bytes) || 0
+  if (b < 1024) return b + ' B'
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB'
+  if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB'
+  return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+}
+
+const loadDownloadProgress = async () => {
+  try {
+    const res = await api.get('/dashboard/download-progress')
+    downloads.value = res.data || []
+  } catch {
+    // handled by interceptor
+  }
+}
+
+const loadDbStatus = async () => {
+  try {
+    const res = await api.get('/dashboard/db-status')
+    dbStatus.value = res.data || {}
+  } catch {
+    // handled by interceptor
+  }
+}
+
 const startAutoRefresh = () => {
   if (refreshTimer) clearInterval(refreshTimer)
   refreshTimer = setInterval(loadData, 30000)
+  if (progressTimer) clearInterval(progressTimer)
+  progressTimer = setInterval(loadDownloadProgress, 3000)
 }
 
 onMounted(() => {
@@ -184,6 +251,8 @@ onMounted(() => {
   timelineChart = echarts.init(timelineChartRef.value)
   tagChart = echarts.init(tagChartRef.value)
   loadData()
+  loadDownloadProgress()
+  loadDbStatus()
   startAutoRefresh()
   window.addEventListener('resize', handleResize)
 })
@@ -192,6 +261,10 @@ onUnmounted(() => {
   if (refreshTimer) {
     clearInterval(refreshTimer)
     refreshTimer = null
+  }
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
   }
   window.removeEventListener('resize', handleResize)
   ;[statusChart, sizeChart, timelineChart, tagChart].forEach(c => c?.dispose())
@@ -257,4 +330,71 @@ onUnmounted(() => {
   height: 350px;
   width: 100%;
 }
+
+.empty-hint {
+  color: #909399;
+  text-align: center;
+  padding: 24px 0;
+  font-size: 14px;
+}
+
+.download-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.download-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.download-item:last-child {
+  border-bottom: none;
+}
+
+.download-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.download-title .gid {
+  color: #909399;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.download-title .title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #303133;
+  font-size: 14px;
+}
+
+.download-title .percent {
+  color: #409eff;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.download-size {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.db-row {
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #303133;
+}
+
+.db-row.error {
+  color: #f56c6c;
+  word-break: break-all;
+}
+
 </style>

@@ -7,6 +7,7 @@ public enum DownloadStatus {
     PENDING("未下载"),
     DOWNLOADING("下载中"),
     DOWNLOADED("已下载"),
+    PARTIAL("不完整"),
     DOWNLOAD_FAILED("下载失败"),
     IMPORTED("已入库"),
     BLOCKED("阻断"),

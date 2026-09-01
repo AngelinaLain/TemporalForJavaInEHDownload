@@ -2,6 +2,7 @@ package com.checker.temporalServices.workflows.impl;
 
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
+import com.checker.common.GalleryDeduplication;
 import com.checker.dto.SearchOptions;
 import com.checker.dto.WorkflowSettings;
 import com.checker.entity.EhGalleriesEntity;
@@ -22,6 +23,8 @@ import org.slf4j.Logger;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -62,51 +65,102 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     @Override
     public void executeAutomation(SearchOptions searchOptions) {
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
 
         // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
 
         // 爬虫抓取画廊列表
-        List<EhGalleriesEntity> galleries = scraperActivity.scrapeGalleries(searchOptions);
+        List<EhGalleriesEntity> galleries = deduplicateByGid(scraperActivity.scrapeGalleries(searchOptions));
         if (galleries == null || galleries.isEmpty()) {
             return;
         }
 
-        //  批量查询已有记录，按状态分类
+        // 批量查询已有记录，并先给同 GID 的历史记录回填本次抓到的作品指纹。
         List<Long> allGids = galleries.stream().map(EhGalleriesEntity::getGid).toList();
         List<EhGalleriesEntity> existingRecords = databaseActivity.getGalleriesByIds(allGids);
         Map<Long, EhGalleriesEntity> existingMap = existingRecords.stream()
                 .collect(Collectors.toMap(EhGalleriesEntity::getGid, Function.identity()));
 
-        /* 还没下载的 */
-        List<EhGalleriesEntity> toDownload = new ArrayList<>();
+        List<EhGalleriesEntity> knownGalleries = galleries.stream()
+                .filter(gallery -> existingMap.containsKey(gallery.getGid()))
+                .toList();
+        databaseActivity.updateGalleryDeduplicationMetadata(knownGalleries);
+
+        List<String> dedupeKeys = galleries.stream()
+                .filter(GalleryDeduplication::isIdentifiable)
+                .map(EhGalleriesEntity::getDedupeKey)
+                .toList();
+        Map<String, List<EhGalleriesEntity>> persistedPreferredByKey = databaseActivity
+                .findPreferredGalleriesByDedupeKeys(dedupeKeys)
+                .stream()
+                .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
+
+        /* 还没下载、需要参与本轮作品级去重的记录 */
+        List<EhGalleriesEntity> candidates = new ArrayList<>();
         /* 已下载但未入库 */
         List<EhGalleriesEntity> toCompensate = new ArrayList<>();
 
         for (EhGalleriesEntity gallery : galleries) {
             EhGalleriesEntity existing = existingMap.get(gallery.getGid());
             if (existing != null) {
-                String oldStatus = existing.getDownloadStatus();
-                if (DownloadStatus.IMPORTED.getValue().equals(oldStatus) ||
-                    DownloadStatus.DOWNLOADING.getValue().equals(oldStatus) ||
-                    DownloadStatus.BLOCKED.getValue().equals(oldStatus)) {
-                    log.info("⏭️ 画廊已被处理过，状态为: {}，跳过。GID: {}", oldStatus, gallery.getGid());
+                if (hasStatus(existing, DownloadStatus.IMPORTED) ||
+                    hasStatus(existing, DownloadStatus.DOWNLOADING) ||
+                    hasStatus(existing, DownloadStatus.BLOCKED)) {
+                    log.info("⏭️ 画廊已被处理过，状态为: {}，跳过。GID: {}", existing.getDownloadStatus(), gallery.getGid());
                     continue;
                 }
-                if (DownloadStatus.DOWNLOADED.getValue().equals(oldStatus)) {
+                if (hasStatus(existing, DownloadStatus.DOWNLOADED)) {
                     log.info("🚀 画廊已下载但未入库，加入补偿队列。GID: {}", gallery.getGid());
                     toCompensate.add(gallery);
                     continue;
                 }
             }
-            toDownload.add(gallery);
+            candidates.add(gallery);
         }
 
-        // 批量保存新画廊到数据库
-        if (!toDownload.isEmpty()) {
-            databaseActivity.saveGalleriesBatch(toDownload);
+        List<EhGalleriesEntity> toDownload = new ArrayList<>();
+        Map<String, List<EhGalleriesEntity>> candidatesByKey = candidates.stream()
+                .filter(GalleryDeduplication::isIdentifiable)
+                .collect(Collectors.groupingBy(EhGalleriesEntity::getDedupeKey));
+
+        // 元数据不足的画廊不会被自动归组，仍按原流程下载。
+        candidates.stream()
+                .filter(gallery -> !GalleryDeduplication.isIdentifiable(gallery))
+                .forEach(toDownload::add);
+
+        for (Map.Entry<String, List<EhGalleriesEntity>> entry : candidatesByKey.entrySet()) {
+            List<EhGalleriesEntity> group = entry.getValue();
+            Set<Long> currentGids = group.stream().map(EhGalleriesEntity::getGid).collect(Collectors.toSet());
+            List<EhGalleriesEntity> persisted = persistedPreferredByKey
+                    .getOrDefault(entry.getKey(), List.of())
+                    .stream()
+                    .filter(gallery -> !currentGids.contains(gallery.getGid()))
+                    .toList();
+
+            if (!persisted.isEmpty()) {
+                EhGalleriesEntity preferred = choosePersistedPreferred(persisted);
+                group.forEach(gallery -> markAsDuplicate(gallery, preferred));
+                log.info("🔁 作品已有首选版本，跳过 {} 个汉化版本，保留 GID: {}", group.size(), preferred.getGid());
+                continue;
+            }
+
+            EhGalleriesEntity preferred = GalleryDeduplication.choosePreferred(group);
+            toDownload.add(preferred);
+            group.stream()
+                    .filter(gallery -> !gallery.getGid().equals(preferred.getGid()))
+                    .forEach(gallery -> markAsDuplicate(gallery, preferred));
+            if (group.size() > 1) {
+                log.info("🔁 发现 {} 个同作品汉化版本，选择 GID: {}（评分 {}，{} 页）",
+                        group.size(), preferred.getGid(), preferred.getRating(), preferred.getPageCount());
+            }
         }
 
+        // 首选版本和被跳过的版本都入库；后者以“已忽略 + duplicate_of_gid”保留供前端查看。
+        if (!candidates.isEmpty()) {
+            databaseActivity.saveGalleriesBatch(candidates);
+        }
         // 合并任务列表：补偿任务优先（已下载，只需入库）
         List<GalleryTask> tasks = new ArrayList<>();
         for (EhGalleriesEntity g : toCompensate) {
@@ -118,6 +172,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
         // 滑动窗口并发控制：派发子工作流
         List<Promise<Void>> running = new ArrayList<>();
+        int startedChildren = 0;
 
         for (GalleryTask task : tasks) {
             if (fatalErrorOccurred) break;
@@ -144,6 +199,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 }
             });
             running.add(promise);
+            startedChildren++;
         }
 
         // 等待所有剩余子工作流完成
@@ -155,9 +211,62 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             }
         }
 
-        notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
+        if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+            // 兼容正在运行的旧 Workflow 历史。
+            notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
+        } else {
+            List<Long> taskGids = tasks.stream().map(task -> task.gallery.getGid()).toList();
+            List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(taskGids);
+            String content = WorkflowSteps.buildBatchNotificationContent(
+                    "抓取流程", galleries.size(), tasks.size(), startedChildren,
+                    fatalErrorOccurred, finalStates);
+            notificationActivity.sendEmailAlert("抓取流程汇总", content);
+        }
     }
 
+    private static List<EhGalleriesEntity> deduplicateByGid(List<EhGalleriesEntity> galleries) {
+        if (galleries == null || galleries.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, EhGalleriesEntity> unique = new LinkedHashMap<>();
+        for (EhGalleriesEntity gallery : galleries) {
+            if (gallery != null && gallery.getGid() != null) {
+                unique.putIfAbsent(gallery.getGid(), gallery);
+            }
+        }
+        return new ArrayList<>(unique.values());
+    }
+
+    private static boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
+        return status.getValue().equals(gallery.getDownloadStatus()) || status.name().equals(gallery.getDownloadStatus());
+    }
+
+    private static EhGalleriesEntity choosePersistedPreferred(List<EhGalleriesEntity> galleries) {
+        int bestStatusPriority = galleries.stream()
+                .mapToInt(EHAutomationWorkflowImpl::statusPriority)
+                .max()
+                .orElse(0);
+        List<EhGalleriesEntity> equallyUsable = galleries.stream()
+                .filter(gallery -> statusPriority(gallery) == bestStatusPriority)
+                .toList();
+        return GalleryDeduplication.choosePreferred(equallyUsable);
+    }
+
+    private static int statusPriority(EhGalleriesEntity gallery) {
+        if (hasStatus(gallery, DownloadStatus.IMPORTED)) return 4;
+        if (hasStatus(gallery, DownloadStatus.DOWNLOADING)) return 3;
+        if (hasStatus(gallery, DownloadStatus.DOWNLOADED)) return 2;
+        if (hasStatus(gallery, DownloadStatus.PENDING)) return 1;
+        return 0;
+    }
+
+    private static void markAsDuplicate(EhGalleriesEntity gallery, EhGalleriesEntity preferred) {
+        gallery.setDuplicateOfGid(preferred.getGid());
+        if (gallery.getDedupeConfidence() == null) {
+            gallery.setDedupeConfidence(preferred.getDedupeConfidence());
+        }
+        gallery.setDownloadStatus(DownloadStatus.IGNORED.getValue());
+    }
     /** 内部任务包装：标记画廊是否仅需补偿 */
     private record GalleryTask(EhGalleriesEntity gallery, boolean compensateOnly) {}
 }

@@ -20,6 +20,14 @@
           <el-icon><Operation /></el-icon>
           <template #title>工作流操作</template>
         </el-menu-item>
+        <el-menu-item index="/monitoring">
+          <el-icon><Monitor /></el-icon>
+          <template #title>监控大盘</template>
+        </el-menu-item>
+        <el-menu-item index="/workflows">
+          <el-icon><Connection /></el-icon>
+          <template #title>流程监控</template>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -60,7 +68,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

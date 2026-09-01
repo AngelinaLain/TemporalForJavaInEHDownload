@@ -5,10 +5,13 @@ import com.checker.common.DownloadStatus;
 import com.checker.common.ErrorType;
 import com.checker.common.SynologyTaskStatus;
 import com.checker.dto.ArchiveDownloadInfo;
+import com.checker.dto.SynologyDownloadResult;
 import com.checker.dto.WorkflowSettings;
 import com.checker.entity.EhGalleriesEntity;
+import com.checker.temporalServices.activities.AiActivity;
 import com.checker.temporalServices.activities.DatabaseActivity;
 import com.checker.temporalServices.activities.KomgaActivity;
+import com.checker.temporalServices.activities.LocalImportActivity;
 import com.checker.temporalServices.activities.NotificationActivity;
 import com.checker.temporalServices.activities.ScraperActivity;
 import com.checker.temporalServices.activities.SynologyActivity;
@@ -47,11 +50,18 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
     private final ScraperActivity scraperActivity = Workflow.newActivityStub(ScraperActivity.class, WorkflowSteps.SCRAPER_OPTIONS);
     private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
     private final SynologyActivity synologyActivity = Workflow.newActivityStub(SynologyActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    private final SynologyActivity synologyLongPollActivity = Workflow.newActivityStub(SynologyActivity.class, WorkflowSteps.SYNO_LONG_OPTIONS);
     private final KomgaActivity komgaActivity = Workflow.newActivityStub(KomgaActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
     private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    private final AiActivity aiActivity = Workflow.newActivityStub(AiActivity.class, WorkflowSteps.AI_OPTIONS);
+    private final LocalImportActivity localImportActivity = Workflow.newActivityStub(LocalImportActivity.class, WorkflowSteps.LOCAL_IMPORT_OPTIONS);
 
     @Override
     public void processSingleGallery(EhGalleriesEntity gallery, boolean compensateOnly, WorkflowSettings settings) {
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
+        boolean waitForBatchCompletion = batchNotificationVersion != Workflow.DEFAULT_VERSION;
+
         if (compensateOnly) {
             log.info("🚀 [补偿] 画廊已下载但未入库，GID: {}", gallery.getGid());
             try {
@@ -62,25 +72,10 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                         "⚠️ Komga 补偿入库超时", "尝试补偿入库依然失败: " + gallery.getTitle(), 
                         settings.getKomgaImportMaxRetries(), settings.getKomgaImportPollIntervalSeconds()
                 ).get();*/
-                ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
-                        .setWorkflowId("komga-import-" + gallery.getGid())
-                        // 父工作流结束时，不取消子工作流，让它在后台继续活下去
-                        .setParentClosePolicy(io.temporal.api.enums.v1.ParentClosePolicy.PARENT_CLOSE_POLICY_ABANDON)
-                        .build();
-                KomgaImportWorkflow komgaWorkflow = Workflow.newChildWorkflowStub(KomgaImportWorkflow.class, childOptions);
-                // 2. 异步调用，注意绝对不能加 .get() 阻塞自己
-                procedure(() -> komgaWorkflow.waitForImport(
-                        gallery,
-                        settings.getKomgaImportMaxRetries(),
-                        settings.getKomgaImportPollIntervalSeconds(),
+                runKomgaImport(gallery, settings,
                         "⚠️ Komga 入库超时",
-                        "未识别或尝试补偿入库失败: " + gallery.getTitle()
-                ));
-                // 3.等待子工作流在 Temporal 服务端“启动”成功
-                // 确保后台任务已被服务器接管，随后当前下载工作流就可以放心地立刻 return 结束
-                Promise<WorkflowExecution> executionPromise =
-                        Workflow.getWorkflowExecution(komgaWorkflow);
-                executionPromise.get();
+                        "未识别或尝试补偿入库失败: " + gallery.getTitle(),
+                        waitForBatchCompletion);
             } catch (Exception e) {
                 log.error("补偿机制发生异常 GID: " + gallery.getGid(), e);
             }
@@ -115,51 +110,49 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
 
                 databaseActivity.updateGallerySize(gallery.getGid(), sizeMb);
 
+                // 本地模式（默认）：本地下载 + 注入 ComicInfo.xml + 上传群晖，元数据由 Komga 扫描时自动识别
+                if (isLocalMode(settings)) {
+                    processLocalImport(gallery, downloadUrl, sizeMb);
+                    return true;
+                }
+
                 long estimatedWaitSeconds = Math.max((long) ((sizeMb / 3.0) * 1.1), 30);
 
-                Long synologyTaskId = synologyActivity.pushToSynology(downloadUrl, gallery.getGid(), null);
+                synologyActivity.pushToSynology(downloadUrl, gallery.getGid(), null);
                 databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADING.getValue());
 
-                log.info("预估文件大小 {} MB，休眠 {} 秒后轮询群晖...", sizeMb, estimatedWaitSeconds);
-                Workflow.sleep(Duration.ofSeconds(estimatedWaitSeconds));
+                log.info("预估文件大小 {} MB，把等待与轮询下沉到 Synology 长轮询 Activity（48h 超时 + 5min 心跳）...", sizeMb);
+                // 等待 + 轮询整体在 Activity 内部执行，Workflow 历史不再因 sleep 轮询膨胀
+                SynologyDownloadResult result = synologyLongPollActivity
+                        .waitForDownloadComplete(gallery.getGid(), downloadUrl, estimatedWaitSeconds);
 
-                while (true) {
-                    SynologyTaskStatus status = synologyActivity.checkSynologyTaskStatus(synologyTaskId, downloadUrl);
-
-                    if (status == SynologyTaskStatus.FINISHED) {
-                        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADED.getValue());
-
-                        ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
-                                .setWorkflowId("komga-import-" + gallery.getGid())
-                                // 父工作流结束时，不取消子工作流，让它在后台继续活下去
-                                .setParentClosePolicy(ParentClosePolicy.PARENT_CLOSE_POLICY_ABANDON)
-                                .build();
-                        KomgaImportWorkflow komgaWorkflow = Workflow.newChildWorkflowStub(KomgaImportWorkflow.class, childOptions);
-                        // 2. 异步调用，注意绝对不能加 .get() 阻塞自己
-                        procedure(() -> komgaWorkflow.waitForImport(
-                                gallery,
-                                settings.getKomgaImportMaxRetries(),
-                                settings.getKomgaImportPollIntervalSeconds(),
-                                "⚠️ Komga 入库超时",
-                                "未识别或尝试补偿入库失败: " + gallery.getTitle()
-                        ));
-                        // 3. 等待子工作流在 Temporal 服务端“启动”成功
-                        // 确保后台任务已被服务器接管，随后当前下载工作流就可以放心地立刻 return 结束
-                        Promise<WorkflowExecution> executionPromise =
-                                Workflow.getWorkflowExecution(komgaWorkflow);
-                        executionPromise.get();
-
-                        return true; // 成功，退出 retry 块
-
-                    } else if (status == SynologyTaskStatus.ERROR) {
-                        log.warn("⚠️ 拦截到群晖异常或伪装文件，抛出异常触发 Temporal 重试...");
-                        // 抛出 ApplicationFailure 异常。
-                        // Temporal 捕获到后，会自动等待 15 秒并重新执行这段 Lambda 代码
-                        throw ApplicationFailure.newFailure("Synology returned error or fake file", ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
-                    } else {
-                        Workflow.sleep(Duration.ofSeconds(20));
+                if (result.getStatus() == SynologyTaskStatus.FINISHED) {
+                    // PARTIAL 完整性校验：实际文件大小显著小于预估大小（或与页数严重不符）→ 标记“不完整”待人工审核
+                    if (isPartialDownload(sizeMb, result.getActualSizeMb(), gallery)) {
+                        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.PARTIAL.getValue());
+                        if (!waitForBatchCompletion) {
+                            notificationActivity.sendEmailAlert("⚠️ 下载文件疑似不完整",
+                                    "画廊: " + gallery.getTitle()
+                                            + "\nGID: " + gallery.getGid()
+                                            + "\n预估大小: " + sizeMb + " MB"
+                                            + "\n实际大小: " + result.getActualSizeMb() + " MB"
+                                            + "\n已标记为 PARTIAL（不完整）");
+                        }
+                        return true; // 视作本轮流程结束，进入人工审核队列
                     }
+
+                    databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADED.getValue());
+
+                    runKomgaImport(gallery, settings,
+                            "⚠️ Komga 入库超时",
+                            "未识别或尝试补偿入库失败: " + gallery.getTitle(),
+                            waitForBatchCompletion);
+
+                    return true; // 成功，退出 retry 块
                 }
+                // SYNOLOGY_DOWNLOAD_ERROR 已列入 doNotRetry，Activity 内部会直接上抛
+                throw ApplicationFailure.newFailure("Synology returned error or fake file",
+                        ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
             });
         } catch (TemporalFailure e) {
             // 收尾处理：当重试次数耗尽，或者遇到被 DoNotRetry 拦截的致命异常时，会走到这里
@@ -171,7 +164,10 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                         ErrorType.COOKIE_EXPIRED.getCode().equals(errorType) ||
                         ErrorType.ARCHIVE_LINK_EXTRACT_FAILED.getCode().equals(errorType)) {
                     databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.BLOCKED.getValue());
-                    notificationActivity.sendEmailAlert("❌ EHentai 抓取阻断", "致命错误: " + appFailure.getOriginalMessage());
+                    if (!waitForBatchCompletion) {
+                        notificationActivity.sendEmailAlert(
+                                "❌ EHentai 抓取阻断", "致命错误: " + appFailure.getOriginalMessage());
+                    }
                     throw e; // 抛出异常阻断父工作流
                 }
                 if (ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode().equals(errorType)) {
@@ -183,7 +179,121 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
             // 无论是 3 次 SYNOLOGY_DOWNLOAD_ERROR 还是 Activity 的网络异常耗尽了次数，都在此处兜底
             log.error("❌ 经过最大次数重试后仍然失败，GID: {}", gallery.getGid());
             databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOAD_FAILED.getValue());
-            notificationActivity.sendEmailAlert("❌ 群晖下载异常", "画廊: " + gallery.getTitle() + " 下载连续失败，已达最大重试次数");
+            if (!waitForBatchCompletion) {
+                notificationActivity.sendEmailAlert(
+                        "❌ 群晖下载异常", "画廊: " + gallery.getTitle() + " 下载连续失败，已达最大重试次数");
+            }
         }
+    }
+
+    /**
+     * 新流程同步等待 Komga 子流程结束，使最外层父流程能在所有层级真正完成后统一发信。
+     * 旧流程继续沿用 ABANDON + 异步启动，以兼容已存在的 Temporal 历史。
+     */
+    private void runKomgaImport(EhGalleriesEntity gallery, WorkflowSettings settings,
+                                String timeoutSubject, String timeoutContent,
+                                boolean waitForBatchCompletion) {
+        ChildWorkflowOptions.Builder options = ChildWorkflowOptions.newBuilder()
+                .setWorkflowId("komga-import-" + gallery.getGid());
+        if (!waitForBatchCompletion) {
+            options.setParentClosePolicy(ParentClosePolicy.PARENT_CLOSE_POLICY_ABANDON);
+        }
+        KomgaImportWorkflow komgaWorkflow = Workflow.newChildWorkflowStub(
+                KomgaImportWorkflow.class, options.build());
+
+        if (waitForBatchCompletion) {
+            komgaWorkflow.waitForImport(
+                    gallery,
+                    settings.getKomgaImportMaxRetries(),
+                    settings.getKomgaImportPollIntervalSeconds(),
+                    timeoutSubject,
+                    timeoutContent);
+            return;
+        }
+
+        procedure(() -> komgaWorkflow.waitForImport(
+                gallery,
+                settings.getKomgaImportMaxRetries(),
+                settings.getKomgaImportPollIntervalSeconds(),
+                timeoutSubject,
+                timeoutContent));
+        Promise<WorkflowExecution> executionPromise = Workflow.getWorkflowExecution(komgaWorkflow);
+        executionPromise.get();
+    }
+
+    /**
+     * 是否使用本地下载 + ComicInfo 注入模式。
+     * 默认（未显式配置 downloadstation）即为本地模式。
+     */
+    private static boolean isLocalMode(WorkflowSettings settings) {
+        return !"downloadstation".equalsIgnoreCase(settings.getDownloadMode());
+    }
+
+    /**
+     * 本地导入模式：
+     * <ol>
+     *   <li>拉取 EHentai 标签 + AI 生成简介（供 ComicInfo 注入；失败不阻塞下载）；</li>
+     *   <li>本地下载 + 注入 ComicInfo.xml + 上传群晖（长 Activity，48h 超时 + 心跳）；</li>
+     *   <li>触发 Komga 扫描，元数据由 ComicInfo.xml 自动识别，直接标记 IMPORTED。</li>
+     * </ol>
+     */
+    private void processLocalImport(EhGalleriesEntity gallery, String downloadUrl, double sizeMb) {
+        // 元数据 / AI 简介获取失败不阻塞下载，ComicInfo 部分字段缺省仍可入库
+        try {
+            komgaActivity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
+            EhGalleriesEntity withTags = databaseActivity.getGalleryById(gallery.getGid());
+            if (withTags != null && withTags.getTags() != null && !withTags.getTags().isEmpty()) {
+                String summary = aiActivity.generateGallerySummary(gallery.getTitle(), withTags.getTags());
+                if (summary != null && !summary.isBlank()) {
+                    databaseActivity.updateGallerySummary(gallery.getGid(), summary);
+                    log.info("🤖 AI 简介生成成功, GID: {}", gallery.getGid());
+                }
+            }
+        } catch (Exception metaEx) {
+            log.warn("⚠️ 元数据/AI 简介获取失败，继续下载（ComicInfo 部分字段缺省）, GID: {}, 原因: {}",
+                    gallery.getGid(), metaEx.getMessage());
+        }
+
+        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOADING.getValue());
+        log.info("🚀 本地下载 + ComicInfo 注入模式，GID: {}, 预估 {} MB", gallery.getGid(), sizeMb);
+
+        // 下载 → 注入 ComicInfo.xml → 重命名 .cbz → 上传群晖（内部带心跳）
+        localImportActivity.localDownloadAndImport(downloadUrl, gallery.getGid(), sizeMb);
+
+        // 触发 Komga 扫描，Komga 会读取 ComicInfo.xml 自动写入标题/系列/简介/标签
+        komgaActivity.triggerKomgaLibraryScan();
+        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.IMPORTED.getValue());
+        log.info("🎉 本地导入完成并标记 IMPORTED, GID: {}", gallery.getGid());
+    }
+
+    /**
+     * PARTIAL 完整性校验：
+     * <ol>
+     *   <li>实际文件大小显著小于预估大小（不足 60%），判定下载不完整；</li>
+     *   <li>若已知页数，则校验平均每页大小是否低于 100KB（漫画单页通常 ≥ 300KB），
+     *       明显偏低说明压缩包内容缺失。</li>
+     * </ol>
+     * 任一条件满足即标记 PARTIAL，进入人工审核队列。
+     */
+    private static boolean isPartialDownload(double expectedSizeMb, Double actualSizeMb, EhGalleriesEntity gallery) {
+        if (actualSizeMb == null || actualSizeMb <= 0) {
+            return false;
+        }
+        // 大小比值校验：实际不足预估 60%
+        if (expectedSizeMb > 0 && actualSizeMb < expectedSizeMb * 0.6) {
+            log.warn("⚠️ 大小校验失败：实际 {} MB 远小于预估 {} MB，标记 PARTIAL", actualSizeMb, expectedSizeMb);
+            return true;
+        }
+        // 页数校验：平均每页小于 100KB 视为异常
+        Integer pageCount = gallery.getPageCount();
+        if (pageCount != null && pageCount > 0) {
+            double avgKbPerPage = actualSizeMb * 1024.0 / pageCount;
+            if (avgKbPerPage < 100) {
+                log.warn("⚠️ 页数校验失败：平均每页 {:.1f} KB（{} MB / {} 页）偏低，标记 PARTIAL",
+                        avgKbPerPage, actualSizeMb, pageCount);
+                return true;
+            }
+        }
+        return false;
     }
 }

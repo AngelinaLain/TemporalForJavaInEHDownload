@@ -26,4 +26,6 @@ public class WorkflowSettings implements Serializable {
     private int downloadPollIntervalMinutes = 5;
     @Builder.Default
     private int downloadCooldownSeconds = 10;
+    @Builder.Default
+    private String downloadMode = "local";
 }
