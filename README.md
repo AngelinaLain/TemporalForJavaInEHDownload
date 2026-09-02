@@ -179,6 +179,8 @@ docker compose up -d --build
 docker compose --profile observability up -d --build
 ```
 
+Grafana 会自动预置 Prometheus、Loki 和 `GalleryImport Monitoring` 大盘；登录管理前端后进入 `/monitoring` 即可直接打开。
+
 默认端口：
 
 | 服务 | 地址 |
@@ -186,7 +188,7 @@ docker compose --profile observability up -d --build
 | 管理前端 | `http://localhost:8002` |
 | 后端 API | `http://localhost:8001` |
 | Prometheus | `http://localhost:9090` |
-| Grafana | `http://localhost:3000` |
+| Grafana | `http://localhost:3000/d/galleryimport-monitoring/galleryimport-monitoring` |
 | Zipkin | `http://localhost:9411` |
 | Loki | `http://localhost:3100` |
 
