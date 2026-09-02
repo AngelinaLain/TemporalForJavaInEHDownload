@@ -1,0 +1,14 @@
+# Grafana 仪表盘预置：从 /etc/grafana/dashboards 加载 JSON 仪表盘
+apiVersion: 1
+
+providers:
+  - name: galleryimport
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

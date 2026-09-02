@@ -10,8 +10,12 @@
 
     <el-tabs v-model="activeTab" class="monitoring-tabs">
       <el-tab-pane label="Grafana 监控大盘" name="grafana">
-        <toolbar :title="'Grafana'" :url="OBSERVABILITY.grafanaUrl" />
-        <iframe :src="OBSERVABILITY.grafanaUrl" class="monitor-frame" />
+        <toolbar :title="'GalleryImport Monitoring'" :url="OBSERVABILITY.grafanaDashboardUrl" />
+        <iframe
+          :src="OBSERVABILITY.grafanaDashboardEmbedUrl"
+          title="GalleryImport Grafana monitoring dashboard"
+          class="monitor-frame"
+        />
       </el-tab-pane>
 
       <el-tab-pane label="Prometheus 指标" name="prometheus">

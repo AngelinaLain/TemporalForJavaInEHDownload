@@ -54,6 +54,10 @@ management:
     web:
       exposure:
         include: health,info,prometheus,metrics
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
   tracing:
     sampling:
       probability: ${TRACING_SAMPLE_RATE:0.0}

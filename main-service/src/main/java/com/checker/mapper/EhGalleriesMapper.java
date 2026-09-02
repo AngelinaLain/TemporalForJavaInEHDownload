@@ -56,6 +56,17 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
     List<Map<String, Object>> countByDownloadStatus();
 
     /**
+     * Prometheus 下载进度指标所需的聚合值。只聚合当前下载中的记录，
+     * 避免为每个画廊创建长期存在的高基数时间序列。
+     */
+    @Select("SELECT COUNT(*) AS active, " +
+            "COALESCE(SUM(downloaded_bytes), 0) AS downloaded_bytes, " +
+            "COALESCE(SUM(file_size_mb * 1024 * 1024), 0) AS total_bytes " +
+            "FROM eh_galleries " +
+            "WHERE download_status IN ('DOWNLOADING', '下载中')")
+    Map<String, Object> getDownloadProgressMetrics();
+
+    /**
      * 数据库侧计算文件大小分布，避免加载所有画廊实体到 JVM。
      */
     @Select("SELECT " +

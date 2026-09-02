@@ -230,9 +230,13 @@ cd 前端 && npm install && npm run dev   # http://127.0.0.1:5173
 docker compose up -d
 # backend  → :8001
 # frontend → :8002（Nginx 反代 /api → backend:8001）
+
+# 同时启动 Prometheus、Loki、Promtail、Grafana 与 Zipkin
+docker compose --profile observability up -d
 ```
 
 > 注：`docker-compose.yml` 现编排主服务、爬虫 Worker、AI 服务和前端；Nacos、Temporal、MySQL 仍需独立部署。
+> Grafana 会自动预置 Prometheus/Loki 数据源和 `GalleryImport Monitoring` 大盘；登录前端后进入“监控大盘”即可直接打开。
 
 ### 6. 访问地址
 
@@ -243,6 +247,8 @@ docker compose up -d
 | OpenAPI JSON | `http://127.0.0.1:8001/v3/api-docs` |
 | 前端（Docker） | `http://127.0.0.1:8002` |
 | 前端（dev） | `http://127.0.0.1:5173` |
+| Grafana（observability profile） | `http://127.0.0.1:3000/d/galleryimport-monitoring/galleryimport-monitoring` |
+| Prometheus（observability profile） | `http://127.0.0.1:9090` |
 
 ## 认证
 

@@ -166,6 +166,10 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
   tracing:
     sampling:
       # 默认 0 不采样（避免本地无 Zipkin 时刷屏报错）；需要链路追踪时设 TRACING_SAMPLE_RATE=1.0 并启动 Zipkin
