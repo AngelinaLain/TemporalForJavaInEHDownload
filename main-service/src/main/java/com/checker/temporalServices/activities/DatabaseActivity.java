@@ -57,6 +57,12 @@ public interface DatabaseActivity {
     void updateGalleryStatus(Long gid, String status);
 
     /**
+     * 持久化 Komga 入库确认进度，供人工复核页面查看。
+     */
+    @ActivityMethod
+    void recordKomgaConfirmation(Long gid, String status, String reason, String candidateBookIds);
+
+    /**
      * 查询所有下载失败或已下载但未入库的画廊
      */
     @ActivityMethod

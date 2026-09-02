@@ -172,6 +172,18 @@ public class EhGalleriesEntity implements Serializable {
      */
     private String komgaBookId;
 
+    /** Komga 入库确认累计查询次数。 */
+    private Integer komgaConfirmationAttempts;
+
+    /** 最近一次 Komga 入库确认时间。 */
+    private Date komgaLastConfirmationAt;
+
+    /** 最近一次 Komga 入库确认原因或错误信息。 */
+    private String komgaConfirmationReason;
+
+    /** 最近一次确认返回的候选 BookID，逗号分隔，仅供人工复核展示。 */
+    private String komgaCandidateBookIds;
+
     /**
      * 文件大小
      */

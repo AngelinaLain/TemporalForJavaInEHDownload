@@ -112,7 +112,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
 
                 // 本地模式（默认）：本地下载 + 注入 ComicInfo.xml + 上传群晖，元数据由 Komga 扫描时自动识别
                 if (isLocalMode(settings)) {
-                    processLocalImport(gallery, downloadUrl, sizeMb);
+                    processLocalImport(gallery, downloadUrl, sizeMb, settings, waitForBatchCompletion);
                     return true;
                 }
 
@@ -234,10 +234,11 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
      * <ol>
      *   <li>拉取 EHentai 标签 + AI 生成简介（供 ComicInfo 注入；失败不阻塞下载）；</li>
      *   <li>本地下载 + 注入 ComicInfo.xml + 上传群晖（长 Activity，48h 超时 + 心跳）；</li>
-     *   <li>触发 Komga 扫描，元数据由 ComicInfo.xml 自动识别，直接标记 IMPORTED。</li>
+     *   <li>进入 WAITING_KOMGA，复用 Komga 子工作流确认唯一 BookID 后再标记 IMPORTED。</li>
      * </ol>
      */
-    private void processLocalImport(EhGalleriesEntity gallery, String downloadUrl, double sizeMb) {
+    private void processLocalImport(EhGalleriesEntity gallery, String downloadUrl, double sizeMb,
+                                    WorkflowSettings settings, boolean waitForBatchCompletion) {
         // 元数据 / AI 简介获取失败不阻塞下载，ComicInfo 部分字段缺省仍可入库
         try {
             komgaActivity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
@@ -260,10 +261,20 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
         // 下载 → 注入 ComicInfo.xml → 重命名 .cbz → 上传群晖（内部带心跳）
         localImportActivity.localDownloadAndImport(downloadUrl, gallery.getGid(), sizeMb);
 
-        // 触发 Komga 扫描，Komga 会读取 ComicInfo.xml 自动写入标题/系列/简介/标签
-        komgaActivity.triggerKomgaLibraryScan();
-        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.IMPORTED.getValue());
-        log.info("🎉 本地导入完成并标记 IMPORTED, GID: {}", gallery.getGid());
+        int confirmationVersion = Workflow.getVersion(
+                "local-komga-import-confirmation", Workflow.DEFAULT_VERSION, 1);
+        if (confirmationVersion == Workflow.DEFAULT_VERSION) {
+            // 兼容已经运行的旧 Temporal 历史。
+            komgaActivity.triggerKomgaLibraryScan();
+            databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.IMPORTED.getValue());
+            return;
+        }
+
+        databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.WAITING_KOMGA.getValue());
+        runKomgaImport(gallery, settings,
+                "⚠️ Komga 入库超时",
+                "本地上传完成，但 Komga 未确认入库: " + gallery.getTitle(),
+                waitForBatchCompletion);
     }
 
     /**

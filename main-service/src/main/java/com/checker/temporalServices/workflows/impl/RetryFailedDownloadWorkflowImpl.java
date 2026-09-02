@@ -72,7 +72,9 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                 running.removeIf(Promise::isCompleted);
             }
 
-            boolean compensateOnly = DownloadStatus.DOWNLOADED.getValue().equals(gallery.getDownloadStatus());
+            boolean compensateOnly = DownloadStatus.DOWNLOADED.getValue().equals(gallery.getDownloadStatus())
+                    || DownloadStatus.WAITING_KOMGA.getValue().equals(gallery.getDownloadStatus())
+                    || DownloadStatus.KOMGA_IMPORT_FAILED.getValue().equals(gallery.getDownloadStatus());
             if (dedupeV2Version != Workflow.DEFAULT_VERSION
                     && !compensateOnly
                     && !databaseActivity.claimGalleryForDownload(gallery.getGid())) {

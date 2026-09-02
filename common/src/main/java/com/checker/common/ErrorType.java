@@ -17,6 +17,10 @@ public enum ErrorType {
      */
     KOMGA_METADATA_PATCH_EXCEPTION,
     /**
+     * Komga 扫描触发或查询失败
+     */
+    KOMGA_SCAN_FAILED,
+    /**
      * Synology创建失败
      */
     SYNOLOGY_CREATE_FAILED,

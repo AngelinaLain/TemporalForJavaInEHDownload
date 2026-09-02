@@ -19,7 +19,7 @@ public class WorkflowSettings implements Serializable {
     @Builder.Default
     private int maxConcurrency = 2;
     @Builder.Default
-    private int komgaImportMaxRetries = 20;
+    private int komgaImportMaxRetries = 40;
     @Builder.Default
     private int komgaImportPollIntervalSeconds = 15;
     @Builder.Default

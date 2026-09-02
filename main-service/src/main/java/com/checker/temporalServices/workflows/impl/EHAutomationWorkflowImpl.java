@@ -107,11 +107,13 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             if (existing != null) {
                 if (hasStatus(existing, DownloadStatus.IMPORTED) ||
                     hasStatus(existing, DownloadStatus.DOWNLOADING) ||
+                    hasStatus(existing, DownloadStatus.WAITING_KOMGA) ||
                     hasStatus(existing, DownloadStatus.BLOCKED)) {
                     log.info("⏭️ 画廊已被处理过，状态为: {}，跳过。GID: {}", existing.getDownloadStatus(), gallery.getGid());
                     continue;
                 }
-                if (hasStatus(existing, DownloadStatus.DOWNLOADED)) {
+                if (hasStatus(existing, DownloadStatus.DOWNLOADED)
+                        || hasStatus(existing, DownloadStatus.KOMGA_IMPORT_FAILED)) {
                     log.info("🚀 画廊已下载但未入库，加入补偿队列。GID: {}", gallery.getGid());
                     toCompensate.add(gallery);
                     continue;
@@ -280,8 +282,10 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
     private static int statusPriority(EhGalleriesEntity gallery) {
         if (hasStatus(gallery, DownloadStatus.IMPORTED)) return 4;
-        if (hasStatus(gallery, DownloadStatus.DOWNLOADING)) return 3;
-        if (hasStatus(gallery, DownloadStatus.DOWNLOADED)) return 2;
+        if (hasStatus(gallery, DownloadStatus.DOWNLOADING)
+                || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)) return 3;
+        if (hasStatus(gallery, DownloadStatus.DOWNLOADED)
+                || hasStatus(gallery, DownloadStatus.KOMGA_IMPORT_FAILED)) return 2;
         if (hasStatus(gallery, DownloadStatus.PENDING)) return 1;
         return 0;
     }

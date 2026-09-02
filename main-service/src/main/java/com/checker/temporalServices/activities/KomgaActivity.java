@@ -1,5 +1,6 @@
 package com.checker.temporalServices.activities;
 
+import com.checker.dto.KomgaBookMatchResult;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
@@ -22,6 +23,12 @@ public interface KomgaActivity {
      */
     @ActivityMethod
     String findBookInKomga(Long gid);
+
+    /**
+     * 按数据库文件名、GID、目标系列和目标库做唯一匹配。
+     */
+    @ActivityMethod
+    KomgaBookMatchResult findExactBookInKomga(Long gid);
 
     /**
      * PATCH 元数据（标题、标签）到 Komga，并将 download_status 更新为"已入库"

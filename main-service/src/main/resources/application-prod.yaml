@@ -72,7 +72,7 @@ eh-config:
     # 最大子工作流个数
     max-concurrency: ${WORKFLOW_MAX_CONCURRENCY:6}
     # komga最大尝试次数
-    komga-import-max-retries: ${KOMGA_IMPORT_MAX_RETRIES:20}
+    komga-import-max-retries: ${KOMGA_IMPORT_MAX_RETRIES:40}
     # 多少时间轮询komga的元数据状态 [秒]
     komga-import-poll-interval-seconds: ${KOMGA_IMPORT_POLL_INTERVAL_SECONDS:15}
     # 多少时间去群晖检查是否下载完成 [分钟]

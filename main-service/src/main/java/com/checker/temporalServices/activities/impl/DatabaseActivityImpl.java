@@ -292,6 +292,8 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     private boolean markUnidentifiedGalleryDownloading(EhGalleriesEntity gallery) {
         if (hasStatus(gallery, DownloadStatus.IMPORTED)
                 || hasStatus(gallery, DownloadStatus.DOWNLOADING)
+                || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)
+                || hasStatus(gallery, DownloadStatus.KOMGA_IMPORT_FAILED)
                 || hasStatus(gallery, DownloadStatus.BLOCKED)) {
             return false;
         }
@@ -382,7 +384,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
 
     private boolean isHealthyCompleted(EhGalleriesEntity gallery) {
         return hasStatus(gallery, DownloadStatus.IMPORTED)
-                || hasStatus(gallery, DownloadStatus.DOWNLOADED);
+                || hasStatus(gallery, DownloadStatus.DOWNLOADED)
+                || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)
+                || hasStatus(gallery, DownloadStatus.KOMGA_IMPORT_FAILED);
     }
 
     private static boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
@@ -399,10 +403,30 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     }
 
     @Override
+    public void recordKomgaConfirmation(Long gid, String status, String reason, String candidateBookIds) {
+        if (gid == null) return;
+        UpdateWrapper<EhGalleriesEntity> update = new UpdateWrapper<>();
+        update.eq("gid", gid)
+                .set("download_status", status)
+                .setSql("komga_confirmation_attempts = COALESCE(komga_confirmation_attempts, 0) + 1")
+                .set("komga_last_confirmation_at", new Date())
+                .set("komga_confirmation_reason", truncate(reason, 1000))
+                .set("komga_candidate_book_ids", truncate(candidateBookIds, 2000));
+        galleriesMapper.update(null, update);
+        log.info("📝 Komga 确认记录完成, GID: {}, 状态: {}, 原因: {}", gid, status, reason);
+    }
+
+    private static String truncate(String value, int maxLength) {
+        if (value == null || value.length() <= maxLength) return value;
+        return value.substring(0, maxLength);
+    }
+
+    @Override
     public List<EhGalleriesEntity> getFailedGalleries() {
         QueryWrapper<EhGalleriesEntity> queryWrapper = new QueryWrapper<>();
         queryWrapper.in("download_status", DownloadStatus.DOWNLOAD_FAILED.getValue(),
-                DownloadStatus.DOWNLOADED.getValue(), DownloadStatus.PARTIAL.getValue());
+                DownloadStatus.DOWNLOADED.getValue(), DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                DownloadStatus.PARTIAL.getValue());
         return galleriesMapper.selectList(queryWrapper);
     }
 

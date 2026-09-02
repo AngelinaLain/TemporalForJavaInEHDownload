@@ -35,7 +35,7 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
     @Select("SELECT COUNT(*) AS total, " +
             "COALESCE(SUM(CASE WHEN download_status IN ('DOWNLOADED', '已下载') THEN 1 ELSE 0 END), 0) AS downloaded, " +
             "COALESCE(SUM(CASE WHEN download_status IN ('IMPORTED', '已入库') THEN 1 ELSE 0 END), 0) AS imported, " +
-            "COALESCE(SUM(CASE WHEN download_status IN ('DOWNLOAD_FAILED', '下载失败') THEN 1 ELSE 0 END), 0) AS failed, " +
+            "COALESCE(SUM(CASE WHEN download_status IN ('DOWNLOAD_FAILED', '下载失败', 'KOMGA_IMPORT_FAILED', 'Komga 入库失败') THEN 1 ELSE 0 END), 0) AS failed, " +
             "COALESCE(SUM(CASE WHEN download_status IN ('PENDING', '未下载') THEN 1 ELSE 0 END), 0) AS pending, " +
             "COALESCE(SUM(CASE WHEN download_status IN ('PARTIAL', '不完整') THEN 1 ELSE 0 END), 0) AS partial, " +
             "COALESCE(SUM(file_size_mb), 0) AS total_size_mb " +
@@ -49,8 +49,10 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
             "WHEN '未下载' THEN 'PENDING' " +
             "WHEN '下载中' THEN 'DOWNLOADING' " +
             "WHEN '已下载' THEN 'DOWNLOADED' " +
+            "WHEN '等待 Komga' THEN 'WAITING_KOMGA' " +
             "WHEN '不完整' THEN 'PARTIAL' " +
             "WHEN '下载失败' THEN 'DOWNLOAD_FAILED' " +
+            "WHEN 'Komga 入库失败' THEN 'KOMGA_IMPORT_FAILED' " +
             "WHEN '已入库' THEN 'IMPORTED' " +
             "WHEN '待去重审核' THEN 'REVIEW_REQUIRED' " +
             "WHEN '阻断' THEN 'BLOCKED' " +
@@ -58,8 +60,9 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
             "ELSE download_status END AS status, COUNT(*) AS cnt " +
             "FROM eh_galleries GROUP BY CASE download_status " +
             "WHEN '未下载' THEN 'PENDING' WHEN '下载中' THEN 'DOWNLOADING' " +
-            "WHEN '已下载' THEN 'DOWNLOADED' WHEN '不完整' THEN 'PARTIAL' " +
-            "WHEN '下载失败' THEN 'DOWNLOAD_FAILED' " +
+            "WHEN '已下载' THEN 'DOWNLOADED' WHEN '等待 Komga' THEN 'WAITING_KOMGA' " +
+            "WHEN '不完整' THEN 'PARTIAL' WHEN '下载失败' THEN 'DOWNLOAD_FAILED' " +
+            "WHEN 'Komga 入库失败' THEN 'KOMGA_IMPORT_FAILED' " +
             "WHEN '已入库' THEN 'IMPORTED' WHEN '待去重审核' THEN 'REVIEW_REQUIRED' " +
             "WHEN '阻断' THEN 'BLOCKED' " +
             "WHEN '已忽略' THEN 'IGNORED' ELSE download_status END")

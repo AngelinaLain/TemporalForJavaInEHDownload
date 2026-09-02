@@ -95,11 +95,17 @@ Docker Compose 默认把 `/data/download-cache` 挂载到命名卷 `download-cac
 
 ## Komga 扫描说明
 
-文件上传后，系统会触发并轮询 Komga，确认书籍已经被目标库和系列识别，再执行幂等的元数据更新。Komga 的扫描、媒体分析和数据库刷新是异步过程，因此“确认扫描命中”通常是整个链路中较慢的一段，这是正常现象。
+文件上传后先标记为 `WAITING_KOMGA`，系统再触发并轮询 Komga。只有在目标 Library、`N8N_Update` 系列和数据库文件名（`[gid] 标题.cbz`）唯一匹配并取得 BookID，且幂等元数据更新成功后，才标记为 `IMPORTED`。多个精确候选、扫描接口失败或等待超时会标记为 `KOMGA_IMPORT_FAILED`，不会提前显示为已入库。
+
+Komga 的扫描、媒体分析和数据库刷新是异步过程，因此“确认扫描命中”通常是整个链路中较慢的一段，这是正常现象。默认每 15 秒查询一次、最多 40 次（约 10 分钟），约 2 分钟仍未命中时会补触发一次扫描。
+
+### Komga 入库复核（阶段二）
+
+`KOMGA_IMPORT_FAILED` 记录会保存确认次数、最近原因和候选 BookID，可在前端“Komga 入库复核”页面查看。点击“仅重试 Komga”只重新触发扫描和入库确认，不会重新下载或覆盖已有缓存文件；重试期间状态回到 `WAITING_KOMGA`。
 
 可通过 `eh-config.workflow` 下的以下配置调整等待策略；启用 `prod` profile 时可使用对应环境变量：
 
-- `KOMGA_IMPORT_MAX_RETRIES`：最大轮询次数。
+- `KOMGA_IMPORT_MAX_RETRIES`：最大轮询次数，默认 40。
 - `KOMGA_IMPORT_POLL_INTERVAL_SECONDS`：轮询间隔秒数。
 
 ## 项目结构
@@ -225,6 +231,7 @@ npm run build
 | V6 | 增加候选键与去重算法版本（保留已发布迁移的校验兼容） |
 | V7 | 增加持久化人工审核记录 |
 | V8 | 升级为候选检索、并发锁与多信号评分判重 |
+| V9 | 持久化 Komga 入库确认进度，增加失败复核与仅 Komga 补偿入口 |
 
 迁移文件位于 `main-service/src/main/resources/db/migration/`。
 
@@ -235,6 +242,7 @@ npm run build
 - `/dashboard`：整体状态与趋势。
 - `/galleries`：画廊列表、状态、下载进度与详情。
 - `/dedupe-reviews`：重复候选人工审核。
+- `/komga-import-reviews`：Komga 入库失败查看与仅 Komga 补偿。
 - `/operations`：抓取、重试等操作入口。
 - `/monitoring`：Grafana 监控大盘。
 - `/workflows`：Temporal 工作流列表、历史和终止操作。

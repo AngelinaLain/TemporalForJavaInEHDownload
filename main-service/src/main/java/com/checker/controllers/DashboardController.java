@@ -262,8 +262,10 @@ public class DashboardController {
             case "PENDING", "未下载" -> "PENDING";
             case "DOWNLOADING", "下载中" -> "DOWNLOADING";
             case "DOWNLOADED", "已下载" -> "DOWNLOADED";
+            case "WAITING_KOMGA", "等待 Komga" -> "WAITING_KOMGA";
             case "PARTIAL", "不完整" -> "PARTIAL";
             case "DOWNLOAD_FAILED", "下载失败" -> "DOWNLOAD_FAILED";
+            case "KOMGA_IMPORT_FAILED", "Komga 入库失败" -> "KOMGA_IMPORT_FAILED";
             case "IMPORTED", "已入库" -> "IMPORTED";
             case "REVIEW_REQUIRED", "待去重审核" -> "REVIEW_REQUIRED";
             case "BLOCKED", "阻断" -> "BLOCKED";
@@ -277,8 +279,10 @@ public class DashboardController {
             case "PENDING" -> "未下载";
             case "DOWNLOADING" -> "下载中";
             case "DOWNLOADED" -> "已下载";
+            case "WAITING_KOMGA" -> "等待 Komga";
             case "PARTIAL" -> "不完整";
             case "DOWNLOAD_FAILED" -> "下载失败";
+            case "KOMGA_IMPORT_FAILED" -> "Komga 入库失败";
             case "IMPORTED" -> "已入库";
             case "REVIEW_REQUIRED" -> "待去重审核";
             case "BLOCKED" -> "阻断";

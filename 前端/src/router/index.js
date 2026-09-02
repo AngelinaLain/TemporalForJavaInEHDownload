@@ -30,6 +30,12 @@ const routes = [
         meta: { title: '去重审核' }
       },
       {
+        path: 'komga-import-reviews',
+        name: 'KomgaImportReviews',
+        component: () => import('../views/KomgaImportReviews.vue'),
+        meta: { title: 'Komga 入库复核' }
+      },
+      {
         path: 'operations',
         name: 'Operations',
         component: () => import('../views/Operations.vue'),

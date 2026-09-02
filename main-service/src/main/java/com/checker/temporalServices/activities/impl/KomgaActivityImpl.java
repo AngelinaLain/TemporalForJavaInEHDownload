@@ -13,6 +13,7 @@ import com.checker.clients.KomgaApiClient;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.config.EhNetworkConfig;
+import com.checker.dto.KomgaBookMatchResult;
 import com.checker.temporalServices.activities.KomgaActivity;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -114,6 +115,65 @@ public class KomgaActivityImpl implements KomgaActivity {
         return null;
     }
 
+    @Override
+    public KomgaBookMatchResult findExactBookInKomga(Long gid) {
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+        if (gallery == null) {
+            return KomgaBookMatchResult.notFound("数据库中不存在画廊记录");
+        }
+
+        String targetSeriesId = getOrCacheTargetSeriesId();
+        if (StrUtil.isBlank(targetSeriesId)) {
+            return KomgaBookMatchResult.notFound("目标系列尚未被 Komga 扫描识别");
+        }
+
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list";
+        JSONObject searchBody = new JSONObject();
+        searchBody.set("fullTextSearch", String.valueOf(gid));
+        JSONObject seriesIdCond = new JSONObject();
+        seriesIdCond.set("operator", "is");
+        seriesIdCond.set("value", targetSeriesId);
+        JSONObject condition = new JSONObject();
+        condition.set("seriesId", seriesIdCond);
+        searchBody.set("condition", condition);
+
+        try (HttpResponse response = HttpRequest.post(komgaUrl)
+                .header("X-API-Key", netConfig.getKomga().getApiKey())
+                .header("Content-Type", "application/json")
+                .body(searchBody.toString())
+                .execute()) {
+            if (!response.isOk()) {
+                throw komgaHttpFailure("Komga 图书查询失败", response.getStatus());
+            }
+
+            JSONObject resObj = JSONUtil.parseObj(response.body());
+            JSONArray content = resObj.getJSONArray("content");
+            List<String> matches = KomgaBookMatcher.exactBookIds(
+                    content,
+                    gid,
+                    gallery.getFilename(),
+                    targetSeriesId,
+                    netConfig.getKomga().getLibraryId());
+            if (matches.size() == 1) {
+                String bookId = matches.get(0);
+                log.info("🎯 Komga 精确命中! GID: {}, 文件: {}, BookID: {}",
+                        gid, gallery.getFilename(), bookId);
+                return KomgaBookMatchResult.found(bookId, "文件名、GID 与目标系列唯一匹配");
+            }
+            if (matches.size() > 1) {
+                String reason = "Komga 返回多个精确候选: " + matches;
+                log.error("❌ {}, GID: {}, 文件: {}", reason, gid, gallery.getFilename());
+                return KomgaBookMatchResult.ambiguous(reason, matches);
+            }
+            return KomgaBookMatchResult.notFound("扫描中，暂未发现精确文件名/GID匹配");
+        } catch (ApplicationFailure e) {
+            throw e;
+        } catch (Exception e) {
+            throw ApplicationFailure.newFailure(
+                    "Komga 图书查询异常: " + e.getMessage(), ErrorType.KOMGA_SCAN_FAILED.getCode());
+        }
+    }
+
 
     @Override
     public void pushMetadataToKomga(String bookId, Long gid) {
@@ -142,18 +202,27 @@ public class KomgaActivityImpl implements KomgaActivity {
     public void triggerKomgaLibraryScan() {
         String libraryId = netConfig.getKomga().getLibraryId();
         if (StrUtil.isBlank(libraryId)) {
-            log.warn("⚠️ 未配置 Komga Library ID，跳过扫描触发。");
-            return;
+            throw ApplicationFailure.newNonRetryableFailure(
+                    "未配置 Komga Library ID", ErrorType.KOMGA_SCAN_FAILED.getCode());
         }
         String scanUrl = netConfig.getKomga().getUrl() + "/api/v1/libraries/" + libraryId + "/scan";
-        HttpResponse response = HttpRequest.post(scanUrl)
+        try (HttpResponse response = HttpRequest.post(scanUrl)
                 .header("X-API-Key", netConfig.getKomga().getApiKey())
-                .execute();
-        if (response.isOk() || response.getStatus() == 202) {
-            log.info("🚀 Komga 扫描指令已发送，Library ID: {}", libraryId);
-        } else {
-            log.error("❌ 触发 Komga 扫描失败, HTTP: {}", response.getStatus());
+                .execute()) {
+            if (response.isOk() || response.getStatus() == 202) {
+                log.info("🚀 Komga 扫描指令已发送，Library ID: {}", libraryId);
+                return;
+            }
+            throw komgaHttpFailure("触发 Komga 扫描失败", response.getStatus());
         }
+    }
+
+    private ApplicationFailure komgaHttpFailure(String action, int status) {
+        String message = action + ", HTTP: " + status;
+        if (status == 401 || status == 403) {
+            return ApplicationFailure.newNonRetryableFailure(message, ErrorType.KOMGA_SCAN_FAILED.getCode());
+        }
+        return ApplicationFailure.newFailure(message, ErrorType.KOMGA_SCAN_FAILED.getCode());
     }
 
 
@@ -182,35 +251,52 @@ public class KomgaActivityImpl implements KomgaActivity {
         String url = netConfig.getKomga().getUrl() + "/api/v1/series/list?size=50";
         JSONObject searchBody = new JSONObject();
         searchBody.set("fullTextSearch", seriesName);
+        String libraryId = netConfig.getKomga().getLibraryId();
+        if (StrUtil.isNotBlank(libraryId)) {
+            JSONObject libraryCondition = new JSONObject();
+            libraryCondition.set("operator", "is");
+            libraryCondition.set("value", libraryId);
+            JSONObject condition = new JSONObject();
+            condition.set("libraryId", libraryCondition);
+            searchBody.set("condition", condition);
+        }
 
-        HttpResponse response = HttpRequest.post(url)
+        try (HttpResponse response = HttpRequest.post(url)
                 .header("X-API-Key", netConfig.getKomga().getApiKey())
                 .header("Content-Type", "application/json")
                 .body(searchBody.toString())
-                .execute();
+                .execute()) {
+            if (!response.isOk()) {
+                throw komgaHttpFailure("Komga 系列查询失败", response.getStatus());
+            }
 
-        if (!response.isOk()) {
-            log.error("❌ Komga series/list 查询失败: HTTP {}", response.getStatus());
+            JSONObject resObj = JSONUtil.parseObj(response.body());
+            JSONArray content = resObj.getJSONArray("content");
+            if (content == null || content.isEmpty()) return null;
+
+            for (int i = 0; i < content.size(); i++) {
+                JSONObject series = content.getJSONObject(i);
+                if (!matchesConfiguredLibrary(series, libraryId)) continue;
+                String title = series.getByPath("metadata.title", String.class);
+                if (seriesName.equalsIgnoreCase(StrUtil.blankToDefault(title, ""))) {
+                    return series.getStr("id");
+                }
+            }
+            for (int i = 0; i < content.size(); i++) {
+                JSONObject series = content.getJSONObject(i);
+                if (!matchesConfiguredLibrary(series, libraryId)) continue;
+                if (seriesName.equalsIgnoreCase(series.getStr("name"))) {
+                    return series.getStr("id");
+                }
+            }
             return null;
         }
+    }
 
-        JSONObject resObj = JSONUtil.parseObj(response.body());
-        JSONArray content = resObj.getJSONArray("content");
-        if (content == null || content.isEmpty()) return null;
-
-        for (int i = 0; i < content.size(); i++) {
-            JSONObject series = content.getJSONObject(i);
-            String title = series.getByPath("metadata.title", String.class);
-            if (seriesName.equalsIgnoreCase(StrUtil.blankToDefault(title, ""))) {
-                return series.getStr("id");
-            }
-        }
-        for (int i = 0; i < content.size(); i++) {
-            if (seriesName.equalsIgnoreCase(content.getJSONObject(i).getStr("name"))) {
-                return content.getJSONObject(i).getStr("id");
-            }
-        }
-//        return content.getJSONObject(0).getStr("id");
-        return null;
+    private boolean matchesConfiguredLibrary(JSONObject series, String libraryId) {
+        String actualLibraryId = series.getStr("libraryId");
+        return StrUtil.isBlank(libraryId)
+                || StrUtil.isBlank(actualLibraryId)
+                || libraryId.equals(actualLibraryId);
     }
 }

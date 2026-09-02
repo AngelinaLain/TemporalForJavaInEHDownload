@@ -2,6 +2,8 @@ package com.checker.temporalServices.workflows.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.checker.common.Constants;
+import com.checker.common.DownloadStatus;
+import com.checker.dto.KomgaBookMatchResult;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.AiActivity;
 import com.checker.temporalServices.activities.DatabaseActivity;
@@ -30,6 +32,8 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
     public void waitForImport(EhGalleriesEntity gallery, int maxRetries, int pollIntervalSeconds, String timeoutSubject, String timeoutContent) {
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
+        int exactConfirmationVersion = Workflow.getVersion(
+                "komga-exact-import-confirmation", Workflow.DEFAULT_VERSION, 1);
 
         // ==========================================
         // 1. 核心修复：执行原来的 postDownloadKomgaProcess 逻辑
@@ -58,10 +62,26 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
                 synologyActivity.renameSynologyFile(gallery.getGid(), downloaded.getFilename());
             }
 
-            // 触发 Komga 扫描
-            komgaActivity.triggerKomgaLibraryScan();
+            if (exactConfirmationVersion == Workflow.DEFAULT_VERSION) {
+                // 旧历史保留原来的异常吞吐行为和 Activity 顺序。
+                komgaActivity.triggerKomgaLibraryScan();
+            }
         } catch (Exception e) {
             log.error("执行 Komga 入库前置动作(改名/触发扫描)失败，GID: {}", gallery.getGid(), e);
+        }
+
+        if (exactConfirmationVersion != Workflow.DEFAULT_VERSION) {
+            databaseActivity.updateGalleryStatus(
+                    gallery.getGid(), DownloadStatus.WAITING_KOMGA.getValue());
+            try {
+                komgaActivity.triggerKomgaLibraryScan();
+            } catch (RuntimeException scanFailure) {
+                log.error("[❌ Komga 扫描触发失败] GID: {}", gallery.getGid(), scanFailure);
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                        "Komga 扫描触发失败: " + scanFailure.getMessage(), null);
+                return;
+            }
         }
 
         // ==========================================
@@ -71,17 +91,81 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
         int currentTry = 0;
 
         while (!isImportedToKomga && currentTry < maxRetries) {
-            Workflow.sleep(Duration.ofSeconds(pollIntervalSeconds));
+            Workflow.sleep(Duration.ofSeconds(Math.max(1, pollIntervalSeconds)));
             currentTry++;
-            String komgaSeriesId = komgaActivity.findBookInKomga(gallery.getGid());
-            if (komgaSeriesId != null) {
-                komgaActivity.pushMetadataToKomga(komgaSeriesId, gallery.getGid());
-                isImportedToKomga = true;
+            if (exactConfirmationVersion == Workflow.DEFAULT_VERSION) {
+                String bookId = komgaActivity.findBookInKomga(gallery.getGid());
+                if (bookId != null) {
+                    komgaActivity.pushMetadataToKomga(bookId, gallery.getGid());
+                    isImportedToKomga = true;
+                }
+                continue;
+            }
+
+            KomgaBookMatchResult match;
+            try {
+                match = komgaActivity.findExactBookInKomga(gallery.getGid());
+            } catch (RuntimeException queryFailure) {
+                log.error("[❌ Komga 入库确认查询失败] GID: {}", gallery.getGid(), queryFailure);
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                        "Komga 入库确认查询失败: " + queryFailure.getMessage(), null);
+                return;
+            }
+            if (match == null) {
+                log.error("[❌ Komga 入库确认返回空结果] GID: {}", gallery.getGid());
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                        "Komga 入库确认返回空结果", null);
+                return;
+            }
+            String candidateBookIds = String.join(",", match.getCandidateBookIds() == null
+                    ? java.util.List.of() : match.getCandidateBookIds());
+            if (KomgaBookMatchResult.FOUND.equals(match.getStatus())) {
+                try {
+                    komgaActivity.pushMetadataToKomga(match.getBookId(), gallery.getGid());
+                    databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                            DownloadStatus.IMPORTED.getValue(), match.getReason(), candidateBookIds);
+                    isImportedToKomga = true;
+                } catch (RuntimeException metadataFailure) {
+                    log.error("[❌ Komga 元数据更新失败] GID: {}, BookID: {}",
+                            gallery.getGid(), match.getBookId(), metadataFailure);
+                    databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                            DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                            "Komga 元数据更新失败: " + metadataFailure.getMessage(), candidateBookIds);
+                    return;
+                }
+            } else if (KomgaBookMatchResult.AMBIGUOUS.equals(match.getStatus())) {
+                log.error("[❌ Komga 匹配冲突] GID: {}, 原因: {}", gallery.getGid(), match.getReason());
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.KOMGA_IMPORT_FAILED.getValue(), match.getReason(), candidateBookIds);
+                return;
+            } else {
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.WAITING_KOMGA.getValue(), match.getReason(), candidateBookIds);
+                int safeInterval = Math.max(1, pollIntervalSeconds);
+                int rescanAttempt = Math.max(1, 120 / safeInterval);
+                if (currentTry == rescanAttempt && currentTry < maxRetries) {
+                    try {
+                        komgaActivity.triggerKomgaLibraryScan();
+                    } catch (RuntimeException rescanFailure) {
+                        log.error("[❌ Komga 二次扫描触发失败] GID: {}", gallery.getGid(), rescanFailure);
+                        databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                                DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                                "Komga 二次扫描触发失败: " + rescanFailure.getMessage(), candidateBookIds);
+                        return;
+                    }
+                }
             }
         }
 
         if (!isImportedToKomga) {
             log.warn("[⚠️ Komga 入库超时] GID: {}, 标题: {}", gallery.getGid(), gallery.getTitle());
+            if (exactConfirmationVersion != Workflow.DEFAULT_VERSION) {
+                databaseActivity.recordKomgaConfirmation(gallery.getGid(),
+                        DownloadStatus.KOMGA_IMPORT_FAILED.getValue(),
+                        "等待 Komga 入库确认超时", null);
+            }
             if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
                 // 仅兼容旧 Workflow 历史；新流程由最外层父工作流统一汇总发信。
                 notificationActivity.sendEmailAlert(timeoutSubject, timeoutContent);

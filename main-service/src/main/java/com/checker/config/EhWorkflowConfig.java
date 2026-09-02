@@ -14,7 +14,7 @@ public class EhWorkflowConfig {
     /** 子工作流最大并发数（受 EHentai 限制，建议 ≤ 3） */
     private int maxConcurrency = 2;
     /** Komga 入库轮询最大次数 */
-    private int komgaImportMaxRetries = 20;
+    private int komgaImportMaxRetries = 40;
     /** Komga 入库轮询间隔（秒） */
     private int komgaImportPollIntervalSeconds = 15;
     /** 群晖下载状态轮询间隔（分钟） */

@@ -285,6 +285,8 @@ public class DedupeReviewService {
     private boolean isHealthyOrActive(EhGalleriesEntity gallery) {
         return hasStatus(gallery, DownloadStatus.IMPORTED)
                 || hasStatus(gallery, DownloadStatus.DOWNLOADED)
+                || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)
+                || hasStatus(gallery, DownloadStatus.KOMGA_IMPORT_FAILED)
                 || hasStatus(gallery, DownloadStatus.DOWNLOADING);
     }
 
