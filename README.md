@@ -105,6 +105,8 @@ Komga 的扫描、媒体分析和数据库刷新是异步过程，因此“确�
 
 `KOMGA_IMPORT_FAILED` 记录会保存确认次数、最近原因和候选 BookID，可在前端“Komga 入库复核”页面查看。点击“仅重试 Komga”只重新触发扫描和入库确认，不会重新下载或覆盖已有缓存文件；重试期间状态回到 `WAITING_KOMGA`。
 
+Komga 补偿流程不调用 AI 概述服务，避免 GPU 节点超时阻塞物理文件扫描。新画廊使用本地下载模式时，AI 简介仍会在 `ComicInfo.xml` 注入前生成；AI 失败只会造成简介缺省，不影响下载和 Komga 入库确认。
+
 可通过 `eh-config.workflow` 下的以下配置调整等待策略；启用 `prod` profile 时可使用对应环境变量：
 
 - `KOMGA_IMPORT_MAX_RETRIES`：最大轮询次数，默认 40。

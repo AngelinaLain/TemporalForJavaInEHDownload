@@ -34,6 +34,8 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
         int exactConfirmationVersion = Workflow.getVersion(
                 "komga-exact-import-confirmation", Workflow.DEFAULT_VERSION, 1);
+        int skipAiOnKomgaRetryVersion = Workflow.getVersion(
+                "komga-retry-skip-ai-enrichment", Workflow.DEFAULT_VERSION, 1);
 
         // ==========================================
         // 1. 核心修复：执行原来的 postDownloadKomgaProcess 逻辑
@@ -42,18 +44,24 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
             // 拉取 EHentai 标签并存库
             komgaActivity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
 
-            // AI 生成内容概述（失败不阻塞后续入库流程）
-            try {
-                EhGalleriesEntity withTags = databaseActivity.getGalleryById(gallery.getGid());
-                if (withTags != null && withTags.getTags() != null && !withTags.getTags().isEmpty()) {
-                    String summary = aiActivity.generateGallerySummary(gallery.getTitle(), withTags.getTags());
-                    if (summary != null && !summary.isBlank()) {
-                        databaseActivity.updateGallerySummary(gallery.getGid(), summary);
-                        log.info("🤖 AI 概述生成成功, GID: {}", gallery.getGid());
+            if (skipAiOnKomgaRetryVersion == Workflow.DEFAULT_VERSION) {
+                // 仅为已经运行的 Temporal 历史保留原调用顺序。新流程的 AI/ComicInfo
+                // 在本地下载阶段完成；Komga 补偿只负责尽快确认既有物理文件是否入库。
+                try {
+                    EhGalleriesEntity withTags = databaseActivity.getGalleryById(gallery.getGid());
+                    if (withTags != null && withTags.getTags() != null && !withTags.getTags().isEmpty()) {
+                        String summary = aiActivity.generateGallerySummary(gallery.getTitle(), withTags.getTags());
+                        if (summary != null && !summary.isBlank()) {
+                            databaseActivity.updateGallerySummary(gallery.getGid(), summary);
+                            log.info("🤖 AI 概述生成成功, GID: {}", gallery.getGid());
+                        }
                     }
+                } catch (Exception aiEx) {
+                    log.warn("⚠️ AI 概述生成失败，跳过不阻塞入库, GID: {}, 原因: {}",
+                            gallery.getGid(), aiEx.getMessage());
                 }
-            } catch (Exception aiEx) {
-                log.warn("⚠️ AI 概述生成失败，跳过不阻塞入库, GID: {}, 原因: {}", gallery.getGid(), aiEx.getMessage());
+            } else {
+                log.info("⏭️ Komga 入库确认跳过 AI 概述，直接扫描物理文件, GID: {}", gallery.getGid());
             }
 
             // 重命名群晖文件
