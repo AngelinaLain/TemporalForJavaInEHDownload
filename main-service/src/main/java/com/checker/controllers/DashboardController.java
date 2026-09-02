@@ -265,6 +265,7 @@ public class DashboardController {
             case "PARTIAL", "不完整" -> "PARTIAL";
             case "DOWNLOAD_FAILED", "下载失败" -> "DOWNLOAD_FAILED";
             case "IMPORTED", "已入库" -> "IMPORTED";
+            case "REVIEW_REQUIRED", "待去重审核" -> "REVIEW_REQUIRED";
             case "BLOCKED", "阻断" -> "BLOCKED";
             case "IGNORED", "已忽略" -> "IGNORED";
             default -> null;
@@ -279,6 +280,7 @@ public class DashboardController {
             case "PARTIAL" -> "不完整";
             case "DOWNLOAD_FAILED" -> "下载失败";
             case "IMPORTED" -> "已入库";
+            case "REVIEW_REQUIRED" -> "待去重审核";
             case "BLOCKED" -> "阻断";
             case "IGNORED" -> "已忽略";
             default -> status;

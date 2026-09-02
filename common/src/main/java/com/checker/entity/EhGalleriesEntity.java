@@ -49,6 +49,9 @@ public class EhGalleriesEntity implements Serializable {
      */
     private String dedupeKey;
 
+    /** 宽松候选召回键；同键记录仍需经过多信号评分，不能直接认定重复。 */
+    private String candidateKey;
+
     /**
      * 同一作品中被选为首选版本的 GID；为空代表该记录是首选版本。
      */
@@ -56,6 +59,48 @@ public class EhGalleriesEntity implements Serializable {
 
     /** 自动归组的置信度（0-100）。 */
     private Integer dedupeConfidence;
+
+    /** 当前首选版本与该记录之间的自动匹配分数（0-100）。 */
+    private Integer dedupeMatchScore;
+
+    /** 自动匹配的可解释理由，供前端和人工复核。 */
+    private String dedupeMatchReason;
+
+    /** 生成候选键和匹配结果时使用的算法版本。 */
+    private Integer dedupeAlgorithmVersion;
+
+    // 本组访问器显式声明，避免部分 IDE 未刷新 Lombok 索引时误报“无法解析方法”。
+    public String getCandidateKey() {
+        return candidateKey;
+    }
+
+    public void setCandidateKey(String candidateKey) {
+        this.candidateKey = candidateKey;
+    }
+
+    public Integer getDedupeMatchScore() {
+        return dedupeMatchScore;
+    }
+
+    public void setDedupeMatchScore(Integer dedupeMatchScore) {
+        this.dedupeMatchScore = dedupeMatchScore;
+    }
+
+    public String getDedupeMatchReason() {
+        return dedupeMatchReason;
+    }
+
+    public void setDedupeMatchReason(String dedupeMatchReason) {
+        this.dedupeMatchReason = dedupeMatchReason;
+    }
+
+    public Integer getDedupeAlgorithmVersion() {
+        return dedupeAlgorithmVersion;
+    }
+
+    public void setDedupeAlgorithmVersion(Integer dedupeAlgorithmVersion) {
+        this.dedupeAlgorithmVersion = dedupeAlgorithmVersion;
+    }
 
     /**
      * 清理后的安全文件名

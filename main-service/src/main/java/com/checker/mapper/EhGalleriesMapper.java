@@ -3,6 +3,7 @@ package com.checker.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.checker.entity.EhGalleriesEntity;
 import org.apache.ibatis.annotations.Mapper;
+import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
@@ -20,6 +21,13 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
      * 忽略 null 字段与自动填充字段，比逐条 INSERT 性能高一个量级。
      */
     int insertBatchSomeColumn(@Param("list") List<EhGalleriesEntity> entities);
+
+    /** 创建锁桶并通过行锁串行化同一候选组的首选版本决策。 */
+    @Insert("INSERT IGNORE INTO eh_dedupe_locks(candidate_key) VALUES(#{candidateKey})")
+    int ensureDedupeLock(@Param("candidateKey") String candidateKey);
+
+    @Select("SELECT candidate_key FROM eh_dedupe_locks WHERE candidate_key = #{candidateKey} FOR UPDATE")
+    String lockDedupeCandidate(@Param("candidateKey") String candidateKey);
 
     /**
      * 一次查询获取仪表盘概览，避免按状态逐条 COUNT。
@@ -44,6 +52,7 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
             "WHEN '不完整' THEN 'PARTIAL' " +
             "WHEN '下载失败' THEN 'DOWNLOAD_FAILED' " +
             "WHEN '已入库' THEN 'IMPORTED' " +
+            "WHEN '待去重审核' THEN 'REVIEW_REQUIRED' " +
             "WHEN '阻断' THEN 'BLOCKED' " +
             "WHEN '已忽略' THEN 'IGNORED' " +
             "ELSE download_status END AS status, COUNT(*) AS cnt " +
@@ -51,7 +60,8 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
             "WHEN '未下载' THEN 'PENDING' WHEN '下载中' THEN 'DOWNLOADING' " +
             "WHEN '已下载' THEN 'DOWNLOADED' WHEN '不完整' THEN 'PARTIAL' " +
             "WHEN '下载失败' THEN 'DOWNLOAD_FAILED' " +
-            "WHEN '已入库' THEN 'IMPORTED' WHEN '阻断' THEN 'BLOCKED' " +
+            "WHEN '已入库' THEN 'IMPORTED' WHEN '待去重审核' THEN 'REVIEW_REQUIRED' " +
+            "WHEN '阻断' THEN 'BLOCKED' " +
             "WHEN '已忽略' THEN 'IGNORED' ELSE download_status END")
     List<Map<String, Object>> countByDownloadStatus();
 

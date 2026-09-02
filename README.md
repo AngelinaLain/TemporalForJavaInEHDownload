@@ -1,290 +1,273 @@
-# GalleryImport (TemporalForJavaInEHDow)
+# GalleryImport
 
-基于 **Spring Boot 3.2.4 + Spring Cloud Alibaba + Temporal** 的 EHentai 自动化下载与 Komga 入库系统。
-采用 **Maven 多模块 / 微服务** 架构，通过 Nacos 服务发现 + Temporal 工作流编排，完成从
-「搜索抓取 → Synology 下载 → Komga 元数据刮削与合集 → 邮件通知」的全链路自动化。
+GalleryImport 是一套基于 Temporal 的 EHentai 画廊自动化导入系统，覆盖画廊抓取、重复作品判断、下载、`ComicInfo.xml` 注入、群晖上传、Komga 扫描与元数据处理，并提供人工审核、运行监控和汇总邮件。
 
+## 主要能力
 
-## 核心功能
+- 按关键词抓取画廊，保存标题、原始标题、标签、评分、页数、简介等信息。
+- 使用候选桶与多信号评分判断同一作品的不同版本，灰区结果进入人工审核。
+- 默认由后端流式下载，支持断点续传、持久化缓存、ZIP/CRC 深度校验和下载进度展示。
+- 自动生成并注入 `ComicInfo.xml`，然后上传为 Komga 可识别的 `.cbz`。
+- 群晖上传优先使用 SMB/CIFS，失败时自动降级到 SFTP；也可切回 Download Station 模式。
+- 等待全部子工作流结束后只发送一封汇总邮件，不再每个子流程发送一封。
+- 提供画廊管理、重复项审核、操作入口、监控大盘和 Temporal 工作流管理页面。
 
-- EHentai / ExHentai 画廊搜索与数据抓取（多维度过滤，独立爬虫 Worker）
-- 作品级汉化去重：以 EH 原始标题和核心标签生成指纹，保留记录但只下载评分/页数更优的首选版本
-- Temporal 异步工作流：子工作流隔离 + 滑动窗口并发 + 惰性直链提取 + 补偿队列
-- MySQL 持久化画廊状态与元数据（MyBatis-Plus）
-- Synology Download Station 下载任务推送与文件重命名
-- Komga 自动入库、异步轮询元数据、标签同步与合集管理
-- AI 标签翻译服务（Spring AI，可指向本地 LM Studio / OpenAI 兼容端点）
-- Microsoft Graph API 邮件通知
-- JWT 认证 + Swagger UI
-- Vue3 Dashboard 后台（状态分布、时间线、标签分析、运维操作）
+## 当前处理链路
+
+1. 父工作流按搜索条件调用 `scraper-worker` 抓取画廊。
+2. `main-service` 写入数据库，并生成去重键、候选键和可解释评分。
+3. 自动命中的重复版本只保留首选版本；灰区版本标记为 `REVIEW_REQUIRED`，等待人工处理。
+4. 下载子工作流按配置选择本地下载或 Synology Download Station。
+5. 本地模式完成下载、校验、`ComicInfo.xml` 注入、CBZ 重命名和群晖上传。
+6. Komga 扫描文件并完成书籍识别，系统随后修正元数据与合集关系。
+7. 最外层父工作流等待所有已启动的子工作流结束，再根据数据库最终状态发送一封汇总邮件。
+
+Temporal 工作流使用版本标记兼容已存在的历史记录，升级后不需要终止旧流程。
+
+## 下载实现
+
+### 本地下载（默认）
+
+设置 `DOWNLOAD_MODE=local` 后，每个画廊使用独立目录：
+
+```text
+${DOWNLOAD_TEMP_DIR}/gallery-{gid}/
+├── archive.zip.part       # 下载中的分片
+├── archive.zip.part.meta  # 断点续传元数据
+├── archive.zip            # 下载完成、等待注入
+├── final.cbz              # 已注入 ComicInfo.xml
+└── comicinfo.sha256       # 元数据指纹
+```
+
+实现特性：
+
+- HTTP 流式写盘，不会把整个压缩包读入内存。
+- 使用 `.part` 和响应校验信息续传；服务或容器重启后可以复用缓存。
+- 同一 GID 使用文件锁，避免并发 Activity 同时修改同一缓存。
+- 下载后完整读取 ZIP 条目，校验中央目录、CRC、图片条目和异常解压体积。
+- `ComicInfo.xml` 包含标题、系列、简介、作者/社团与标签；元数据变化时只重新注入，不重复下载。
+- 上传采用临时远端文件、大小校验和重命名发布，降低 Komga 扫描到半成品的概率。
+- 下载进度写入数据库，同时通过 Temporal heartbeat 报告长任务存活状态。
+
+Docker Compose 默认把 `/data/download-cache` 挂载到命名卷 `download-cache`。缓存清理规则如下：
+
+- 上传成功并且文件名写入数据库后，删除该 GID 的本地工作目录；持久卷本身不会被删除。
+- 下载、注入或上传失败时保留有效缓存，下一次重试从可复用阶段继续。
+- ZIP/CRC 校验失败时删除损坏的归档和断点文件，再重新下载。
+
+最终文件名规则为：
+
+```text
+[gid] 清理后的标题.cbz
+```
+
+文件名中的 `\ / : * ? " < > |`、控制字符会替换为 `_`，末尾的点和空格会移除，并按 UTF-8 字节数截断，避免群晖路径非法或过长。
+
+### Download Station 兼容模式
+
+设置 `DOWNLOAD_MODE=downloadstation` 可沿用群晖 Download Station 下载与轮询逻辑。该模式主要用于现有环境兼容；新部署建议使用本地模式，以获得断点续传、归档校验和 `ComicInfo.xml` 注入能力。
+
+## 重复作品判断
+
+判重分两步进行：
+
+1. 对标准化标题生成 `candidate_key`，先缩小可能相同的候选范围。
+2. 对候选画廊按多个信号计算 0–100 分，并记录 `dedupe_match_reason`。
+
+当前评分信号包括原始标题/标准化标题、标题相似度、作者或社团、原作、角色和页数接近程度。阈值为：
+
+| 分数 | 处理方式 |
+| --- | --- |
+| `>= 85` | 自动视为同一作品并聚类 |
+| `65–84` | 标记为 `REVIEW_REQUIRED`，进入人工审核 |
+| `< 65` | 视为不同作品 |
+
+自动选择首选版本时依次比较评分、页数和 GID；人工选择的首选 GID 优先级最高。下载完成后还会结合最终健康状态重新选择，避免失败版本压住已成功导入的版本。
+
+### 人工审核
+
+前端“重复项审核”页面会并排显示两个候选版本，包括标题、原始标题、标签、评分、页数、状态、匹配分数、匹配原因和推荐版本。审核人员可以：
+
+- 选择“同一作品”，并指定保留的首选 GID；
+- 选择“不同作品”，让两个版本分别进入下载流程。
+
+审核结论保存到 `eh_dedupe_reviews`，后续抓取、重启和重新聚类都会复用，不会被下一次自动评分覆盖。候选桶和审核记录使用数据库锁，避免审核与下载认领并发冲突。
+
+## Komga 扫描说明
+
+文件上传后，系统会触发并轮询 Komga，确认书籍已经被目标库和系列识别，再执行幂等的元数据更新。Komga 的扫描、媒体分析和数据库刷新是异步过程，因此“确认扫描命中”通常是整个链路中较慢的一段，这是正常现象。
+
+可通过 `eh-config.workflow` 下的以下配置调整等待策略；启用 `prod` profile 时可使用对应环境变量：
+
+- `KOMGA_IMPORT_MAX_RETRIES`：最大轮询次数。
+- `KOMGA_IMPORT_POLL_INTERVAL_SECONDS`：轮询间隔秒数。
+
+## 项目结构
+
+```text
+GalleryImport/
+├── common/           # 通用模型、网络客户端、ComicInfo 与判重算法
+├── main-service/     # API、Temporal Worker、下载导入、Komga、审核和 Flyway
+├── scraper-worker/   # EHentai 搜索与画廊抓取
+├── ai-service/       # AI 简介/翻译服务
+├── 前端/              # Vue 3 管理界面
+├── deploy/           # Prometheus、Grafana、Loki、Promtail 配置
+├── Dockerfile
+└── docker-compose.yml
+```
 
 ## 技术栈
 
-| 类别 | 组件 |
+| 层级 | 技术 |
 | --- | --- |
-| 语言 / 运行时 | Java 17 |
-| 框架 | Spring Boot 3.2.4 |
-| 微服务 | Spring Cloud 2023.0.1 + Spring Cloud Alibaba 2023.0.1.0（Nacos Discovery + LoadBalancer） |
-| 工作流引擎 | Temporal Java SDK 1.31.0 |
-| ORM | MyBatis-Plus 3.5.5 |
-| 数据库 | MySQL 8+ |
-| HTTP 客户端 | OkHttp3 |
-| 工具库 | Hutool 5.8.38、Jsoup 1.17.2、JSch 0.1.55 |
-| AI | Spring AI 0.8.1（OpenAI 兼容 starter） |
-| 安全 | Spring Security + JWT (jjwt 0.12.5) |
-| 缓存 | Caffeine |
-| API 文档 | Springdoc OpenAPI (Swagger) |
-| 前端 | Vue 3.4 + Vite 5 + Pinia + ECharts 5 + Axios |
+| 后端 | Java 17、Spring Boot 3.2.4、Spring Cloud、MyBatis-Plus |
+| 编排 | Temporal Java SDK 1.31 |
+| 数据 | MySQL、Flyway、Redis |
+| 网络与存储 | OkHttp、SMBJ、SFTP |
+| 前端 | Vue 3、Vite 5、Element Plus、Pinia、ECharts |
+| 可观测性 | Actuator、Prometheus、Grafana、Loki、Promtail、Zipkin |
+| 基础设施 | Nacos、Docker Compose |
 
-## 模块结构
+## 快速开始
 
-顶层 `pom.xml` 为聚合父 POM（`packaging=pom`），继承 `spring-boot-starter-parent`，聚合以下模块：
+### 1. 前置依赖
 
-```text
-GalleryImport/                     # 父 POM：统一依赖版本管理
-├── common/                        # 公共库 (jar)：被 main-service / scraper-worker 依赖
-│   └── com.checker
-│       ├── common/                # Result、ResultCode、ErrorType、Constants、
-│       │                          #   DownloadStatus、EhNetworkClient
-│       ├── config/                # EhNetworkConfig（Cookie/代理配置）
-│       ├── dto/                   # ArchiveDownloadInfo、SearchOptions   ← 单一来源
-│       ├── entity/                # EhGalleriesEntity                     ← 单一来源
-│       └── temporalServices/activities/ScraperActivity   # 爬虫 Activity 接口 ← 单一来源
-│
-├── main-service/                  # 主控服务 (jar)，端口 8001
-│   └── com.checker
-│       ├── MainServiceApplication.java
-│       ├── config/                # JWT、Security、Cache、MybatisPlus、Network、EhWorkflow
-│       ├── controllers/           # Auth / EHAutomation / Dashboard
-│       ├── clients/               # KomgaApiClient、SynologyApiClient
-│       ├── dto/                   # KomgaCollectionRequest、WorkflowSettings（本模块特有）
-│       ├── mapper/                # EhGalleriesMapper
-│       ├── service/               # EhGalleries / EhTagTranslation / KomgaSync / KomgaCollection
-│       └── temporalServices/
-│           ├── activities/        # Database / Komga / Notification / Synology / Ai（接口 + impl）
-│           └── workflows/         # EHAutomation / SingleGalleryDownload /
-│                                  #   RetryFailedDownload / KomgaImport（接口 + impl + WorkflowSteps）
-│
-├── scraper-worker/                # 爬虫 Worker (jar)，端口 8081
-│   └── com.checker
-│       ├── ScraperWorkerApplication.java
-│       └── temporalServices/ScraperActivityImpl.java   # 实现 common 的 ScraperActivity
-│
-├── ai-service/                    # AI 服务 (jar)，端口 8082（独立，不依赖 common）
-│   └── com.checker
-│       ├── AiServiceApplication.java
-│       └── controllers/AiController.java
-│
-└── 前端/                          # eh-admin：Vue3 + Vite 后台，端口 8002（Nginx）/ 5173（dev）
-    └── src
-        ├── api/index.js
-        ├── layout/AdminLayout.vue
-        ├── router/index.js
-        ├── stores/tagStore.js
-        └── views/  Dashboard.vue | Galleries.vue | Operations.vue | Login.vue
-```
+- JDK 17
+- Maven 3.9+
+- Node.js 18+
+- Docker 与 Docker Compose（容器部署时）
+- 可访问的 MySQL、Temporal、Nacos、EHentai、群晖和 Komga
 
-### 模块依赖关系
+### 2. 配置环境变量
 
-```text
-common  ←──  main-service      (完整业务：Web / Security / MyBatis / Temporal 编排)
-   ↑
-   └──────  scraper-worker     (仅 Temporal，注册 ScraperActivityImpl)
-
-ai-service                     (独立，Web + Nacos + Spring AI，不依赖 common)
-前端                            (通过 /api 反代 main-service:8001)
-```
-
-## Temporal 工作流拓扑
-
-三条 **Task Queue** 实现职责隔离（定义于 `common.Constants`）：
-
-| Task Queue 常量 | 值 | 由谁消费 | 用途 |
-| --- | --- | --- | --- |
-| `TASK_QUEUE` | `EHDownloadTaskQueue` | main-service | 主工作流、DB/Komga/Synology/Notification Activity |
-| `SCRAPER_TASK_QUEUE` | `EH_SCRAPER_TASK_QUEUE` | scraper-worker | 爬虫抓取（旁路由节点执行，带心跳） |
-| `AI_TASK_QUEUE` | `EH_TASK_QUEUE` | ai-service / AiActivityImpl | LLM 标签翻译 |
-
-**工作流清单：**
-
-| 工作流 | 说明 |
-| --- | --- |
-| `EHAutomationWorkflow` | 主流程：抓取 → 批量分类（跳过/补偿/新下载）→ 滑动窗口派发子工作流 → 汇总通知 |
-| `SingleGalleryDownloadWorkflow` | 单画廊子工作流：隔离下载/轮询逻辑，规避主工作流历史 5 万条上限 |
-| `RetryFailedDownloadWorkflow` | 失败任务重试 |
-| `KomgaImportWorkflow` | Komga 入库子流程 |
-
-**关键设计（见 `EHAutomationWorkflowImpl` / `WorkflowSteps`）：**
-- 子工作流隔离，避免主工作流历史爆炸
-- 滑动窗口并发（`WorkflowSettings.maxConcurrency`，运行时可调）
-- 惰性直链提取，防止排队过久链接过期
-- 批量 DB 查询/保存，替代逐条 Activity 调用
-- 下载前批量查询 EH gdata；同作品其他汉化版本标记为“已忽略”，可在画廊列表切换查看
-- 分级重试：DB 快速重试 3 次；爬虫指数退避（30s→…→30min，最多 5 次）+ 30s 心跳；
-  Cookie 失效 / IP 封禁 / 配额超限等致命错误标记为不可重试，交由人工介入
-- Komga 入库异步轮询（默认 20 次 × 15 秒），超时发邮件告警
-
-## 基础设施依赖
-
-| 组件 | 默认地址 |
-| --- | --- |
-| Nacos Discovery | `172.0.0.1:8848` |
-| Temporal Server | `172.0.0.1:7233`（namespace: `default`） |
-| MySQL | `172.0.0.1:3306/eh_automation` |
-| Synology | `https://172.0.0.1:5001` |
-| Komga | `http://172.0.0.1:3000` |
-| 代理 (Clash) | `172.0.0.1:7893` |
-| AI 端点 (LM Studio) | `http://10.10.10.50:1234` |
-
-> 以上为默认值，均可通过 `application.yaml` 或环境变量覆盖。
-
-## 快速启动
-
-### 依赖要求
-
-- JDK 17、Maven 3.9+
-- MySQL 8+、Temporal Server、Nacos
-- Synology Download Station、Komga（可选）
-- OpenAI 兼容 LLM 端点（可选，AI 标签翻译）
-- Microsoft 365 / Graph API（可选，邮件通知）
-
-### 1. 初始化数据库
-
-> `main-service` 启动时会通过 Flyway 自动建表并执行后续迁移。下面的建表 SQL 仅用于查看初始结构，请不要在由 Flyway 管理的数据库中手动执行；既有部署首次升级前请先备份数据库。
-
-```sql
-CREATE DATABASE IF NOT EXISTS `eh_automation`
-  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-USE `eh_automation`;
-
-CREATE TABLE `eh_galleries` (
-  `gid`                        BIGINT PRIMARY KEY,
-  `token`                      VARCHAR(255),
-  `title`                      VARCHAR(500),
-  `filename`                   VARCHAR(500),
-  `gallery_url`                VARCHAR(500),
-  `search_query`               VARCHAR(500),
-  `crawled_at`                 TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  `download_status`            VARCHAR(50) DEFAULT 'PENDING',
-  `tags`                       JSON,
-  `komga_book_id`              VARCHAR(255),
-  `file_size_mb`               DOUBLE,
-  `_trace_pages_crawled`       INT,
-  `_trace_stop_reason`         VARCHAR(200),
-  `_trace_last_next_cursor`    VARCHAR(500),
-  `_trace_request_url_chain`   TEXT,
-  `_trace_first_page_title`    VARCHAR(500),
-  `_trace_page_trace`          JSON,
-  INDEX idx_download_status (`download_status`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
-
-### 2. 配置
-
-当前版本不包含真实凭据或局域网地址；所有部署配置均通过环境变量提供。首次部署时：
+复制示例文件，并填写真实配置：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入实际配置；该文件已经被 Git 忽略
 ```
 
-`main-service` 和 `scraper-worker` 需要 `NACOS_SERVER_ADDR`、数据库、Temporal、EH、代理等
-变量；`ai-service` 还需要 `AI_BASE_URL`、`AI_API_KEY` 与 `AI_MODEL`。生产环境应通过
-部署平台的 Secret/环境变量注入，而不是复制 `.env`。JWT 密钥至少 32 个字符；管理员只配置
-`ADMIN_PASSWORD_HASH`（BCrypt 哈希），不要在配置中保留明文密码。缺少或不合规时主服务会拒绝启动。
+Windows PowerShell：
 
-> 任何曾被提交到旧版本配置文件中的凭据均应立即轮换；从工作区删除它们并不会清除 Git 历史。
+```powershell
+Copy-Item .env.example .env
+```
 
-`main-service` 的工作流运行时参数（`eh-config.workflow`）可在线调整，无需重新编译：
-`max-concurrency`、`komga-import-max-retries`、`komga-import-poll-interval-seconds`、
-`download-poll-interval-minutes`、`download-cooldown-seconds`。
+主要配置分组：
 
-### 3. 构建
+| 分组 | 变量 |
+| --- | --- |
+| 基础设施 | `NACOS_SERVER_ADDR`、`DB_*`、`TEMPORAL_*`、`REDIS_*` |
+| 应用安全 | `JWT_SECRET`、`ADMIN_USERNAME`、`ADMIN_PASSWORD_HASH`、`CORS_ALLOWED_ORIGINS` |
+| EHentai | `EH_MEMBER_ID`、`EH_PASS_HASH`、`EH_SK`、`EH_STAR`、`PROXY_*` |
+| 群晖 | `SYNOLOGY_*`、`SMB_*` |
+| Komga | `KOMGA_URL`、`KOMGA_API_KEY`、`KOMGA_LIBRARY_ID` |
+| 通知 | `NOTIFICATION_ADMIN_EMAIL`、`GRAPH_*` |
+| 下载 | `DOWNLOAD_MODE`、`DOWNLOAD_TEMP_DIR` |
+| 可观测性 | `ZIPKIN_URL`、`TRACING_SAMPLE_RATE`、`GRAFANA_ADMIN_PASSWORD` |
+
+不要提交 `.env`。`JWT_SECRET` 应使用至少 32 字节的随机值，管理员密码应先生成 BCrypt 哈希后写入 `ADMIN_PASSWORD_HASH`。
+
+### 3. Docker Compose 启动
 
 ```bash
-# 在项目根目录，聚合构建全部模块
-mvn clean package -DskipTests
+docker compose up -d --build
 ```
 
-### 4. 运行（需先启动 Nacos + Temporal + MySQL）
+启用完整可观测性组件：
 
 ```bash
-# 主控服务（8001）
-java -jar main-service/target/main-service-1.0-SNAPSHOT.jar
-
-# 爬虫 Worker（8081）
-java -jar scraper-worker/target/scraper-worker-1.0-SNAPSHOT.jar
-
-# AI 服务（8082，可选）
-java -jar ai-service/target/ai-service-1.0-SNAPSHOT.jar
-
-# 前端（dev）
-cd 前端 && npm install && npm run dev   # http://127.0.0.1:5173
+docker compose --profile observability up -d --build
 ```
 
-### 5. Docker Compose（后端 + 前端）
+Grafana 会自动预置 Prometheus、Loki 和 `GalleryImport Monitoring` 大盘；登录管理前端后进入 `/monitoring` 即可直接打开。
 
-```bash
-# 先按上一节创建并填写 .env
-docker compose up -d
-# backend  → :8001
-# frontend → :8002（Nginx 反代 /api → backend:8001）
-
-# 同时启动 Prometheus、Loki、Promtail、Grafana 与 Zipkin
-docker compose --profile observability up -d
-```
-
-> 注：`docker-compose.yml` 现编排主服务、爬虫 Worker、AI 服务和前端；Nacos、Temporal、MySQL 仍需独立部署。
-> Grafana 会自动预置 Prometheus/Loki 数据源和 `GalleryImport Monitoring` 大盘；登录前端后进入“监控大盘”即可直接打开。
-
-### 6. 访问地址
+默认端口：
 
 | 服务 | 地址 |
 | --- | --- |
-| 主控 API | `http://127.0.0.1:8001` |
-| Swagger UI | `http://127.0.0.1:8001/swagger-ui/index.html` |
-| OpenAPI JSON | `http://127.0.0.1:8001/v3/api-docs` |
-| 前端（Docker） | `http://127.0.0.1:8002` |
-| 前端（dev） | `http://127.0.0.1:5173` |
-| Grafana（observability profile） | `http://127.0.0.1:3000/d/galleryimport-monitoring/galleryimport-monitoring` |
-| Prometheus（observability profile） | `http://127.0.0.1:9090` |
+| 管理前端 | `http://localhost:8002` |
+| 后端 API | `http://localhost:8001` |
+| Prometheus | `http://localhost:9090` |
+| Grafana | `http://localhost:3000/d/galleryimport-monitoring/galleryimport-monitoring` |
+| Zipkin | `http://localhost:9411` |
+| Loki | `http://localhost:3100` |
 
-## 认证
+MySQL、Temporal 和 Nacos 目前由外部环境提供，不在 `docker-compose.yml` 中创建。
 
-所有业务接口受 JWT 保护。先登录获取 token，再在请求头携带：
+### 4. 本地构建
 
-```http
-Authorization: Bearer <jwt-token>
-```
+后端：
 
 ```bash
-curl -X POST http://127.0.0.1:8001/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"***"}'
+mvn clean test
+mvn clean package -DskipTests
 ```
 
-## API 概览
+前端：
 
-| 功能 | 方法 | 路径 | 认证 |
-| --- | --- | --- | --- |
-| 登录获取 Token | POST | `/api/auth/login` | 无 |
-| 启动自动化工作流 | POST | `/api/temporal/eh/start` | JWT |
-| 重试失败任务 | POST | `/api/temporal/eh/retry-failed` | JWT |
-| 测试邮件通知 | POST | `/api/temporal/eh/test-email` | JWT |
-| 构建 Komga 合集 | POST | `/api/temporal/eh/collections/build-by-tags` | JWT |
-| 同步标签到 Komga | POST | `/api/temporal/eh/sync-tags` | JWT |
-| 批量刷新 Komga 元数据 | POST | `/api/temporal/eh/batch-refresh-metadata` | JWT |
-| 批量更新文件大小 | POST | `/api/temporal/eh/batch-update-filesize` | JWT |
-| 统计概览 | GET | `/api/dashboard/stats` | JWT |
-| 下载状态分布 | GET | `/api/dashboard/status-distribution` | JWT |
-| 文件大小分布 | GET | `/api/dashboard/file-size-distribution` | JWT |
-| 抓取时间线 | GET | `/api/dashboard/crawl-timeline` | JWT |
-| 标签命名空间统计 | GET | `/api/dashboard/tag-stats` | JWT |
-| 画廊列表（分页） | GET | `/api/dashboard/galleries` | JWT |
-| 搜索联想 | GET | `/api/dashboard/suggestions` | JWT |
-| 标签翻译映射表 | GET | `/api/dashboard/tag-translations` | JWT |
-| 刷新翻译缓存 | POST | `/api/dashboard/tag-translations/refresh` | JWT |
-| 标签详情 | GET | `/api/dashboard/tag-detail` | JWT |
+```bash
+cd 前端
+npm ci
+npm run build
+```
 
-详细接口说明见 [API_文档.md](API_文档.md)。
+## 数据库迁移
+
+应用启动时由 Flyway 自动执行迁移，不需要手工创建表。
+
+| 版本 | 内容 |
+| --- | --- |
+| V1 | 创建 `eh_galleries` 基础表 |
+| V2 | 增加简介与查询索引 |
+| V3 | 增加首版作品指纹与重复关系字段 |
+| V4 | 增加增量同步检查点和更新时间 |
+| V5 | 增加本地下载字节进度 |
+| V6 | 增加候选键与去重算法版本（保留已发布迁移的校验兼容） |
+| V7 | 增加持久化人工审核记录 |
+| V8 | 升级为候选检索、并发锁与多信号评分判重 |
+
+迁移文件位于 `main-service/src/main/resources/db/migration/`。
+
+## 管理页面
+
+登录后可访问：
+
+- `/dashboard`：整体状态与趋势。
+- `/galleries`：画廊列表、状态、下载进度与详情。
+- `/dedupe-reviews`：重复候选人工审核。
+- `/operations`：抓取、重试等操作入口。
+- `/monitoring`：Grafana 监控大盘。
+- `/workflows`：Temporal 工作流列表、历史和终止操作。
+
+## 主要接口
+
+### 重复项审核
+
+- `GET /api/dedupe-reviews`：分页查询审核记录，可按结论过滤。
+- `POST /api/dedupe-reviews/{id}/resolve`：提交 `MATCH` 或 `DIFFERENT`，必要时派发下载工作流。
+
+### Temporal 监控
+
+- `GET /api/temporal/monitor/workflows`：查询工作流。
+- `GET /api/temporal/monitor/workflows/{workflowId}/history`：查询执行历史。
+- `POST /api/temporal/monitor/workflows/{workflowId}/terminate`：终止工作流。
+
+完整接口说明参见 [API_文档.md](./API_文档.md)。
+
+## 邮件通知
+
+新启动的批处理流程只在所有已启动子流程完成后发送一封汇总邮件，内容包括计划数、启动数、完成状态分布和致命错误提示。单画廊流程中的逐条成功/失败邮件仅为旧 Temporal 历史兼容路径保留。
+
+## 运维建议
+
+- 不要使用 `docker compose down -v`，除非确认可以删除 Redis、Grafana 和下载缓存卷。
+- 失败任务恢复前先保留 `download-cache`，否则会失去断点续传数据。
+- Komga 长时间未命中时，依次检查群晖目标路径、Komga Library ID、文件是否已原子发布以及 Komga 扫描队列。
+- 生产环境建议启用 Redis，以共享 JWT 黑名单和 AI 翻译缓存。
+- 默认关闭 Zipkin 采样；启动 Zipkin 后再设置 `TRACING_SAMPLE_RATE`。
+
+## 安全说明
+
+- 仓库只保留变量名和示例值，不保存真实 Cookie、数据库密码、Graph 凭据或 NAS 凭据。
+- 后端接口使用 JWT 鉴权，并支持 Redis 黑名单注销。
+- 如果凭据曾进入 Git 历史，应立即轮换；仅从当前文件中删除并不能使旧凭据失效。
