@@ -234,6 +234,7 @@ npm run build
 | V7 | 增加持久化人工审核记录 |
 | V8 | 升级为候选检索、并发锁与多信号评分判重 |
 | V9 | 持久化 Komga 入库确认进度，增加失败复核与仅 Komga 补偿入口 |
+| V10 | 将历史 ENUM 状态列升级为 VARCHAR，兼容 Komga 等新增状态 |
 
 迁移文件位于 `main-service/src/main/resources/db/migration/`。
 
