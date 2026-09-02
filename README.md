@@ -136,6 +136,8 @@ GalleryImport/
 
 ## 快速开始
 
+生产环境 Docker 部署请参阅 [部署文档](./DEPLOYMENT.md)。
+
 ### 1. 前置依赖
 
 - JDK 17
