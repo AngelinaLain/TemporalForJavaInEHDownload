@@ -97,6 +97,8 @@ Docker Compose 默认把 `/data/download-cache` 挂载到命名卷 `download-cac
 
 文件上传后先标记为 `WAITING_KOMGA`，系统再触发并轮询 Komga。只有在目标 Library、`N8N_Update` 系列和数据库文件名（`[gid] 标题.cbz`）唯一匹配并取得 BookID，且幂等元数据更新成功后，才标记为 `IMPORTED`。多个精确候选、扫描接口失败或等待超时会标记为 `KOMGA_IMPORT_FAILED`，不会提前显示为已入库。
 
+历史 Download Station 数据可能没有 `ComicInfo.xml`，且数据库文件名与后期重命名结果不一致。此时系统会在上述目标 Library 和系列范围内，使用 Komga 返回的物理 `name`/`url` 对严格的 `[gid] ` 前缀进行兜底匹配；不会用展示标题模糊匹配。若同一 GID 出现多个物理文件，仍进入人工复核，避免误认版本。
+
 Komga 的扫描、媒体分析和数据库刷新是异步过程，因此“确认扫描命中”通常是整个链路中较慢的一段，这是正常现象。默认每 15 秒查询一次、最多 40 次（约 10 分钟），约 2 分钟仍未命中时会补触发一次扫描。
 
 ### Komga 入库复核（阶段二）

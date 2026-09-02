@@ -24,6 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import com.checker.common.EhNetworkClient;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -51,6 +52,16 @@ public class KomgaActivityImpl implements KomgaActivity {
      *  避免每次 findBookInKomga 轮询时重复查询 series/list 接口 */
     private final Cache<String, String> seriesIdCache = Caffeine.newBuilder()
             .maximumSize(10)
+            .build();
+
+    /**
+     * Komga 的 fullTextSearch 搜索的是展示元数据，不保证搜索物理文件名。扫描确认时按
+     * 系列拉取 BookDto，再用 name/url 做本地精确匹配。短缓存用于合并并发工作流轮询，
+     * 10 秒后自动刷新，不会延长当前 15 秒的扫描确认周期。
+     */
+    private final Cache<String, JSONArray> booksBySeriesCache = Caffeine.newBuilder()
+            .maximumSize(10)
+            .expireAfterWrite(Duration.ofSeconds(10))
             .build();
 
     @Override
@@ -127,27 +138,8 @@ public class KomgaActivityImpl implements KomgaActivity {
             return KomgaBookMatchResult.notFound("目标系列尚未被 Komga 扫描识别");
         }
 
-        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list";
-        JSONObject searchBody = new JSONObject();
-        searchBody.set("fullTextSearch", String.valueOf(gid));
-        JSONObject seriesIdCond = new JSONObject();
-        seriesIdCond.set("operator", "is");
-        seriesIdCond.set("value", targetSeriesId);
-        JSONObject condition = new JSONObject();
-        condition.set("seriesId", seriesIdCond);
-        searchBody.set("condition", condition);
-
-        try (HttpResponse response = HttpRequest.post(komgaUrl)
-                .header("X-API-Key", netConfig.getKomga().getApiKey())
-                .header("Content-Type", "application/json")
-                .body(searchBody.toString())
-                .execute()) {
-            if (!response.isOk()) {
-                throw komgaHttpFailure("Komga 图书查询失败", response.getStatus());
-            }
-
-            JSONObject resObj = JSONUtil.parseObj(response.body());
-            JSONArray content = resObj.getJSONArray("content");
+        try {
+            JSONArray content = getBooksInTargetSeries(targetSeriesId);
             List<String> matches = KomgaBookMatcher.exactBookIds(
                     content,
                     gid,
@@ -158,14 +150,18 @@ public class KomgaActivityImpl implements KomgaActivity {
                 String bookId = matches.get(0);
                 log.info("🎯 Komga 精确命中! GID: {}, 文件: {}, BookID: {}",
                         gid, gallery.getFilename(), bookId);
-                return KomgaBookMatchResult.found(bookId, "文件名、GID 与目标系列唯一匹配");
+                return KomgaBookMatchResult.found(bookId,
+                        "数据库文件名或历史 [GID] 物理路径与目标系列唯一匹配");
             }
             if (matches.size() > 1) {
                 String reason = "Komga 返回多个精确候选: " + matches;
                 log.error("❌ {}, GID: {}, 文件: {}", reason, gid, gallery.getFilename());
                 return KomgaBookMatchResult.ambiguous(reason, matches);
             }
-            return KomgaBookMatchResult.notFound("扫描中，暂未发现精确文件名/GID匹配");
+            int candidateCount = content == null ? 0 : content.size();
+            return KomgaBookMatchResult.notFound(String.format(
+                    "扫描中，目标系列返回 %d 本书，未发现数据库文件名或 [%d] 物理路径匹配",
+                    candidateCount, gid));
         } catch (ApplicationFailure e) {
             throw e;
         } catch (Exception e) {
@@ -210,6 +206,7 @@ public class KomgaActivityImpl implements KomgaActivity {
                 .header("X-API-Key", netConfig.getKomga().getApiKey())
                 .execute()) {
             if (response.isOk() || response.getStatus() == 202) {
+                booksBySeriesCache.invalidateAll();
                 log.info("🚀 Komga 扫描指令已发送，Library ID: {}", libraryId);
                 return;
             }
@@ -223,6 +220,38 @@ public class KomgaActivityImpl implements KomgaActivity {
             return ApplicationFailure.newNonRetryableFailure(message, ErrorType.KOMGA_SCAN_FAILED.getCode());
         }
         return ApplicationFailure.newFailure(message, ErrorType.KOMGA_SCAN_FAILED.getCode());
+    }
+
+    private JSONArray getBooksInTargetSeries(String targetSeriesId) {
+        String libraryId = StrUtil.blankToDefault(netConfig.getKomga().getLibraryId(), "");
+        String cacheKey = libraryId + "|" + targetSeriesId;
+        return booksBySeriesCache.get(cacheKey, ignored -> queryBooksInTargetSeries(targetSeriesId));
+    }
+
+    private JSONArray queryBooksInTargetSeries(String targetSeriesId) {
+        String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list?unpaged=true";
+        JSONObject seriesIdCond = new JSONObject();
+        seriesIdCond.set("operator", "is");
+        seriesIdCond.set("value", targetSeriesId);
+        JSONObject condition = new JSONObject();
+        condition.set("seriesId", seriesIdCond);
+        JSONObject searchBody = new JSONObject();
+        searchBody.set("condition", condition);
+
+        try (HttpResponse response = HttpRequest.post(komgaUrl)
+                .header("X-API-Key", netConfig.getKomga().getApiKey())
+                .header("Content-Type", "application/json")
+                .body(searchBody.toString())
+                .execute()) {
+            if (!response.isOk()) {
+                throw komgaHttpFailure("Komga 目标系列图书查询失败", response.getStatus());
+            }
+            JSONArray content = JSONUtil.parseObj(response.body()).getJSONArray("content");
+            JSONArray result = content == null ? new JSONArray() : content;
+            log.debug("Komga 目标系列物理文件索引已刷新，Series ID: {}, Book 数: {}",
+                    targetSeriesId, result.size());
+            return result;
+        }
     }
 
 

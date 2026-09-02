@@ -50,6 +50,22 @@ class KomgaBookMatcherTest {
     }
 
     @Test
+    void legacyGidPrefixOverridesStaleDatabaseFilename() {
+        JSONObject legacyBook = book(
+                "legacy", "[123456] Renamed After Download.cbz", "series-1", "library-1")
+                .set("metadata", new JSONObject().set("title", "Title without gid"));
+
+        List<String> result = KomgaBookMatcher.exactBookIds(
+                new JSONArray().set(legacyBook),
+                123456L,
+                "Original Download Station Task.zip",
+                "series-1",
+                "library-1");
+
+        assertEquals(List.of("legacy"), result);
+    }
+
+    @Test
     void returnsAllExactMatchesSoCallerCanRejectAmbiguity() {
         JSONArray content = new JSONArray()
                 .set(book("book-1", "[123456] Title.cbz", "series-1", "library-1"))

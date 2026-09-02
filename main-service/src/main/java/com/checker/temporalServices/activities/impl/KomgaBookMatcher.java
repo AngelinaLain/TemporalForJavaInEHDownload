@@ -44,12 +44,16 @@ final class KomgaBookMatcher {
         String expected = basename(expectedFilename);
         if (!expected.isBlank()) {
             String expectedStem = stripArchiveExtension(expected);
-            return candidates.stream()
+            boolean expectedFilenameMatched = candidates.stream()
                     .map(KomgaBookMatcher::basename)
                     .anyMatch(candidate -> candidate.equalsIgnoreCase(expected)
                             || stripArchiveExtension(candidate).equalsIgnoreCase(expectedStem));
+            if (expectedFilenameMatched) return true;
         }
 
+        // 兼容历史 Download Station 数据：数据库中可能仍是下载任务原名，文件后来才被
+        // 重命名为 [gid] xxx.cbz，且旧包没有 ComicInfo.xml。这里仅检查 Komga 返回的
+        // 物理 name/url，不检查 metadata.title，避免标题相似导致误命中。
         String gidPrefix = "[" + gid + "] ";
         return candidates.stream()
                 .map(KomgaBookMatcher::basename)
