@@ -16,6 +16,7 @@ import java.util.Map;
 @Mapper
 public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
 
+
     /**
      * 大批量写入：一次 INSERT 多行（由 BatchSqlInjector 注入），
      * 忽略 null 字段与自动填充字段，比逐条 INSERT 性能高一个量级。
