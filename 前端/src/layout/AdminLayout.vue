@@ -20,6 +20,10 @@
           <el-icon><Finished /></el-icon>
           <template #title>去重审核</template>
         </el-menu-item>
+        <el-menu-item index="/visual-dedup">
+          <el-icon><Picture /></el-icon>
+          <template #title>视觉指纹</template>
+        </el-menu-item>
         <el-menu-item index="/komga-import-reviews">
           <el-icon><Refresh /></el-icon>
           <template #title>Komga 入库复核</template>
@@ -76,7 +80,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh, Picture } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()

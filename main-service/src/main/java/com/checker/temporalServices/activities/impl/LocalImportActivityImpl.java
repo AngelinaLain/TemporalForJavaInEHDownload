@@ -9,6 +9,9 @@ import com.checker.config.EhNetworkConfig;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.SynologyUploadService;
+import com.checker.service.ArchiveVisualFingerprintExtractor;
+import com.checker.service.VisualFingerprintService;
+import com.checker.service.DedupeReviewService;
 import com.checker.temporalServices.activities.LocalImportActivity;
 import cn.hutool.core.util.StrUtil;
 import io.temporal.activity.Activity;
@@ -66,6 +69,15 @@ public class LocalImportActivityImpl implements LocalImportActivity {
 
     @Autowired
     private EhNetworkConfig netConfig;
+
+    @Autowired
+    private ArchiveVisualFingerprintExtractor visualExtractor;
+
+    @Autowired
+    private VisualFingerprintService visualFingerprintService;
+
+    @Autowired
+    private DedupeReviewService dedupeReviewService;
 
     @Override
     public void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb) {
@@ -150,6 +162,18 @@ public class LocalImportActivityImpl implements LocalImportActivity {
                 verifyArchive(cbzFile, true, heartbeatProgress(ctx, gid, "校验元数据刷新结果", false));
             } else {
                 log.info("⏭️ 检测到完整且元数据一致的 CBZ，直接重试上传, GID: {}", gid);
+            }
+
+            // 在临时归档被清理前生成高质量采样指纹；失败只降低去重证据，不阻断主下载链路。
+            try (java.io.InputStream archiveInput = Files.newInputStream(cbzFile)) {
+                int visualPages = visualFingerprintService.replace(gid,
+                        visualExtractor.extract(archiveInput, gid, gallery.getPageCount()));
+                if (visualPages > 0) {
+                    dedupeReviewService.refreshVisualEvidenceForGid(gid);
+                    log.info("🖼️ 归档视觉指纹已刷新, GID: {}, 采样页: {}", gid, visualPages);
+                }
+            } catch (Exception visualFailure) {
+                log.warn("归档视觉指纹生成失败，不阻断上传, GID: {}, 原因: {}", gid, visualFailure.getMessage());
             }
 
             ctx.heartbeat("上传到群晖: " + targetFilename);

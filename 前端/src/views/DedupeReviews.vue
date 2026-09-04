@@ -12,6 +12,7 @@
             <el-option label="待审核" value="PENDING" />
             <el-option label="已确认同作品" value="MATCH" />
             <el-option label="已确认不同作品" value="DIFFERENT" />
+            <el-option label="同源不同版本" value="VARIANT" />
             <el-option label="全部记录" value="ALL" />
           </el-select>
           <el-button :loading="loading" @click="loadData">刷新</el-button>
@@ -35,6 +36,23 @@
       </template>
 
       <el-alert :title="item.matchReason || '没有详细匹配理由'" type="warning" :closable="false" show-icon />
+      <div v-if="hasVisualEvidence(item)" class="visual-evidence">
+        <div class="visual-summary">
+          <div><span>视觉相似度</span><strong>{{ item.visualSimilarity }}%</strong></div>
+          <div><span>匹配采样页</span><strong>{{ item.visualMatchedPages }}</strong></div>
+          <div><span>采样覆盖率</span><strong>{{ item.visualSampleCoverage }}%</strong></div>
+          <div><span>质量差</span><strong>{{ item.visualQualityDelta }}%</strong></div>
+        </div>
+        <el-alert
+          :title="item.visualReason || '视觉分析已完成'"
+          :type="item.visualSimilarity >= 80 ? 'success' : 'info'"
+          :closable="false"
+          show-icon
+        />
+        <p v-if="item.visualRecommendedGid" class="visual-recommendation">
+          视觉质量推荐：GID {{ item.visualRecommendedGid }}；最终仍需结合汉化版本与内容差异人工确认。
+        </p>
+      </div>
 
       <div class="comparison">
         <template v-for="(candidate, index) in reviewCandidates(item)" :key="candidate.gallery?.gid || index">
@@ -82,6 +100,9 @@
         </el-button>
         <el-button type="danger" plain @click="resolveReview(item, 'DIFFERENT', null, '标记为不同作品')">
           不是同一作品
+        </el-button>
+        <el-button type="warning" plain @click="resolveReview(item, 'VARIANT', null, '标记为同源但不同内容版本，两个都保留')">
+          同源不同汉化（都保留）
         </el-button>
       </div>
       <div v-else class="review-result">
@@ -142,6 +163,8 @@ const reviewCandidates = item => [
   { label: '右侧版本', gallery: item.right }
 ]
 
+const hasVisualEvidence = item => item.visualSimilarity !== null && item.visualSimilarity !== undefined
+
 const reloadFromFirstPage = () => {
   pagination.page = 1
   void loadData()
@@ -158,7 +181,7 @@ const resolveReview = async (item, decision, preferredGid, actionLabel) => {
     await ElMessageBox.confirm(
       `${actionLabel}。该人工结论会覆盖后续自动判重，是否继续？`,
       '确认去重审核',
-      { type: decision === 'DIFFERENT' ? 'warning' : 'info', confirmButtonText: '确认', cancelButtonText: '取消' }
+      { type: ['DIFFERENT', 'VARIANT'].includes(decision) ? 'warning' : 'info', confirmButtonText: '确认', cancelButtonText: '取消' }
     )
   } catch {
     return
@@ -177,7 +200,8 @@ const resolveReview = async (item, decision, preferredGid, actionLabel) => {
 const decisionMeta = decision => ({
   PENDING: { label: '待审核', type: 'warning' },
   MATCH: { label: '同一作品', type: 'success' },
-  DIFFERENT: { label: '不同作品', type: 'danger' }
+  DIFFERENT: { label: '不同作品', type: 'danger' },
+  VARIANT: { label: '同源不同版本', type: 'warning' }
 }[decision] || { label: decision || '-', type: 'info' })
 
 const scoreClass = score => score >= 80 ? 'score-high' : score >= 70 ? 'score-medium' : 'score-low'
@@ -208,6 +232,12 @@ onMounted(loadData)
 .score-medium { color: #e6a23c; }
 .score-low { color: #909399; }
 .comparison { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); align-items: stretch; margin-top: 16px; }
+.visual-evidence { margin-top: 14px; padding: 14px; border: 1px solid #d9ecff; border-radius: 8px; background: #f4f9ff; }
+.visual-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+.visual-summary div { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 6px; background: #fff; }
+.visual-summary span { color: #909399; font-size: 12px; }
+.visual-summary strong { color: #303133; font-size: 18px; }
+.visual-recommendation { margin: 10px 0 0; color: #606266; font-size: 13px; }
 .versus { display: flex; align-items: center; justify-content: center; color: #909399; font-weight: 700; }
 .candidate { border: 1px solid #dcdfe6; border-radius: 8px; padding: 18px; background: #fff; min-width: 0; }
 .candidate.recommended { border-color: #409eff; box-shadow: inset 0 0 0 1px #409eff; }
@@ -234,5 +264,6 @@ onMounted(loadData)
   .comparison { grid-template-columns: 1fr; gap: 12px; }
   .versus { height: 24px; }
   .candidate-facts { grid-template-columns: repeat(2, 1fr); }
+  .visual-summary { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

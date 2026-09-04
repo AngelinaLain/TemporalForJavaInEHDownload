@@ -20,6 +20,14 @@ public class DedupeReviewEntity implements Serializable {
     private Long rightGid;
     private Integer matchScore;
     private String matchReason;
+    private Integer visualSimilarity;
+    private Integer visualMatchedPages;
+    private Integer visualSampleCoverage;
+    private Integer visualOrderConsistency;
+    private Long visualRecommendedGid;
+    private Integer visualQualityDelta;
+    private String visualReason;
+    private Integer visualAlgorithmVersion;
     private Long recommendedGid;
     private String decision;
     private Long preferredGid;

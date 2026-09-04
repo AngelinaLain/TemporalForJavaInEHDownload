@@ -152,6 +152,54 @@ public class EhNetworkClient {
         return executeWithFailover(url, requestBuilder -> requestBuilder.get().build());
     }
 
+    /** 下载受限大小的图片等二进制资源，沿用 EH Cookie、代理轮换与全局限流。 */
+    public byte[] getBytes(String url, long maxBytes) {
+        if (maxBytes <= 0 || maxBytes > 100L * 1024 * 1024) {
+            throw new IllegalArgumentException("二进制响应大小上限必须在 1-100MB 之间");
+        }
+        Exception lastFailure = null;
+        for (int attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
+            ClientEntry entry = pickAvailableClient();
+            Request.Builder builder = buildBaseRequest(url);
+            String cookie = pickCookie();
+            if (cookie != null) builder.header("Cookie", cookie);
+            acquireRateLimitPermit(url);
+            try (Response response = entry.client.newCall(builder.get().build()).execute()) {
+                int status = response.code();
+                if (status == 403 || status == 502) {
+                    long cooldownMs = TimeUnit.SECONDS.toMillis(
+                            netConfig.getRateLimit() != null ? netConfig.getRateLimit().getProxyCooldownSeconds() : 300);
+                    entry.coolDownUntil = System.currentTimeMillis() + cooldownMs;
+                    lastFailure = new IOException("图片节点返回 HTTP " + status);
+                    continue;
+                }
+                if (!response.isSuccessful() || response.body() == null) {
+                    throw new IOException("图片请求失败: HTTP " + status);
+                }
+                long declared = response.body().contentLength();
+                if (declared > maxBytes) throw new IOException("图片响应超过大小限制: " + declared);
+                try (java.io.InputStream input = response.body().byteStream();
+                     java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                    byte[] buffer = new byte[32 * 1024];
+                    long total = 0;
+                    int read;
+                    while ((read = input.read(buffer)) != -1) {
+                        total += read;
+                        if (total > maxBytes) throw new IOException("图片响应超过大小限制: " + total);
+                        output.write(buffer, 0, read);
+                    }
+                    return output.toByteArray();
+                }
+            } catch (Exception e) {
+                lastFailure = e;
+                log.warn("二进制资源请求失败 (第 {} 次): {} - URL: {}", attempt + 1, e.getMessage(), url);
+            }
+        }
+        throw ApplicationFailure.newFailure("图片资源下载失败: "
+                        + (lastFailure == null ? "unknown" : lastFailure.getMessage()),
+                ErrorType.NETWORK_ERROR.getCode());
+    }
+
     public String postForm(String url, Map<String, Object> formParams) {
         log.info("正在提交 EHentai 表单: {}", url);
         FormBody.Builder formBuilder = new FormBody.Builder();

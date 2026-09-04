@@ -30,6 +30,12 @@ const routes = [
         meta: { title: '去重审核' }
       },
       {
+        path: 'visual-dedup',
+        name: 'VisualDeduplication',
+        component: () => import('../views/VisualDeduplication.vue'),
+        meta: { title: '视觉指纹' }
+      },
+      {
         path: 'komga-import-reviews',
         name: 'KomgaImportReviews',
         component: () => import('../views/KomgaImportReviews.vue'),

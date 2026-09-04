@@ -7,11 +7,13 @@ import com.checker.common.DownloadStatus;
 import com.checker.common.GalleryDeduplication;
 import com.checker.config.EhWorkflowConfig;
 import com.checker.dto.WorkflowSettings;
+import com.checker.dto.GalleryPageFingerprint;
 import com.checker.entity.DedupeReviewEntity;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.EhGalleriesService;
 import com.checker.service.DedupeReviewService;
+import com.checker.service.VisualFingerprintService;
 import com.checker.temporalServices.activities.DatabaseActivity;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +49,8 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     private EhWorkflowConfig workflowConfig;
     @Autowired
     private DedupeReviewService dedupeReviewService;
+    @Autowired
+    private VisualFingerprintService visualFingerprintService;
 
     @Override
     public void saveToDatabase(EhGalleriesEntity gallery) {
@@ -167,6 +171,37 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         if (updated > 0) {
             log.info("🔖 已使用去重算法 V{} 回填 {} 条历史画廊", GalleryDeduplication.ALGORITHM_VERSION, updated);
         }
+    }
+
+    @Override
+    public List<EhGalleriesEntity> findGalleriesNeedingVisualFingerprint(List<Long> gids) {
+        if (gids == null || gids.isEmpty()) return List.of();
+        List<String> incomingKeys = galleriesMapper.selectBatchIds(gids).stream()
+                .map(EhGalleriesEntity::getCandidateKey)
+                .filter(key -> key != null && !key.isBlank())
+                .distinct()
+                .toList();
+        if (incomingKeys.isEmpty()) return List.of();
+        QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
+        query.in("candidate_key", incomingKeys).orderByAsc("gid");
+        List<EhGalleriesEntity> bucketMembers = galleriesMapper.selectList(query);
+        Map<String, Long> counts = bucketMembers.stream().collect(java.util.stream.Collectors.groupingBy(
+                EhGalleriesEntity::getCandidateKey, java.util.stream.Collectors.counting()));
+        // 单例桶无需远程拉取图片；当第二个版本出现时，会同时补算新旧两个版本。
+        return bucketMembers.stream()
+                .filter(gallery -> counts.getOrDefault(gallery.getCandidateKey(), 0L) > 1)
+                .filter(gallery -> !visualFingerprintService.isCurrent(gallery.getGid()))
+                .toList();
+    }
+
+    @Override
+    public void saveGalleryVisualFingerprints(Map<Long, List<GalleryPageFingerprint>> fingerprints) {
+        if (fingerprints == null || fingerprints.isEmpty()) return;
+        int pages = 0;
+        for (Map.Entry<Long, List<GalleryPageFingerprint>> entry : fingerprints.entrySet()) {
+            pages += visualFingerprintService.replace(entry.getKey(), entry.getValue());
+        }
+        log.info("🖼️ 已保存 {} 个画廊页面视觉指纹", pages);
     }
 
     @Override

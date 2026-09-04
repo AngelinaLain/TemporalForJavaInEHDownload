@@ -71,6 +71,8 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 "candidate-score-deduplication", Workflow.DEFAULT_VERSION, 1);
         int dedupeBackfillVersion = Workflow.getVersion(
                 "gallery-dedupe-history-backfill", Workflow.DEFAULT_VERSION, 1);
+        int visualDedupeVersion = Workflow.getVersion(
+                "gallery-visual-deduplication", Workflow.DEFAULT_VERSION, 1);
 
         // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
@@ -173,6 +175,15 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         // 首选版本和被跳过的版本都入库；后者以“已忽略 + duplicate_of_gid”保留供前端查看。
         if (!candidates.isEmpty()) {
             databaseActivity.saveGalleriesBatch(candidates);
+        }
+        if (visualDedupeVersion != Workflow.DEFAULT_VERSION && !candidates.isEmpty()) {
+            List<Long> candidateGids = candidates.stream().map(EhGalleriesEntity::getGid).toList();
+            List<EhGalleriesEntity> visualTargets = databaseActivity
+                    .findGalleriesNeedingVisualFingerprint(candidateGids);
+            if (!visualTargets.isEmpty()) {
+                databaseActivity.saveGalleryVisualFingerprints(
+                        scraperActivity.analyzeGalleryPreviews(visualTargets));
+            }
         }
         // 合并任务列表：补偿任务优先（已下载，只需入库）
         List<GalleryTask> tasks = new ArrayList<>();

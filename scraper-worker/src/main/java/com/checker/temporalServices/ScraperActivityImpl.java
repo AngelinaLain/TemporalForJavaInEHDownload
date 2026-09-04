@@ -10,10 +10,12 @@ import cn.hutool.json.JSONUtil;
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.GalleryDeduplication;
+import com.checker.common.PerceptualHash;
 import com.checker.common.EhNetworkClient;
 import com.checker.common.ErrorType;
 import com.checker.dto.ArchiveDownloadInfo;
 import com.checker.dto.SearchOptions;
+import com.checker.dto.GalleryPageFingerprint;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.ScraperActivity;
 import io.temporal.activity.Activity;
@@ -31,11 +33,14 @@ import org.springframework.stereotype.Component;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.io.ByteArrayInputStream;
 
 /**
  * 爬虫 Activity 实现：负责 EHentai 画廊列表抓取与下载链接提取
@@ -53,6 +58,61 @@ public class ScraperActivityImpl implements ScraperActivity {
     private static final int DELAY_MS = 3000;
     private static final int MAX_SAFE_PAGES = 100; // 防止网站结构突变导致无限死循环的安全阈值
     private static final int METADATA_BATCH_SIZE = 25; // EH gdata 单次请求上限
+    private static final int VISUAL_SAMPLE_COUNT = 16;
+    private static final long MAX_PREVIEW_BYTES = 10L * 1024 * 1024;
+
+    @Override
+    public Map<Long, List<GalleryPageFingerprint>> analyzeGalleryPreviews(List<EhGalleriesEntity> galleries) {
+        Map<Long, List<GalleryPageFingerprint>> result = new LinkedHashMap<>();
+        if (galleries == null) return result;
+        int processed = 0;
+        for (EhGalleriesEntity gallery : galleries) {
+            if (gallery == null || gallery.getGid() == null || StrUtil.isBlank(gallery.getToken())) continue;
+            Activity.getExecutionContext().heartbeat("视觉预览 " + (++processed) + "/" + galleries.size());
+            String galleryUrl = StrUtil.blankToDefault(gallery.getGalleryUrl(),
+                    Constants.EHENTAI_BASE_URL + "g/" + gallery.getGid() + "/" + gallery.getToken() + "/");
+            try {
+                Document document = Jsoup.parse(ehNetworkClient.getHtml(galleryUrl), galleryUrl);
+                Elements images = document.select("#gdt img, .gdtm img, .gdtl img");
+                List<Element> sampled = sampleElements(images, VISUAL_SAMPLE_COUNT);
+                List<GalleryPageFingerprint> fingerprints = new ArrayList<>();
+                for (int index = 0; index < sampled.size(); index++) {
+                    Element image = sampled.get(index);
+                    String imageUrl = image.hasAttr("data-src") ? image.absUrl("data-src") : image.absUrl("src");
+                    if (StrUtil.isBlank(imageUrl)) {
+                        imageUrl = image.hasAttr("data-src") ? image.attr("data-src") : image.attr("src");
+                    }
+                    if (StrUtil.isBlank(imageUrl) || imageUrl.startsWith("data:")) continue;
+                    try {
+                        byte[] bytes = ehNetworkClient.getBytes(imageUrl, MAX_PREVIEW_BYTES);
+                        GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
+                                new ByteArrayInputStream(bytes), gallery.getGid(), index,
+                                "preview-" + index, "PREVIEW");
+                        if (fingerprint != null) fingerprints.add(fingerprint);
+                    } catch (Exception imageFailure) {
+                        log.debug("预览图指纹失败, GID: {}, URL: {}, 原因: {}",
+                                gallery.getGid(), imageUrl, imageFailure.getMessage());
+                    }
+                }
+                result.put(gallery.getGid(), fingerprints);
+                log.info("🖼️ GID {} 已生成 {}/{} 个预览指纹", gallery.getGid(), fingerprints.size(), sampled.size());
+            } catch (Exception failure) {
+                log.warn("画廊预览分析失败，不阻断普通抓取, GID: {}, 原因: {}", gallery.getGid(), failure.getMessage());
+                result.put(gallery.getGid(), List.of());
+            }
+        }
+        return result;
+    }
+
+    private List<Element> sampleElements(Elements images, int limit) {
+        if (images == null || images.isEmpty()) return List.of();
+        if (images.size() <= limit) return new ArrayList<>(images);
+        LinkedHashSet<Integer> indexes = new LinkedHashSet<>();
+        for (int i = 0; i < limit; i++) {
+            indexes.add((int) Math.round(i * (images.size() - 1D) / (limit - 1D)));
+        }
+        return indexes.stream().map(images::get).toList();
+    }
 
     @Override
     public List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions) {

@@ -8,6 +8,7 @@ import com.checker.common.DownloadStatus;
 import com.checker.common.GalleryDeduplication;
 import com.checker.entity.DedupeReviewEntity;
 import com.checker.entity.EhGalleriesEntity;
+import com.checker.dto.GalleryVisualMatch;
 import com.checker.mapper.DedupeReviewMapper;
 import com.checker.mapper.EhGalleriesMapper;
 import org.springframework.stereotype.Service;
@@ -27,13 +28,17 @@ public class DedupeReviewService {
     public static final String PENDING = "PENDING";
     public static final String MATCH = "MATCH";
     public static final String DIFFERENT = "DIFFERENT";
+    public static final String VARIANT = "VARIANT";
 
     private final DedupeReviewMapper reviewMapper;
     private final EhGalleriesMapper galleriesMapper;
+    private final VisualFingerprintService visualFingerprintService;
 
-    public DedupeReviewService(DedupeReviewMapper reviewMapper, EhGalleriesMapper galleriesMapper) {
+    public DedupeReviewService(DedupeReviewMapper reviewMapper, EhGalleriesMapper galleriesMapper,
+                               VisualFingerprintService visualFingerprintService) {
         this.reviewMapper = reviewMapper;
         this.galleriesMapper = galleriesMapper;
+        this.visualFingerprintService = visualFingerprintService;
     }
 
     public IPage<DedupeReviewEntity> page(int page, int size, String decision) {
@@ -68,18 +73,59 @@ public class DedupeReviewService {
                 EhGalleriesEntity left = bucket.get(leftIndex);
                 EhGalleriesEntity right = bucket.get(rightIndex);
                 PairKey pair = PairKey.of(left.getGid(), right.getGid());
-                if (existing.containsKey(pair)) continue;
+                if (existing.containsKey(pair)) {
+                    refreshVisualEvidence(existing.get(pair));
+                    continue;
+                }
                 GalleryDeduplication.MatchResult match = GalleryDeduplication.match(left, right);
                 if (match.score() < GalleryDeduplication.REVIEW_MATCH_THRESHOLD
                         || match.score() >= GalleryDeduplication.AUTO_MATCH_THRESHOLD) {
                     continue;
                 }
-                Long recommended = GalleryDeduplication.choosePreferred(List.of(left, right)).getGid();
+                GalleryVisualMatch visual = visualFingerprintService == null ? null
+                        : visualFingerprintService.matchAndPersist(pair.left(), pair.right());
+                Long recommended = visual != null && visual.getRecommendedGid() != null
+                        ? visual.getRecommendedGid()
+                        : GalleryDeduplication.choosePreferred(List.of(left, right)).getGid();
                 created += reviewMapper.insertPending(candidateKey, pair.left(), pair.right(),
-                        match.score(), match.reason(), recommended);
+                        match.score(), match.reason(),
+                        visual == null ? null : visual.getSimilarity(),
+                        visual == null ? null : visual.getMatchedPages(),
+                        visual == null ? null : visual.getSampleCoverage(),
+                        visual == null ? null : visual.getOrderConsistency(),
+                        visual == null ? null : visual.getRecommendedGid(),
+                        visual == null ? null : visual.getQualityDelta(),
+                        visual == null ? null : visual.getReason(),
+                        visual == null ? null : visual.getAlgorithmVersion(), recommended);
             }
         }
         return created;
+    }
+
+    public void refreshVisualEvidenceForGid(Long gid) {
+        if (gid == null) return;
+        QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();
+        query.and(wrapper -> wrapper.eq("left_gid", gid).or().eq("right_gid", gid));
+        reviewMapper.selectList(query).forEach(this::refreshVisualEvidence);
+    }
+
+    private void refreshVisualEvidence(DedupeReviewEntity review) {
+        if (review == null || visualFingerprintService == null) return;
+        GalleryVisualMatch visual = visualFingerprintService.matchAndPersist(review.getLeftGid(), review.getRightGid());
+        UpdateWrapper<DedupeReviewEntity> update = new UpdateWrapper<>();
+        update.eq("id", review.getId())
+                .set("visual_similarity", visual.getSimilarity())
+                .set("visual_matched_pages", visual.getMatchedPages())
+                .set("visual_sample_coverage", visual.getSampleCoverage())
+                .set("visual_order_consistency", visual.getOrderConsistency())
+                .set("visual_recommended_gid", visual.getRecommendedGid())
+                .set("visual_quality_delta", visual.getQualityDelta())
+                .set("visual_reason", visual.getReason())
+                .set("visual_algorithm_version", visual.getAlgorithmVersion());
+        if (PENDING.equals(review.getDecision()) && visual.getRecommendedGid() != null) {
+            update.set("recommended_gid", visual.getRecommendedGid());
+        }
+        reviewMapper.update(null, update);
     }
 
     public Set<Long> heldGids(List<DedupeReviewEntity> reviews) {
@@ -161,8 +207,8 @@ public class DedupeReviewService {
     public ResolutionOutcome resolve(Long reviewId, String requestedDecision,
                                      Long preferredGid, String reviewedBy) {
         String decision = normalizeDecision(requestedDecision);
-        if (!MATCH.equals(decision) && !DIFFERENT.equals(decision)) {
-            throw new IllegalArgumentException("审核结论只支持 MATCH 或 DIFFERENT");
+        if (!MATCH.equals(decision) && !DIFFERENT.equals(decision) && !VARIANT.equals(decision)) {
+            throw new IllegalArgumentException("审核结论只支持 MATCH、DIFFERENT 或 VARIANT");
         }
         DedupeReviewEntity snapshot = reviewMapper.selectById(reviewId);
         if (snapshot == null) throw new IllegalArgumentException("审核记录不存在");
@@ -260,7 +306,8 @@ public class DedupeReviewService {
         DedupeReviewEntity review = decisions.get(PairKey.of(left.getGid(), right.getGid()));
         if (review != null) {
             if (MATCH.equals(review.getDecision())) return true;
-            if (DIFFERENT.equals(review.getDecision()) || PENDING.equals(review.getDecision())) return false;
+            if (DIFFERENT.equals(review.getDecision()) || VARIANT.equals(review.getDecision())
+                    || PENDING.equals(review.getDecision())) return false;
         }
         return GalleryDeduplication.isAutomaticMatch(left, right);
     }

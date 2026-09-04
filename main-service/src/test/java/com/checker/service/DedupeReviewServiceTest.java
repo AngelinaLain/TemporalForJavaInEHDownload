@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DedupeReviewServiceTest {
-    private final DedupeReviewService service = new DedupeReviewService(null, null);
+    private final DedupeReviewService service = new DedupeReviewService(null, null, null);
 
     @Test
     void pendingReviewAlsoHoldsManuallyMatchedMembers() {
@@ -44,6 +44,8 @@ class DedupeReviewServiceTest {
                 List.of(review(10L, 11L, DedupeReviewService.MATCH, 10L))).size());
         assertEquals(2, service.cluster(List.of(first, second),
                 List.of(review(10L, 11L, DedupeReviewService.DIFFERENT, null))).size());
+        assertEquals(2, service.cluster(List.of(first, second),
+                List.of(review(10L, 11L, DedupeReviewService.VARIANT, null))).size());
     }
 
     @Test

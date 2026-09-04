@@ -1,11 +1,13 @@
 package com.checker.temporalServices.activities;
 
 import com.checker.dto.WorkflowSettings;
+import com.checker.dto.GalleryPageFingerprint;
 import com.checker.entity.EhGalleriesEntity;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * 数据库域 Activity：负责所有对 eh_galleries 表的读写操作
@@ -35,6 +37,12 @@ public interface DatabaseActivity {
      * 避免后续工作流反复扫描。
      */
     void backfillGalleryDeduplicationMetadata();
+
+    /** 返回尚未生成当前版本视觉指纹的本轮画廊。 */
+    List<EhGalleriesEntity> findGalleriesNeedingVisualFingerprint(List<Long> gids);
+
+    /** 持久化下载前预览图指纹；已有归档级指纹时不会被低质量预览覆盖。 */
+    void saveGalleryVisualFingerprints(Map<Long, List<GalleryPageFingerprint>> fingerprints);
 
     /**
      * 查询指定作品指纹中已存在的首选版本（不含被标记为重复的版本）。
