@@ -108,6 +108,36 @@ class EhNetworkClientDownloadTest {
         assertArrayEquals(content, Files.readAllBytes(target));
     }
 
+    @Test
+    void retriesSocketReadTimeoutInsteadOfTreatingItAsCancellation() throws Exception {
+        byte[] content = "download after transient timeout".getBytes(StandardCharsets.UTF_8);
+        AtomicInteger calls = new AtomicInteger();
+        EhNetworkConfig config = (EhNetworkConfig) ReflectionTestUtils.getField(client, "netConfig");
+        config.getDownload().setReadTimeoutSeconds(1);
+        config.getDownload().setMaxAttempts(2);
+        config.getDownload().setInitialBackoffSeconds(1);
+        config.getDownload().setMaxBackoffSeconds(1);
+
+        server.createContext("/timeout-retry", exchange -> {
+            if (calls.getAndIncrement() == 0) {
+                try {
+                    Thread.sleep(1_500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            exchange.getResponseHeaders().add("Content-Type", "application/octet-stream");
+            send(exchange, 200, content);
+        });
+
+        Path target = tempDir.resolve("timeout-retry.zip");
+        long bytes = client.downloadWithResume(url("/timeout-retry"), target);
+
+        assertEquals(2, calls.get());
+        assertEquals(content.length, bytes);
+        assertArrayEquals(content, Files.readAllBytes(target));
+    }
+
     private String url(String path) {
         return "http://127.0.0.1:" + server.getAddress().getPort() + path;
     }

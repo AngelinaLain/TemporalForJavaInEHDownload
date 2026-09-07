@@ -17,6 +17,7 @@ import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -356,8 +357,9 @@ public class EhNetworkClient {
         ResumeMetadata metadata = loadResumeMetadata(metadataFile);
         IOException lastIoFailure = null;
         boolean sawBlockedProxy = false;
+        int maxAttempts = Math.max(1, netConfig.getDownload().getMaxAttempts());
 
-        for (int attempt = 0; attempt < MAX_FAILOVER_ATTEMPTS; attempt++) {
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
             long offset = Files.exists(partFile) ? Files.size(partFile) : 0;
             if (attempt == 0 && offset > 0) {
                 log.info("🔄 检测到未完成下载片段 {} 字节，将从偏移处续传: {}", offset, url);
@@ -377,7 +379,7 @@ public class EhNetworkClient {
             }
 
             acquireRateLimitPermit(url);
-            try (Response response = entry.client.newCall(builder.build()).execute()) {
+            try (Response response = downloadClient(entry.client).newCall(builder.build()).execute()) {
                 int status = response.code();
                 if (status == 403 || status == 502) {
                     sawBlockedProxy = true;
@@ -466,12 +468,27 @@ public class EhNetworkClient {
                     continue;
                 }
                 return publishCompletedDownload(partFile, metadataFile, target, downloaded);
+            } catch (SocketTimeoutException e) {
+                // SocketTimeoutException 继承 InterruptedIOException。旧逻辑把普通 TLS/读取超时
+                // 误当作 Activity 取消并立即抛出，导致配置的多次断点重试从未执行。
+                lastIoFailure = e;
+                coolDown(entry);
+                log.warn("下载连接/读取超时 (第 {}/{} 次)，保留断点后重试: {}",
+                        attempt + 1, maxAttempts, e.getMessage());
+                waitBeforeDownloadRetry(attempt, maxAttempts);
             } catch (InterruptedIOException e) {
-                // 中断/取消信号必须立即传播，让被取消的旧 Activity 尽快退出，而不是继续退避重试
-                throw e;
+                if (Thread.currentThread().isInterrupted()) {
+                    // 真正的线程中断/取消必须立即传播，让 Temporal 尽快停止 Activity。
+                    throw e;
+                }
+                lastIoFailure = e;
+                log.warn("下载 I/O 被中断 (第 {}/{} 次)，保留断点后重试: {}",
+                        attempt + 1, maxAttempts, e.getMessage());
+                waitBeforeDownloadRetry(attempt, maxAttempts);
             } catch (IOException e) {
                 lastIoFailure = e;
-                log.warn("流式下载异常 (第 {} 次尝试): {}", attempt + 1, e.getMessage());
+                log.warn("流式下载异常 (第 {}/{} 次): {}", attempt + 1, maxAttempts, e.getMessage());
+                waitBeforeDownloadRetry(attempt, maxAttempts);
             }
         }
 
@@ -480,6 +497,26 @@ public class EhNetworkClient {
                     "IP 被封禁或下载节点不可用: " + lastIoFailure.getMessage(), ErrorType.IP_BANNED.getCode());
         }
         throw lastIoFailure != null ? lastIoFailure : new IOException("下载失败，已耗尽重试次数");
+    }
+
+    private OkHttpClient downloadClient(OkHttpClient baseClient) {
+        EhNetworkConfig.Download config = netConfig.getDownload();
+        return baseClient.newBuilder()
+                .connectTimeout(Math.max(1, config.getConnectTimeoutSeconds()), TimeUnit.SECONDS)
+                .readTimeout(Math.max(1, config.getReadTimeoutSeconds()), TimeUnit.SECONDS)
+                .writeTimeout(Math.max(1, config.getWriteTimeoutSeconds()), TimeUnit.SECONDS)
+                .build();
+    }
+
+    private void waitBeforeDownloadRetry(int attempt, int maxAttempts) throws InterruptedIOException {
+        if (attempt + 1 >= maxAttempts) return;
+        EhNetworkConfig.Download config = netConfig.getDownload();
+        long initialMs = TimeUnit.SECONDS.toMillis(Math.max(1, config.getInitialBackoffSeconds()));
+        long maxMs = TimeUnit.SECONDS.toMillis(Math.max(1, config.getMaxBackoffSeconds()));
+        long multiplier = 1L << Math.min(attempt, 10);
+        long waitMs = initialMs >= maxMs / multiplier ? maxMs : initialMs * multiplier;
+        log.info("⏳ 下载网络恢复等待 {} 秒，之后从断点继续", TimeUnit.MILLISECONDS.toSeconds(waitMs));
+        sleepInterruptibly(waitMs);
     }
 
     private long streamResponseToFile(ResponseBody body, Path partFile, boolean append, long initialOffset,

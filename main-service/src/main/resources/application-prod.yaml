@@ -69,8 +69,8 @@ eh-config:
     library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
-    # 最大子工作流个数
-    max-concurrency: ${WORKFLOW_MAX_CONCURRENCY:6}
+    # 大文件经代理下载时默认串行，避免并发 TLS 握手和带宽争抢放大超时。
+    max-concurrency: ${WORKFLOW_MAX_CONCURRENCY:1}
     # komga最大尝试次数
     komga-import-max-retries: ${KOMGA_IMPORT_MAX_RETRIES:40}
     # 多少时间轮询komga的元数据状态 [秒]

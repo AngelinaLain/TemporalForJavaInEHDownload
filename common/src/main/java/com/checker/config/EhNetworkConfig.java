@@ -167,5 +167,17 @@ public class EhNetworkConfig {
         private String mode = "local";
         /** 本地下载临时目录（默认系统临时目录） */
         private String tempDir;
+        /** 大文件下载建立 TCP/TLS 连接的超时秒数。 */
+        private int connectTimeoutSeconds = 60;
+        /** 下载流连续无数据时的读取超时秒数，不限制完整文件总耗时。 */
+        private int readTimeoutSeconds = 120;
+        /** 请求写入超时秒数。 */
+        private int writeTimeoutSeconds = 60;
+        /** 单次 Activity 内允许的断点续传/代理切换次数。 */
+        private int maxAttempts = 8;
+        /** 网络失败后的首次退避秒数。 */
+        private int initialBackoffSeconds = 5;
+        /** 指数退避的最大秒数。 */
+        private int maxBackoffSeconds = 120;
     }
 }

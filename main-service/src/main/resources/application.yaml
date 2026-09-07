@@ -90,8 +90,8 @@ eh-config:
     library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）
   workflow:
-    # 最大子工作流个数（并发下载太猛会触发 hath.network CDN 429，控制在 3）
-    max-concurrency: 3
+    # 大文件经代理下载时优先稳定性；需要提速可显式提高环境变量，建议不超过 2。
+    max-concurrency: ${WORKFLOW_MAX_CONCURRENCY:1}
     # komga最大尝试次数
     komga-import-max-retries: 40
     # 多少时间轮询komga的元数据状态 [秒]
@@ -136,6 +136,12 @@ eh-config:
     # local：本地下载 + 注入 ComicInfo.xml + 上传群晖（默认）；downloadstation：沿用群晖 DownloadStation
     mode: ${DOWNLOAD_MODE:local}
     temp-dir: ${DOWNLOAD_TEMP_DIR:}
+    connect-timeout-seconds: ${DOWNLOAD_CONNECT_TIMEOUT_SECONDS:60}
+    read-timeout-seconds: ${DOWNLOAD_READ_TIMEOUT_SECONDS:120}
+    write-timeout-seconds: ${DOWNLOAD_WRITE_TIMEOUT_SECONDS:60}
+    max-attempts: ${DOWNLOAD_MAX_ATTEMPTS:8}
+    initial-backoff-seconds: ${DOWNLOAD_INITIAL_BACKOFF_SECONDS:5}
+    max-backoff-seconds: ${DOWNLOAD_MAX_BACKOFF_SECONDS:120}
 
 # Jasypt 配置加密：配置 ${ENC(密文)} 占位符时使用；留空则明文直读
 jasypt:
