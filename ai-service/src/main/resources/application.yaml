@@ -9,6 +9,13 @@ spring:
     nacos:
       discovery:
         server-addr: ${NACOS_SERVER_ADDR}
+  temporal:
+    connection:
+      target: ${TEMPORAL_HOST}:${TEMPORAL_PORT:7233}
+    namespace: default
+    workers-auto-discovery:
+      packages:
+        - com.checker
   ai:
     openai:
       base-url: ${AI_BASE_URL}
