@@ -3,6 +3,7 @@ package com.checker.temporalServices.activities;
 import com.checker.dto.ArchiveDownloadInfo;
 import com.checker.dto.SearchOptions;
 import com.checker.dto.GalleryPageFingerprint;
+import com.checker.dto.GalleryScrapePage;
 import com.checker.entity.EhGalleriesEntity;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
@@ -21,6 +22,13 @@ public interface ScraperActivity {
      */
     @ActivityMethod
     List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions);
+
+    /**
+     * 抓取一页搜索结果。新工作流逐页调用，避免将整批画廊序列化为单个超过 gRPC 上限的结果。
+     * {@code currentUrl} 为空时从搜索条件构建首页 URL。
+     */
+    @ActivityMethod
+    GalleryScrapePage scrapeGalleryPage(SearchOptions searchOptions, String currentUrl, int pageNo);
 
     /**
      * 访问 archiver.php 提取最终下载直链

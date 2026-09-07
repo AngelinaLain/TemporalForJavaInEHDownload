@@ -16,6 +16,7 @@ import com.checker.common.ErrorType;
 import com.checker.dto.ArchiveDownloadInfo;
 import com.checker.dto.SearchOptions;
 import com.checker.dto.GalleryPageFingerprint;
+import com.checker.dto.GalleryScrapePage;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.ScraperActivity;
 import io.temporal.activity.Activity;
@@ -161,6 +162,35 @@ public class ScraperActivityImpl implements ScraperActivity {
         enrichGalleryMetadata(allResults);
         log.info("抓取完成，共提取到 {} 个有效画廊。", allResults.size());
         return allResults;
+    }
+
+    /**
+     * 一页一页地返回结果，确保任何一次 Activity 完成响应都远小于 Temporal 的 4 MiB 限制。
+     * 完整列表聚合由 Workflow 负责，以保留后续批量去重和入库行为。
+     */
+    @Override
+    public GalleryScrapePage scrapeGalleryPage(SearchOptions searchOptions, String currentUrl, int pageNo) {
+        String url = StrUtil.blankToDefault(currentUrl, buildInitialSearchUrl(searchOptions));
+        Activity.getExecutionContext().heartbeat(pageNo);
+        log.info("正在抓取第 {} 页: {}", pageNo, url);
+
+        PageScrapeResult pageResult = scrapeSinglePage(url, searchOptions, pageNo);
+        List<EhGalleriesEntity> galleries = pageResult.getGalleries();
+        enrichGalleryMetadata(galleries);
+
+        GalleryScrapePage response = new GalleryScrapePage();
+        response.setGalleries(galleries);
+        response.setHasData(pageResult.isHasData());
+        response.setHasNextPage(pageResult.isHasNextPage());
+        response.setNextUrl(pageResult.getNextUrl());
+        String stopReason = !pageResult.isHasData() ? "no_data_on_page"
+                : (!pageResult.isHasNextPage() ? "end_of_pages" : null);
+        response.setStopReason(stopReason);
+        galleries.forEach(gallery -> {
+            gallery.setTraceLastNextCursor(pageResult.getNextUrl());
+            if (stopReason != null) gallery.setTraceStopReason(stopReason);
+        });
+        return response;
     }
 
     /**

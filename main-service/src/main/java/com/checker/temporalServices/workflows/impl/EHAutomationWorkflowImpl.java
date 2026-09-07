@@ -5,6 +5,7 @@ import com.checker.common.DownloadStatus;
 import com.checker.common.GalleryDeduplication;
 import com.checker.dto.SearchOptions;
 import com.checker.dto.WorkflowSettings;
+import com.checker.dto.GalleryScrapePage;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.temporalServices.activities.DatabaseActivity;
 import com.checker.temporalServices.activities.NotificationActivity;
@@ -46,6 +47,8 @@ import java.util.stream.Collectors;
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     private static final Logger log = Workflow.getLogger(EHAutomationWorkflowImpl.class);
+    private static final int MAX_SAFE_SCRAPE_PAGES = 100;
+    private static final Duration SCRAPE_PAGE_DELAY = Duration.ofSeconds(3);
 
     private final ScraperActivity scraperActivity = Workflow.newActivityStub(
             ScraperActivity.class,
@@ -77,8 +80,14 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         // 加载运行时配置（来自 application.yaml，无需重新编译即可调整）
         WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
 
-        // 爬虫抓取画廊列表
-        List<EhGalleriesEntity> galleries = deduplicateByGid(scraperActivity.scrapeGalleries(searchOptions));
+        // 新流程按页接收抓取结果，避免大搜索的 Activity 完成响应超过 Temporal 4 MiB gRPC 上限。
+        // 旧历史不能改变命令序列，保留原 Activity 调用以便已执行的工作流可重放。
+        int pagedScraperVersion = Workflow.getVersion(
+                "paginated-scraper-results", Workflow.DEFAULT_VERSION, 1);
+        List<EhGalleriesEntity> scraped = pagedScraperVersion == Workflow.DEFAULT_VERSION
+                ? scraperActivity.scrapeGalleries(searchOptions)
+                : scrapeGalleriesByPage(searchOptions);
+        List<EhGalleriesEntity> galleries = deduplicateByGid(scraped);
         if (galleries == null || galleries.isEmpty()) {
             return;
         }
@@ -270,6 +279,35 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             }
         }
         return new ArrayList<>(unique.values());
+    }
+
+    private List<EhGalleriesEntity> scrapeGalleriesByPage(SearchOptions searchOptions) {
+        List<EhGalleriesEntity> galleries = new ArrayList<>();
+        String currentUrl = null;
+        String finalCursor = null;
+        for (int pageNo = 1; pageNo <= MAX_SAFE_SCRAPE_PAGES; pageNo++) {
+            GalleryScrapePage page = scraperActivity.scrapeGalleryPage(searchOptions, currentUrl, pageNo);
+            if (page.getGalleries() != null) galleries.addAll(page.getGalleries());
+            finalCursor = page.getNextUrl();
+            if (!page.isHasData() || !page.isHasNextPage()) {
+                String stopReason = page.getStopReason() == null ? "end_of_pages" : page.getStopReason();
+                String cursor = finalCursor;
+                galleries.forEach(gallery -> {
+                    gallery.setTraceStopReason(stopReason);
+                    gallery.setTraceLastNextCursor(cursor);
+                });
+                return galleries;
+            }
+            currentUrl = page.getNextUrl();
+            Workflow.sleep(SCRAPE_PAGE_DELAY);
+        }
+        String cursor = finalCursor;
+        galleries.forEach(gallery -> {
+            gallery.setTraceStopReason("max_safe_pages_reached");
+            gallery.setTraceLastNextCursor(cursor);
+        });
+        log.warn("达到最大安全翻页限制 {}，停止抓取，防止死循环。", MAX_SAFE_SCRAPE_PAGES);
+        return galleries;
     }
 
     private static boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
