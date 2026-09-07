@@ -54,6 +54,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
 
     @Override
     public void saveToDatabase(EhGalleriesEntity gallery) {
+        normalizeInsertDefaults(gallery);
         boolean isSuccess = galleriesService.saveOrUpdate(gallery);
         if (isSuccess) {
             log.info("✅ 画廊入库/更新成功, GID: {}", gallery.getGid());
@@ -96,12 +97,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
             // 且会原样写入 null 值，故插入前兜底补全时间字段（crawled_at 为 NOT NULL）。
             Date now = new Date();
             for (EhGalleriesEntity gallery : toInsert) {
-                if (gallery.getCrawledAt() == null) {
-                    gallery.setCrawledAt(now);
-                }
-                if (gallery.getUpdatedAt() == null) {
-                    gallery.setUpdatedAt(now);
-                }
+                normalizeInsertDefaults(gallery, now);
             }
             inserted = galleriesMapper.insertBatchSomeColumn(toInsert);
         }
@@ -111,6 +107,28 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
         log.info("✅ 批量入库完成，共 {} 条（新增 {} 条走批量 INSERT，更新 {} 条，结果: {}）",
                 galleries.size(), inserted, toUpdate.size(), updated);
+    }
+
+    /**
+     * Custom batch inserts include every mapped column, unlike normal MyBatis-Plus inserts.
+     * Supply Java-side defaults as well as SQL defaults so existing schemas that predate V9
+     * cannot receive an explicit NULL for a NOT NULL column.
+     */
+    private void normalizeInsertDefaults(EhGalleriesEntity gallery) {
+        normalizeInsertDefaults(gallery, new Date());
+    }
+
+    private void normalizeInsertDefaults(EhGalleriesEntity gallery, Date now) {
+        if (gallery == null) return;
+        if (gallery.getCrawledAt() == null) {
+            gallery.setCrawledAt(now);
+        }
+        if (gallery.getUpdatedAt() == null) {
+            gallery.setUpdatedAt(now);
+        }
+        if (gallery.getKomgaConfirmationAttempts() == null) {
+            gallery.setKomgaConfirmationAttempts(0);
+        }
     }
 
     @Override

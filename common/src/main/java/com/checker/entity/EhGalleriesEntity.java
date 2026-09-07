@@ -173,7 +173,7 @@ public class EhGalleriesEntity implements Serializable {
     private String komgaBookId;
 
     /** Komga 入库确认累计查询次数。 */
-    private Integer komgaConfirmationAttempts;
+    private Integer komgaConfirmationAttempts = 0;
 
     /** 最近一次 Komga 入库确认时间。 */
     private Date komgaLastConfirmationAt;
