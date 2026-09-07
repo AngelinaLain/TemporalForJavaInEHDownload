@@ -420,7 +420,14 @@ public class EhNetworkClient {
                         throw ApplicationFailure.newNonRetryableFailure(
                                 "Cookie 已失效，需要人工更新", ErrorType.COOKIE_EXPIRED.getCode());
                     }
-                    throw new IOException("下载地址返回 HTML，直链可能已失效");
+                    if (html.contains("509 Bandwidth Limit Exceeded") || html.contains("You have exceeded your image viewing limits")) {
+                        throw ApplicationFailure.newNonRetryableFailure(
+                                "触发 EHentai 下载配额限制", ErrorType.QUOTA_EXCEEDED.getCode());
+                    }
+                    // 临时归档直链通常在过期后返回一个 HTML 提示页。继续请求同一个 URL
+                    // 不会恢复，立即交回 Workflow.retry 重新调用 extractDownloadUrl。
+                    throw ApplicationFailure.newFailure(
+                            "下载直链已失效，需要重新获取", ErrorType.DOWNLOAD_URL_EXPIRED.getCode());
                 }
 
                 long expectedTotal;

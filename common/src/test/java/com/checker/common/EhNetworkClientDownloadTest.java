@@ -3,6 +3,7 @@ package com.checker.common;
 import com.checker.config.EhNetworkConfig;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.temporal.failure.ApplicationFailure;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class EhNetworkClientDownloadTest {
 
@@ -136,6 +138,23 @@ class EhNetworkClientDownloadTest {
         assertEquals(2, calls.get());
         assertEquals(content.length, bytes);
         assertArrayEquals(content, Files.readAllBytes(target));
+    }
+
+    @Test
+    void expiredHtmlDownloadUrlReturnsImmediatelyForWorkflowRefresh() {
+        AtomicInteger calls = new AtomicInteger();
+        server.createContext("/expired", exchange -> {
+            calls.incrementAndGet();
+            exchange.getResponseHeaders().add("Content-Type", "text/html; charset=UTF-8");
+            send(exchange, 200, "temporary archive link expired".getBytes(StandardCharsets.UTF_8));
+        });
+
+        Path target = tempDir.resolve("expired.zip");
+        ApplicationFailure failure = assertThrows(ApplicationFailure.class,
+                () -> client.downloadWithResume(url("/expired"), target));
+
+        assertEquals(ErrorType.DOWNLOAD_URL_EXPIRED.getCode(), failure.getType());
+        assertEquals(1, calls.get(), "同一个失效直链不应进行 8 次网络重试");
     }
 
     private String url(String path) {

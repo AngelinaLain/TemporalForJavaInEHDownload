@@ -49,6 +49,10 @@ public enum ErrorType {
      */
     ARCHIVE_LINK_EXTRACT_FAILED,
     /**
+     * 已获取的临时下载直链过期。应跳过对同一 URL 的连接级重试，回到工作流重新提取直链。
+     */
+    DOWNLOAD_URL_EXPIRED,
+    /**
      * Cookie 已失效，需人工介入更新，不应自动重试
      */
     COOKIE_EXPIRED,
