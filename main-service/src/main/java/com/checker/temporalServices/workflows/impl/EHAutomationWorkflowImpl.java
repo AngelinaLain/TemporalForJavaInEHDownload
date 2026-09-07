@@ -49,6 +49,8 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     private static final Logger log = Workflow.getLogger(EHAutomationWorkflowImpl.class);
     private static final int MAX_SAFE_SCRAPE_PAGES = 100;
     private static final Duration SCRAPE_PAGE_DELAY = Duration.ofSeconds(3);
+    /** A page from EH currently contains 25 galleries; keep every entity payload at or below that size. */
+    private static final int ENTITY_ACTIVITY_BATCH_SIZE = 25;
 
     private final ScraperActivity scraperActivity = Workflow.newActivityStub(
             ScraperActivity.class,
@@ -99,14 +101,14 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
         // 批量查询已有记录，并先给同 GID 的历史记录回填本次抓到的作品指纹。
         List<Long> allGids = galleries.stream().map(EhGalleriesEntity::getGid).toList();
-        List<EhGalleriesEntity> existingRecords = databaseActivity.getGalleriesByIds(allGids);
+        List<EhGalleriesEntity> existingRecords = getGalleriesByIdsInBatches(allGids);
         Map<Long, EhGalleriesEntity> existingMap = existingRecords.stream()
                 .collect(Collectors.toMap(EhGalleriesEntity::getGid, Function.identity()));
 
         List<EhGalleriesEntity> knownGalleries = galleries.stream()
                 .filter(gallery -> existingMap.containsKey(gallery.getGid()))
                 .toList();
-        databaseActivity.updateGalleryDeduplicationMetadata(knownGalleries);
+        forEachEntityBatch(knownGalleries, databaseActivity::updateGalleryDeduplicationMetadata);
 
         /* 还没下载、需要参与本轮作品级去重的记录 */
         List<EhGalleriesEntity> candidates = new ArrayList<>();
@@ -183,15 +185,15 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
 
         // 首选版本和被跳过的版本都入库；后者以“已忽略 + duplicate_of_gid”保留供前端查看。
         if (!candidates.isEmpty()) {
-            databaseActivity.saveGalleriesBatch(candidates);
+            forEachEntityBatch(candidates, databaseActivity::saveGalleriesBatch);
         }
         if (visualDedupeVersion != Workflow.DEFAULT_VERSION && !candidates.isEmpty()) {
             List<Long> candidateGids = candidates.stream().map(EhGalleriesEntity::getGid).toList();
-            List<EhGalleriesEntity> visualTargets = databaseActivity
-                    .findGalleriesNeedingVisualFingerprint(candidateGids);
-            if (!visualTargets.isEmpty()) {
-                databaseActivity.saveGalleryVisualFingerprints(
-                        scraperActivity.analyzeGalleryPreviews(visualTargets));
+            for (List<Long> gidBatch : batches(candidateGids, ENTITY_ACTIVITY_BATCH_SIZE)) {
+                List<EhGalleriesEntity> visualTargets = databaseActivity
+                        .findGalleriesNeedingVisualFingerprint(gidBatch);
+                forEachEntityBatch(visualTargets, targets -> databaseActivity.saveGalleryVisualFingerprints(
+                        scraperActivity.analyzeGalleryPreviews(targets)));
             }
         }
         // 合并任务列表：补偿任务优先（已下载，只需入库）
@@ -260,7 +262,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
             notificationActivity.sendEmailAlert("抓取流程结束", "本次共处理 " + galleries.size() + " 个画廊");
         } else {
             List<Long> taskGids = tasks.stream().map(task -> task.gallery.getGid()).toList();
-            List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(taskGids);
+            List<EhGalleriesEntity> finalStates = getGalleriesByIdsInBatches(taskGids);
             String content = WorkflowSteps.buildBatchNotificationContent(
                     "抓取流程", galleries.size(), tasks.size(), startedChildren,
                     fatalErrorOccurred, finalStates);
@@ -308,6 +310,34 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         });
         log.warn("达到最大安全翻页限制 {}，停止抓取，防止死循环。", MAX_SAFE_SCRAPE_PAGES);
         return galleries;
+    }
+
+    /**
+     * Temporal serializes every Activity argument/result. Never pass an unbounded entity list across it:
+     * 4,000 galleries now become 160 independent, retryable database Activity calls instead of one >4 MiB call.
+     */
+    private void forEachEntityBatch(List<EhGalleriesEntity> galleries,
+                                    java.util.function.Consumer<List<EhGalleriesEntity>> operation) {
+        for (List<EhGalleriesEntity> batch : batches(galleries, ENTITY_ACTIVITY_BATCH_SIZE)) {
+            operation.accept(batch);
+        }
+    }
+
+    private List<EhGalleriesEntity> getGalleriesByIdsInBatches(List<Long> gids) {
+        List<EhGalleriesEntity> results = new ArrayList<>();
+        for (List<Long> batch : batches(gids, ENTITY_ACTIVITY_BATCH_SIZE)) {
+            results.addAll(databaseActivity.getGalleriesByIds(batch));
+        }
+        return results;
+    }
+
+    private static <T> List<List<T>> batches(List<T> values, int size) {
+        if (values == null || values.isEmpty()) return List.of();
+        List<List<T>> batches = new ArrayList<>();
+        for (int offset = 0; offset < values.size(); offset += size) {
+            batches.add(new ArrayList<>(values.subList(offset, Math.min(offset + size, values.size()))));
+        }
+        return batches;
     }
 
     private static boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
