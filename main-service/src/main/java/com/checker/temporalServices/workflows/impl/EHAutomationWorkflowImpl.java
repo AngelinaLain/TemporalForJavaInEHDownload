@@ -47,7 +47,9 @@ import java.util.stream.Collectors;
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     private static final Logger log = Workflow.getLogger(EHAutomationWorkflowImpl.class);
-    private static final int MAX_SAFE_SCRAPE_PAGES = 100;
+    // A normal EH results page contains 25 galleries. 1,000 pages leaves room for large searches
+    // while retaining an explicit guard against a malformed repeating next-page link.
+    private static final int MAX_SAFE_SCRAPE_PAGES = 1_000;
     private static final Duration SCRAPE_PAGE_DELAY = Duration.ofSeconds(3);
     /** A page from EH currently contains 25 galleries; keep every entity payload at or below that size. */
     private static final int ENTITY_ACTIVITY_BATCH_SIZE = 25;
