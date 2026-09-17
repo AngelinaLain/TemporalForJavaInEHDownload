@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -29,7 +30,9 @@ public class VisualDeduplicationController {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("algorithmVersion", PerceptualHash.ALGORITHM_VERSION);
         payload.put("fingerprintedGalleries", refreshService.fingerprintedGalleries());
-        payload.put("latestJob", refreshService.latest());
+        VisualRefreshJobEntity latestJob = refreshService.latest();
+        payload.put("latestJob", latestJob);
+        payload.put("failedGalleries", refreshService.failures(latestJob == null ? null : latestJob.getId()));
         return Result.success(payload);
     }
 
@@ -41,5 +44,19 @@ public class VisualDeduplicationController {
         } catch (IllegalStateException exception) {
             return Result.error(409, exception.getMessage());
         }
+    }
+
+    @PostMapping("/refresh/retry")
+    public Result<VisualRefreshJobEntity> retry(@RequestBody RetryRequest request) {
+        try {
+            return Result.success(refreshService.retry(request == null ? null : request.gids()));
+        } catch (IllegalArgumentException exception) {
+            return Result.error(400, exception.getMessage());
+        } catch (IllegalStateException exception) {
+            return Result.error(409, exception.getMessage());
+        }
+    }
+
+    public record RetryRequest(List<Long> gids) {
     }
 }
