@@ -9,6 +9,7 @@ import lombok.Data;
 
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @TableName(value = "eh_archive_sync_reviews", autoResultMap = true)
@@ -20,6 +21,11 @@ public class ArchiveSyncReviewEntity {
     private String selectedFilename;
     @TableField(typeHandler = JacksonTypeHandler.class)
     private List<String> candidateFilenames;
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private Map<String, Integer> coverScores;
+    private String coverStatus;
+    private String coverMessage;
+    private Date coverCheckedAt;
     private String matchType;
     private String status;
     private String message;

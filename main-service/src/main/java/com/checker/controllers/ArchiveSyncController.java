@@ -69,6 +69,15 @@ public class ArchiveSyncController {
         }
     }
 
+    @PostMapping("/cover-match")
+    public Result<Map<String, Object>> coverMatch(@RequestBody(required = false) CoverMatchRequest request) {
+        try {
+            return Result.success(syncService.startCoverMatch(request == null ? null : request.gids()));
+        } catch (IllegalStateException failure) {
+            return Result.error(409, failure.getMessage());
+        }
+    }
+
     @GetMapping("/reviews")
     public Result<Map<String, Object>> reviews(@RequestParam(defaultValue = "1") int page,
                                                 @RequestParam(defaultValue = "20") int size,
@@ -151,12 +160,17 @@ public class ArchiveSyncController {
         view.put("matchType", review.getMatchType());
         view.put("status", review.getStatus());
         view.put("message", review.getMessage());
+        view.put("coverStatus", review.getCoverStatus());
+        view.put("coverMessage", review.getCoverMessage());
+        view.put("coverCheckedAt", review.getCoverCheckedAt());
         view.put("galleryUrl", gallery == null ? null : gallery.getGalleryUrl());
         List<Map<String, Object>> candidates = new ArrayList<>();
         if (review.getCandidateFilenames() != null) {
             for (String filename : review.getCandidateFilenames()) {
                 Map<String, Object> candidate = new LinkedHashMap<>();
                 candidate.put("filename", filename);
+                candidate.put("coverScore", review.getCoverScores() == null
+                        ? null : review.getCoverScores().get(filename));
                 Long owner = owners.get(filename.toLowerCase(Locale.ROOT));
                 candidate.put("databaseGid", owner != null && !owner.equals(review.getGid()) ? owner : null);
                 candidates.add(candidate);
@@ -178,5 +192,8 @@ public class ArchiveSyncController {
     }
 
     public record FilenameRequest(String filename) {
+    }
+
+    public record CoverMatchRequest(List<Long> gids) {
     }
 }
