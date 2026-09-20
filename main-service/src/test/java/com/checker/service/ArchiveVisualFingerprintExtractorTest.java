@@ -32,6 +32,16 @@ class ArchiveVisualFingerprintExtractorTest {
         assertTrue(fingerprints.stream().allMatch(item -> "ARCHIVE".equals(item.getSource())));
     }
 
+    @Test
+    void alwaysIncludesExplicitCoverEvenWhenOutsideRegularSamples() throws Exception {
+        byte[] archive = archiveWithPagesAndTrailingCover(24);
+
+        List<GalleryPageFingerprint> fingerprints = extractor.extract(
+                new ByteArrayInputStream(archive), 100L, 25);
+
+        assertTrue(fingerprints.stream().anyMatch(item -> "cover.png".equals(item.getPageName())));
+    }
+
     private byte[] archiveWithPages(int count) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(output)) {
@@ -54,5 +64,29 @@ class ArchiveVisualFingerprintExtractorTest {
             }
         }
         return output.toByteArray();
+    }
+
+    private byte[] archiveWithPagesAndTrailingCover(int count) throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
+            for (int index = 0; index < count; index++) writePage(zip, String.format("%03d.png", index), index);
+            writePage(zip, "cover.png", 99);
+        }
+        return output.toByteArray();
+    }
+
+    private void writePage(ZipOutputStream zip, String name, int index) throws Exception {
+        BufferedImage image = new BufferedImage(120, 180, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, 120, 180);
+        graphics.setColor(Color.BLACK);
+        graphics.drawRect(5 + index % 20, 10, 80, 120);
+        graphics.dispose();
+        ByteArrayOutputStream page = new ByteArrayOutputStream();
+        ImageIO.write(image, "png", page);
+        zip.putNextEntry(new ZipEntry(name));
+        zip.write(page.toByteArray());
+        zip.closeEntry();
     }
 }

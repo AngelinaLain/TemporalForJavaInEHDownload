@@ -81,7 +81,15 @@ public class VisualHistoryRefreshService {
     public VisualRefreshJobEntity latest() {
         QueryWrapper<VisualRefreshJobEntity> query = new QueryWrapper<>();
         query.orderByDesc("created_at").last("LIMIT 1");
-        return jobMapper.selectOne(query);
+        VisualRefreshJobEntity latest = jobMapper.selectOne(query);
+        if (latest != null && Set.of("QUEUED", "RUNNING").contains(latest.getStatus()) && !running.get()) {
+            latest.setStatus("FAILED");
+            latest.setCurrentGid(null);
+            latest.setFinishedAt(new Date());
+            latest.setLastError("服务已重启或任务已中断，请重新执行失败项");
+            jobMapper.updateById(latest);
+        }
+        return latest;
     }
 
     public long fingerprintedGalleries() {
@@ -114,27 +122,29 @@ public class VisualHistoryRefreshService {
             job.setTotal(targets.size());
             jobMapper.updateById(job);
 
-            for (EhGalleriesEntity gallery : targets) {
-                job.setCurrentGid(gallery.getGid());
-                try {
-                    int inserted = archiveReader.read(gallery.getFilename(), input ->
-                            fingerprintService.replace(gallery.getGid(),
-                                    extractor.extract(input, gallery.getGid(), gallery.getPageCount())));
-                    if (inserted <= 0) throw new IllegalStateException("归档中没有可解码的采样图片");
-                    reviewService.refreshVisualEvidenceForGid(gallery.getGid());
-                    job.setSucceeded(job.getSucceeded() + 1);
-                } catch (Exception failure) {
-                    String error = truncate(failure.getMessage());
-                    job.setFailed(job.getFailed() + 1);
-                    job.setLastError("GID " + gallery.getGid() + ": " + error);
-                    VisualRefreshFailureEntity persistedFailure = new VisualRefreshFailureEntity();
-                    persistedFailure.setJobId(jobId);
-                    persistedFailure.setGid(gallery.getGid());
-                    persistedFailure.setError(error);
-                    failureMapper.insert(persistedFailure);
+            try (SynologyArchiveReader.ArchiveSession archiveSession = archiveReader.openSession()) {
+                for (EhGalleriesEntity gallery : targets) {
+                    job.setCurrentGid(gallery.getGid());
+                    try {
+                        int inserted = archiveSession.read(gallery.getFilename(), input ->
+                                fingerprintService.replace(gallery.getGid(),
+                                        extractor.extract(input, gallery.getGid(), gallery.getPageCount())));
+                        if (inserted <= 0) throw new IllegalStateException("归档中没有可解码的采样图片");
+                        reviewService.refreshVisualEvidenceForGid(gallery.getGid());
+                        job.setSucceeded(job.getSucceeded() + 1);
+                    } catch (Exception failure) {
+                        String error = truncate(failure.getMessage());
+                        job.setFailed(job.getFailed() + 1);
+                        job.setLastError("GID " + gallery.getGid() + ": " + error);
+                        VisualRefreshFailureEntity persistedFailure = new VisualRefreshFailureEntity();
+                        persistedFailure.setJobId(jobId);
+                        persistedFailure.setGid(gallery.getGid());
+                        persistedFailure.setError(error);
+                        failureMapper.insert(persistedFailure);
+                    }
+                    job.setProcessed(job.getProcessed() + 1);
+                    jobMapper.updateById(job);
                 }
-                job.setProcessed(job.getProcessed() + 1);
-                jobMapper.updateById(job);
             }
             job.setStatus(job.getFailed() > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED");
         } catch (Exception fatal) {

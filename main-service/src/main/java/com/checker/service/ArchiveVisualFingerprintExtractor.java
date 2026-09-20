@@ -30,7 +30,8 @@ public class ArchiveVisualFingerprintExtractor {
                     zip.closeEntry();
                     continue;
                 }
-                boolean shouldHash = selected.isEmpty() ? imageIndex < SAMPLE_COUNT : selected.contains(imageIndex);
+                boolean shouldHash = isLikelyCover(entry.getName())
+                        || (selected.isEmpty() ? imageIndex < SAMPLE_COUNT : selected.contains(imageIndex));
                 if (shouldHash) {
                     GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
                             new NonClosingInputStream(zip), gid, imageIndex, entry.getName(), "ARCHIVE");
@@ -62,6 +63,17 @@ public class ArchiveVisualFingerprintExtractor {
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
                 || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".bmp")
                 || lower.endsWith(".jfif") || lower.endsWith(".tif") || lower.endsWith(".tiff");
+    }
+
+    static boolean isLikelyCover(String name) {
+        if (name == null) return false;
+        String normalized = name.replace('\\', '/').toLowerCase(Locale.ROOT);
+        int slash = normalized.lastIndexOf('/');
+        String basename = slash >= 0 ? normalized.substring(slash + 1) : normalized;
+        int dot = basename.lastIndexOf('.');
+        if (dot > 0) basename = basename.substring(0, dot);
+        return basename.equals("cover") || basename.equals("front")
+                || basename.startsWith("cover_") || basename.startsWith("cover-");
     }
 
     private static final class NonClosingInputStream extends FilterInputStream {
