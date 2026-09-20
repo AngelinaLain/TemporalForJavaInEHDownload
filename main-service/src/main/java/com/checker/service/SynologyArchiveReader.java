@@ -45,6 +45,24 @@ public class SynologyArchiveReader {
         }
     }
 
+    public List<String> listArchives() throws Exception {
+        try (ArchiveSession session = openSession()) {
+            return session.listArchives();
+        }
+    }
+
+    public void rename(String sourceFilename, String targetFilename) throws Exception {
+        try (ArchiveSession session = openSession()) {
+            session.rename(sourceFilename, targetFilename);
+        }
+    }
+
+    public void delete(String filename) throws Exception {
+        try (ArchiveSession session = openSession()) {
+            session.delete(filename);
+        }
+    }
+
     /**
      * Opens a task-scoped reader. Connections are reused across sequential archive reads and
      * transparently recreated after transport failures, avoiding thousands of SSH handshakes.
@@ -188,6 +206,95 @@ public class SynologyArchiveReader {
             }
         }
 
+        @Override
+        public List<String> listArchives() throws Exception {
+            Exception smbFailure = null;
+            EhNetworkConfig.Smb smb = config.getSmb();
+            if (smbConfigured(smb)) {
+                try {
+                    ensureSmbConnected(smb);
+                    String directory = normalizeSmbPath(smb.getPath());
+                    List<String> names = new ArrayList<>();
+                    for (FileIdBothDirectoryInformation entry : smbShare.list(directory, "*")) {
+                        if (isSupportedArchive(entry.getFileName())) names.add(entry.getFileName());
+                    }
+                    return names;
+                } catch (Exception failure) {
+                    smbFailure = failure;
+                    closeSmb();
+                }
+            }
+            try {
+                ensureSftpConnected();
+                List<String> names = new ArrayList<>();
+                Vector<ChannelSftp.LsEntry> entries = sftp.ls("*");
+                for (ChannelSftp.LsEntry entry : entries) {
+                    if (!entry.getAttrs().isDir() && isSupportedArchive(entry.getFilename())) {
+                        names.add(entry.getFilename());
+                    }
+                }
+                return names;
+            } catch (Exception sftpFailure) {
+                throw combinedFailure("无法列出群晖归档", smbFailure, sftpFailure);
+            }
+        }
+
+        @Override
+        public void rename(String sourceFilename, String targetFilename) throws Exception {
+            validateFilename(sourceFilename);
+            validateFilename(targetFilename);
+            Exception smbFailure = null;
+            EhNetworkConfig.Smb smb = config.getSmb();
+            if (smbConfigured(smb)) {
+                try {
+                    ensureSmbConnected(smb);
+                    String directory = normalizeSmbPath(smb.getPath());
+                    String sourcePath = joinSmb(directory, sourceFilename);
+                    String targetPath = joinSmb(directory, targetFilename);
+                    try (com.hierynomus.smbj.share.File file = smbShare.openFile(sourcePath,
+                            EnumSet.of(AccessMask.DELETE, AccessMask.FILE_READ_ATTRIBUTES),
+                            EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL), SMB2ShareAccess.ALL,
+                            SMB2CreateDisposition.FILE_OPEN,
+                            EnumSet.of(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE))) {
+                        file.rename(targetPath, false);
+                    }
+                    return;
+                } catch (Exception failure) {
+                    smbFailure = failure;
+                    closeSmb();
+                }
+            }
+            try {
+                ensureSftpConnected();
+                sftp.rename(sourceFilename, targetFilename);
+            } catch (Exception sftpFailure) {
+                throw combinedFailure("无法重命名群晖归档 " + sourceFilename, smbFailure, sftpFailure);
+            }
+        }
+
+        @Override
+        public void delete(String filename) throws Exception {
+            validateFilename(filename);
+            Exception smbFailure = null;
+            EhNetworkConfig.Smb smb = config.getSmb();
+            if (smbConfigured(smb)) {
+                try {
+                    ensureSmbConnected(smb);
+                    smbShare.rm(joinSmb(normalizeSmbPath(smb.getPath()), filename));
+                    return;
+                } catch (Exception failure) {
+                    smbFailure = failure;
+                    closeSmb();
+                }
+            }
+            try {
+                ensureSftpConnected();
+                sftp.rm(filename);
+            } catch (Exception sftpFailure) {
+                throw combinedFailure("无法删除群晖归档 " + filename, smbFailure, sftpFailure);
+            }
+        }
+
         private void ensureSftpConnected() throws Exception {
             if (sftp != null && sftp.isConnected() && sshSession != null && sshSession.isConnected()) return;
             closeSftp();
@@ -261,6 +368,24 @@ public class SynologyArchiveReader {
         return current.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
     }
 
+    private static IOException combinedFailure(String action, Exception smbFailure, Exception sftpFailure) {
+        StringBuilder message = new StringBuilder(action);
+        if (smbFailure != null) message.append("；SMB: ").append(rootMessage(smbFailure));
+        if (sftpFailure != null) message.append("；SFTP: ").append(rootMessage(sftpFailure));
+        return new IOException(message.toString(), sftpFailure != null ? sftpFailure : smbFailure);
+    }
+
+    private static void validateFilename(String filename) {
+        if (filename == null || filename.isBlank() || filename.contains("/") || filename.contains("\\")
+                || ".".equals(filename) || "..".equals(filename)) {
+            throw new IllegalArgumentException("非法归档文件名");
+        }
+    }
+
+    private static String joinSmb(String directory, String filename) {
+        return directory.isEmpty() ? filename : directory + "\\" + filename;
+    }
+
     static Optional<String> selectGidArchive(String requestedFilename, List<String> names) {
         String prefix = gidSearchPrefix(requestedFilename);
         if (prefix == null || names == null || names.isEmpty()) return Optional.empty();
@@ -318,6 +443,12 @@ public class SynologyArchiveReader {
 
     public interface ArchiveSession extends AutoCloseable {
         <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception;
+
+        List<String> listArchives() throws Exception;
+
+        void rename(String sourceFilename, String targetFilename) throws Exception;
+
+        void delete(String filename) throws Exception;
 
         @Override
         void close();

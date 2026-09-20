@@ -42,6 +42,12 @@ const routes = [
         meta: { title: '视觉指纹' }
       },
       {
+        path: 'archive-sync',
+        name: 'ArchiveSync',
+        component: () => import('../views/ArchiveSync.vue'),
+        meta: { title: '群晖归档同步' }
+      },
+      {
         path: 'komga-import-reviews',
         name: 'KomgaImportReviews',
         component: () => import('../views/KomgaImportReviews.vue'),
