@@ -16,6 +16,10 @@
           <el-icon><List /></el-icon>
           <template #title>画廊列表</template>
         </el-menu-item>
+        <el-menu-item index="/collections">
+          <el-icon><Collection /></el-icon>
+          <template #title>画廊合集</template>
+        </el-menu-item>
         <el-menu-item index="/dedupe-reviews">
           <el-icon><Finished /></el-icon>
           <template #title>去重审核</template>
@@ -80,7 +84,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh, Picture } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh, Picture, Collection } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
