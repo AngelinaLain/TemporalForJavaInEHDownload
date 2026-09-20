@@ -28,6 +28,10 @@
           <el-icon><Picture /></el-icon>
           <template #title>视觉指纹</template>
         </el-menu-item>
+        <el-menu-item index="/archive-sync">
+          <el-icon><FolderChecked /></el-icon>
+          <template #title>群晖归档同步</template>
+        </el-menu-item>
         <el-menu-item index="/komga-import-reviews">
           <el-icon><Refresh /></el-icon>
           <template #title>Komga 入库复核</template>
@@ -84,7 +88,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh, Picture, Collection } from '@element-plus/icons-vue'
+import { DataAnalysis, List, Fold, Expand, UserFilled, ArrowDown, Operation, Monitor, Connection, Finished, Refresh, Picture, Collection, FolderChecked } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
