@@ -8,6 +8,9 @@ import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBuffer;
+import java.awt.image.Raster;
+import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
@@ -45,6 +48,16 @@ class GalleryVisualMatchingTest {
         assertNotNull(small);
         assertNotNull(large);
         assertTrue(PerceptualHash.distance(small.getPerceptualHash(), large.getPerceptualHash()) <= 8);
+    }
+
+    @Test
+    void convertsCmykRasterWithoutRelyingOnEmbeddedColorProfile() {
+        WritableRaster raster = Raster.createInterleavedRaster(DataBuffer.TYPE_BYTE, 1, 1, 4, null);
+        raster.setPixel(0, 0, new int[]{0, 255, 255, 0});
+
+        BufferedImage converted = PerceptualHash.rgbFromRaster(raster);
+
+        assertEquals(0xff0000, converted.getRGB(0, 0) & 0xffffff);
     }
 
     private GalleryPageFingerprint hashDrawing(Long gid, int width, int height) throws Exception {
