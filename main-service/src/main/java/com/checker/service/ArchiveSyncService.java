@@ -22,6 +22,7 @@ import org.jsoup.nodes.Element;
 
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -32,6 +33,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -46,8 +48,9 @@ import java.util.zip.ZipFile;
 
 @Service
 public class ArchiveSyncService {
-    private static final Pattern LEADING_GID = Pattern.compile("^\\[\\d+]\\s*");
+    private static final Pattern LEADING_GID = Pattern.compile("^\\[(\\d+)](?:\\s|$)");
     private static final Pattern EXTENSION = Pattern.compile("(?i)\\.(?:cbz|zip)$");
+    private static final Pattern CSS_URL = Pattern.compile("(?i)url\\(\\s*['\"]?([^'\")]+)");
     private static final int MAX_FUZZY_CANDIDATES = 8;
     private static final long MAX_COVER_BYTES = 10L * 1024 * 1024;
     private static final int COVER_MATCH_THRESHOLD = 72;
@@ -155,12 +158,7 @@ public class ArchiveSyncService {
             QueryWrapper<EhGalleriesEntity> allGalleryQuery = new QueryWrapper<>();
             allGalleryQuery.isNotNull("filename").ne("filename", "").orderByAsc("gid");
             List<EhGalleriesEntity> allGalleries = galleriesMapper.selectList(allGalleryQuery);
-            Set<Long> groupsAlreadyArchived = new HashSet<>();
-            for (EhGalleriesEntity gallery : allGalleries) {
-                if (exactArchiveNames.contains(gallery.getFilename())) {
-                    groupsAlreadyArchived.add(canonicalGid(gallery));
-                }
-            }
+            Set<Long> groupsAlreadyArchived = findArchivedGroups(allGalleries, archives);
             List<EhGalleriesEntity> galleries = allGalleries.stream()
                     .filter(gallery -> gallery.getDuplicateOfGid() == null)
                     .toList();
@@ -439,14 +437,10 @@ public class ArchiveSyncService {
         }
         if (galleryUrl == null || galleryUrl.isBlank()) throw new IOException("数据库没有 EH 地址或 token");
         Document document = Jsoup.parse(networkClient.getHtml(galleryUrl), galleryUrl);
-        List<Element> images = document.select("#gdt img, .gdtm img, .gdtl img").stream().limit(3).toList();
+        List<String> imageUrls = extractSourceCoverUrls(document).stream().limit(6).toList();
         Throwable firstFailure = null;
-        for (int index = 0; index < images.size(); index++) {
-            Element image = images.get(index);
-            String attribute = image.hasAttr("data-src") ? "data-src" : "src";
-            String imageUrl = image.absUrl(attribute);
-            if (imageUrl.isBlank()) imageUrl = image.attr(attribute);
-            if (imageUrl.isBlank() || imageUrl.startsWith("data:")) continue;
+        for (int index = 0; index < imageUrls.size(); index++) {
+            String imageUrl = imageUrls.get(index);
             try {
                 byte[] bytes = networkClient.getBytes(imageUrl, MAX_COVER_BYTES);
                 GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
@@ -457,6 +451,34 @@ public class ArchiveSyncService {
             }
         }
         throw new IOException("EH 页面没有可计算的源封面", firstFailure);
+    }
+
+    static List<String> extractSourceCoverUrls(Document document) {
+        if (document == null) return List.of();
+        LinkedHashSet<String> urls = new LinkedHashSet<>();
+        for (Element meta : document.select("meta[property=og:image], meta[name=twitter:image]")) {
+            addSourceUrl(urls, document, meta.attr("content"));
+        }
+        for (Element styled : document.select("#gd1[style*=url], #gd1 [style*=url]")) {
+            var matcher = CSS_URL.matcher(styled.attr("style"));
+            while (matcher.find()) addSourceUrl(urls, document, matcher.group(1));
+        }
+        for (Element image : document.select("#gdt img, .gdtm img, .gdtl img")) {
+            addSourceUrl(urls, document, image.attr("data-src"));
+            addSourceUrl(urls, document, image.attr("src"));
+        }
+        return List.copyOf(urls);
+    }
+
+    private static void addSourceUrl(Set<String> urls, Document document, String value) {
+        if (value == null || value.isBlank() || value.startsWith("data:")) return;
+        String resolved = value.trim();
+        try {
+            if (!document.baseUri().isBlank()) resolved = URI.create(document.baseUri()).resolve(resolved).toString();
+        } catch (IllegalArgumentException ignored) {
+            // Keep the original absolute value; the network client will report malformed URLs clearly.
+        }
+        if (resolved.startsWith("http://") || resolved.startsWith("https://")) urls.add(resolved);
     }
 
     static int coverSimilarity(GalleryPageFingerprint source, GalleryPageFingerprint candidate) {
@@ -625,6 +647,36 @@ public class ArchiveSyncService {
 
     private static Long canonicalGid(EhGalleriesEntity gallery) {
         return gallery.getDuplicateOfGid() == null ? gallery.getGid() : gallery.getDuplicateOfGid();
+    }
+
+    static Set<Long> findArchivedGroups(List<EhGalleriesEntity> galleries, List<String> archives) {
+        if (galleries == null || archives == null) return Set.of();
+        Set<Long> archiveGids = new HashSet<>();
+        Set<String> archiveNames = new HashSet<>();
+        Set<String> archiveBases = new HashSet<>();
+        for (String archive : archives) {
+            if (archive == null) continue;
+            archiveNames.add(archive.toLowerCase(Locale.ROOT));
+            archiveBases.add(EXTENSION.matcher(archive).replaceFirst("").toLowerCase(Locale.ROOT));
+            var matcher = LEADING_GID.matcher(archive);
+            if (matcher.find()) {
+                try {
+                    archiveGids.add(Long.parseLong(matcher.group(1)));
+                } catch (NumberFormatException ignored) {
+                    // An out-of-range filename prefix cannot represent a database GID.
+                }
+            }
+        }
+        Set<Long> result = new HashSet<>();
+        for (EhGalleriesEntity gallery : galleries) {
+            String filename = gallery.getFilename();
+            String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+            String base = EXTENSION.matcher(lower).replaceFirst("");
+            if (archiveGids.contains(gallery.getGid()) || archiveNames.contains(lower) || archiveBases.contains(base)) {
+                result.add(canonicalGid(gallery));
+            }
+        }
+        return result;
     }
 
     private static String rootMessage(Throwable failure) {

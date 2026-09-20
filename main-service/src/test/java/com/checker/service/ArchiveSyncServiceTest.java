@@ -2,9 +2,11 @@ package com.checker.service;
 
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dto.GalleryPageFingerprint;
+import org.jsoup.Jsoup;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -65,6 +67,44 @@ class ArchiveSyncServiceTest {
         GalleryPageFingerprint candidate = fingerprint("ffffffffffffffff", "aaaaaaaaaaaaaaaa");
 
         assertEquals(100, ArchiveSyncService.coverSimilarity(source, candidate));
+    }
+
+    @Test
+    void considersSameGidArchivedWhenOnlyExtensionChanged() {
+        EhGalleriesEntity gallery = gallery(197775L, "Dark Make up", null);
+        gallery.setFilename("[197775] Dark Make up [Chinese].zip");
+
+        Set<Long> archived = ArchiveSyncService.findArchivedGroups(List.of(gallery),
+                List.of("[197775] Dark Make up [Chinese].cbz"));
+
+        assertEquals(Set.of(197775L), archived);
+    }
+
+    @Test
+    void considersPreferredGalleryArchivedWhenCandidateVersionExists() {
+        EhGalleriesEntity preferred = gallery(4166897L, "Preferred", null);
+        preferred.setFilename("[4166897] Preferred.cbz");
+        EhGalleriesEntity candidate = gallery(4166800L, "Candidate", null);
+        candidate.setDuplicateOfGid(4166897L);
+        candidate.setFilename("[4166800] Historical name.zip");
+
+        Set<Long> archived = ArchiveSyncService.findArchivedGroups(List.of(preferred, candidate),
+                List.of("[4166800] Historical name.cbz"));
+
+        assertEquals(Set.of(4166897L), archived);
+    }
+
+    @Test
+    void extractsEhCoverFromMetadataCssAndThumbnailFallbacks() {
+        var document = Jsoup.parse("""
+                <meta property='og:image' content='/cover.jpg'>
+                <div id='gd1'><div style=\"background: url('//img.example/front.jpg')\"></div></div>
+                <div id='gdt'><img data-src='' src='https://img.example/page1.jpg'></div>
+                """, "https://e-hentai.org/g/1/token/");
+
+        assertEquals(List.of("https://e-hentai.org/cover.jpg", "https://img.example/front.jpg",
+                        "https://img.example/page1.jpg"),
+                ArchiveSyncService.extractSourceCoverUrls(document));
     }
 
     private GalleryPageFingerprint fingerprint(String full, String center) {
