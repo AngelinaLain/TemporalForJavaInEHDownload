@@ -1,6 +1,7 @@
 package com.checker.service;
 
 import com.checker.entity.EhGalleriesEntity;
+import com.checker.dto.GalleryPageFingerprint;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -56,6 +57,18 @@ class ArchiveSyncServiceTest {
 
         assertEquals("MISSING", result.type());
         assertTrue(result.filenames().isEmpty());
+    }
+
+    @Test
+    void coverSimilarityUsesCenterHashWhenTranslationOverlayChangesEdges() {
+        GalleryPageFingerprint source = fingerprint("0000000000000000", "aaaaaaaaaaaaaaaa");
+        GalleryPageFingerprint candidate = fingerprint("ffffffffffffffff", "aaaaaaaaaaaaaaaa");
+
+        assertEquals(100, ArchiveSyncService.coverSimilarity(source, candidate));
+    }
+
+    private GalleryPageFingerprint fingerprint(String full, String center) {
+        return GalleryPageFingerprint.builder().perceptualHash(full).centerHash(center).build();
     }
 
     private EhGalleriesEntity gallery(long gid, String title, String originalTitle) {

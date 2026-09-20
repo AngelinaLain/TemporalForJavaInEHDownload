@@ -5,7 +5,10 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.checker.common.ComicInfo;
 import com.checker.common.ComicInfoInjector;
 import com.checker.common.Constants;
+import com.checker.common.EhNetworkClient;
+import com.checker.common.PerceptualHash;
 import com.checker.config.EhNetworkConfig;
+import com.checker.dto.GalleryPageFingerprint;
 import com.checker.entity.ArchiveSyncReviewEntity;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.ArchiveSyncReviewMapper;
@@ -13,8 +16,12 @@ import com.checker.mapper.EhGalleriesMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -42,6 +49,9 @@ public class ArchiveSyncService {
     private static final Pattern LEADING_GID = Pattern.compile("^\\[\\d+]\\s*");
     private static final Pattern EXTENSION = Pattern.compile("(?i)\\.(?:cbz|zip)$");
     private static final int MAX_FUZZY_CANDIDATES = 8;
+    private static final long MAX_COVER_BYTES = 10L * 1024 * 1024;
+    private static final int COVER_MATCH_THRESHOLD = 72;
+    private static final int COVER_MATCH_MARGIN = 6;
     private static final Set<String> FRAGMENT_STOP_WORDS = Set.of(
             "chinese", "english", "japanese", "translated", "translation", "digital",
             "rewrite", "decensored", "uncensored", "complete", "ongoing");
@@ -51,32 +61,49 @@ public class ArchiveSyncService {
     private final SynologyArchiveReader archiveReader;
     private final SynologyUploadService uploadService;
     private final EhNetworkConfig networkConfig;
+    private final EhNetworkClient networkClient;
+    private final ArchiveCoverFingerprintExtractor coverExtractor;
     private final TaskExecutor executor;
     private final AtomicBoolean scanning = new AtomicBoolean(false);
+    private final AtomicBoolean coverMatching = new AtomicBoolean(false);
     private final Set<Long> activeRepairs = ConcurrentHashMap.newKeySet();
     private final AtomicInteger scanned = new AtomicInteger();
     private volatile int total;
     private volatile String scanError;
     private volatile Date scanStartedAt;
     private volatile Date scanFinishedAt;
+    private final AtomicInteger coverProcessed = new AtomicInteger();
+    private final AtomicInteger coverMatched = new AtomicInteger();
+    private final AtomicInteger coverFailed = new AtomicInteger();
+    private volatile int coverTotal;
+    private volatile Long coverCurrentGid;
+    private volatile String coverError;
 
     public ArchiveSyncService(EhGalleriesMapper galleriesMapper,
                               ArchiveSyncReviewMapper reviewMapper,
                               SynologyArchiveReader archiveReader,
                               SynologyUploadService uploadService,
                               EhNetworkConfig networkConfig,
+                              EhNetworkClient networkClient,
+                              ArchiveCoverFingerprintExtractor coverExtractor,
                               @Qualifier("backgroundTaskExecutor") TaskExecutor executor) {
         this.galleriesMapper = galleriesMapper;
         this.reviewMapper = reviewMapper;
         this.archiveReader = archiveReader;
         this.uploadService = uploadService;
         this.networkConfig = networkConfig;
+        this.networkClient = networkClient;
+        this.coverExtractor = coverExtractor;
         this.executor = executor;
     }
 
     public synchronized Map<String, Object> startScan() {
         if (!scanning.compareAndSet(false, true)) {
             throw new IllegalStateException("已有群晖归档同步扫描正在运行");
+        }
+        if (coverMatching.get()) {
+            scanning.set(false);
+            throw new IllegalStateException("封面比对正在运行，请等待完成后再重新扫描");
         }
         if (!activeRepairs.isEmpty()) {
             scanning.set(false);
@@ -104,6 +131,13 @@ public class ArchiveSyncService {
         status.put("error", scanError);
         status.put("startedAt", scanStartedAt);
         status.put("finishedAt", scanFinishedAt);
+        status.put("coverRunning", coverMatching.get());
+        status.put("coverTotal", coverTotal);
+        status.put("coverProcessed", coverProcessed.get());
+        status.put("coverMatched", coverMatched.get());
+        status.put("coverFailed", coverFailed.get());
+        status.put("coverCurrentGid", coverCurrentGid);
+        status.put("coverError", coverError);
         QueryWrapper<ArchiveSyncReviewEntity> pending = new QueryWrapper<>();
         pending.in("status", List.of("PENDING", "FAILED"));
         status.put("reviewCount", reviewMapper.selectCount(pending));
@@ -118,15 +152,24 @@ public class ArchiveSyncService {
                     .toList();
             Set<String> exactArchiveNames = new HashSet<>(archives);
 
-            QueryWrapper<EhGalleriesEntity> galleryQuery = new QueryWrapper<>();
-            galleryQuery.isNotNull("filename").ne("filename", "").orderByAsc("gid");
-            List<EhGalleriesEntity> galleries = galleriesMapper.selectList(galleryQuery);
+            QueryWrapper<EhGalleriesEntity> allGalleryQuery = new QueryWrapper<>();
+            allGalleryQuery.isNotNull("filename").ne("filename", "").orderByAsc("gid");
+            List<EhGalleriesEntity> allGalleries = galleriesMapper.selectList(allGalleryQuery);
+            Set<Long> groupsAlreadyArchived = new HashSet<>();
+            for (EhGalleriesEntity gallery : allGalleries) {
+                if (exactArchiveNames.contains(gallery.getFilename())) {
+                    groupsAlreadyArchived.add(canonicalGid(gallery));
+                }
+            }
+            List<EhGalleriesEntity> galleries = allGalleries.stream()
+                    .filter(gallery -> gallery.getDuplicateOfGid() == null)
+                    .toList();
             total = galleries.size();
 
             reviewMapper.delete(new QueryWrapper<>());
             for (EhGalleriesEntity gallery : galleries) {
                 String expected = gallery.getFilename();
-                if (!exactArchiveNames.contains(expected)) {
+                if (!exactArchiveNames.contains(expected) && !groupsAlreadyArchived.contains(gallery.getGid())) {
                     MatchResult match = findCandidates(gallery, archives);
                     ArchiveSyncReviewEntity review = new ArchiveSyncReviewEntity();
                     review.setGid(gallery.getGid());
@@ -151,6 +194,7 @@ public class ArchiveSyncService {
 
     public synchronized ArchiveSyncReviewEntity synchronize(Long gid, String requestedFilename) {
         if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再处理");
+        if (coverMatching.get()) throw new IllegalStateException("封面比对进行中，请等待完成后再处理");
         ArchiveSyncReviewEntity review = requireReview(gid);
         if (requestedFilename == null || requestedFilename.isBlank()) {
             throw new IllegalArgumentException("请填写群晖中的原文件名");
@@ -251,6 +295,7 @@ public class ArchiveSyncService {
 
     public synchronized ArchiveSyncReviewEntity claimRedownload(Long gid) {
         if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再处理");
+        if (coverMatching.get()) throw new IllegalStateException("封面比对进行中，请等待完成后再处理");
         ArchiveSyncReviewEntity review = requireReview(gid);
         UpdateWrapper<ArchiveSyncReviewEntity> claim = new UpdateWrapper<>();
         claim.eq("gid", gid).in("status", List.of("PENDING", "FAILED", "REDOWNLOAD_STARTED"))
@@ -283,6 +328,143 @@ public class ArchiveSyncService {
             owners.put(gallery.getFilename().toLowerCase(Locale.ROOT), gallery.getGid());
         }
         return owners;
+    }
+
+    public synchronized Map<String, Object> startCoverMatch(List<Long> gids) {
+        if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再比对封面");
+        if (!activeRepairs.isEmpty()) throw new IllegalStateException("仍有归档正在同步，请等待完成后再比对封面");
+        if (!coverMatching.compareAndSet(false, true)) throw new IllegalStateException("已有封面比对任务正在运行");
+        try {
+            QueryWrapper<ArchiveSyncReviewEntity> query = new QueryWrapper<>();
+            query.in("status", List.of("PENDING", "FAILED")).isNotNull("candidate_filenames")
+                    .ne("candidate_filenames", "[]");
+            if (gids != null && !gids.isEmpty()) query.in("gid", gids);
+            query.orderByAsc("gid");
+            List<Long> targets = reviewMapper.selectList(query).stream()
+                    .map(ArchiveSyncReviewEntity::getGid).toList();
+            coverTotal = targets.size();
+            coverProcessed.set(0);
+            coverMatched.set(0);
+            coverFailed.set(0);
+            coverCurrentGid = null;
+            coverError = null;
+            if (targets.isEmpty()) throw new IllegalStateException("没有可进行封面比对的候选记录");
+            executor.execute(() -> runCoverMatch(targets));
+        } catch (RuntimeException failure) {
+            coverMatching.set(false);
+            throw failure;
+        }
+        return scanStatus();
+    }
+
+    private void runCoverMatch(List<Long> gids) {
+        try (SynologyArchiveReader.ArchiveSession session = archiveReader.openSession()) {
+            for (Long gid : gids) {
+                coverCurrentGid = gid;
+                try {
+                    matchCovers(gid, session);
+                } catch (Exception failure) {
+                    coverFailed.incrementAndGet();
+                    ArchiveSyncReviewEntity update = new ArchiveSyncReviewEntity();
+                    update.setGid(gid);
+                    update.setCoverStatus("FAILED");
+                    update.setCoverMessage(truncate("封面比对失败: " + rootMessage(failure)));
+                    update.setCoverCheckedAt(new Date());
+                    reviewMapper.updateById(update);
+                } finally {
+                    coverProcessed.incrementAndGet();
+                }
+            }
+        } catch (Exception failure) {
+            coverError = truncate(rootMessage(failure));
+        } finally {
+            coverCurrentGid = null;
+            coverMatching.set(false);
+        }
+    }
+
+    private void matchCovers(Long gid, SynologyArchiveReader.ArchiveSession session) throws Exception {
+        ArchiveSyncReviewEntity review = requireReview(gid);
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+        if (gallery == null) throw new IllegalStateException("画廊记录不存在");
+        GalleryPageFingerprint source = fetchSourceCover(gallery);
+        Map<String, Integer> scores = new LinkedHashMap<>();
+        List<String> failures = new ArrayList<>();
+        for (String filename : review.getCandidateFilenames()) {
+            try {
+                GalleryPageFingerprint candidate = session.read(filename,
+                        input -> coverExtractor.extract(input, gid, filename));
+                scores.put(filename, coverSimilarity(source, candidate));
+            } catch (Exception failure) {
+                failures.add(filename + ": " + rootMessage(failure));
+            }
+        }
+        if (scores.isEmpty()) {
+            throw new IOException(failures.isEmpty() ? "所有候选均没有可用封面" : failures.get(0));
+        }
+        List<String> ranked = scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed()
+                        .thenComparing(Map.Entry::getKey, String.CASE_INSENSITIVE_ORDER))
+                .map(Map.Entry::getKey).toList();
+        Map<String, Integer> rankedScores = new LinkedHashMap<>();
+        ranked.forEach(filename -> rankedScores.put(filename, scores.get(filename)));
+        int top = rankedScores.get(ranked.get(0));
+        int second = ranked.size() > 1 ? rankedScores.get(ranked.get(1)) : 0;
+        boolean confident = top >= COVER_MATCH_THRESHOLD && (ranked.size() == 1 || top - second >= COVER_MATCH_MARGIN);
+
+        ArchiveSyncReviewEntity update = new ArchiveSyncReviewEntity();
+        update.setGid(gid);
+        update.setCandidateFilenames(ranked);
+        update.setCoverScores(rankedScores);
+        update.setCoverStatus(confident ? "MATCHED" : "AMBIGUOUS");
+        update.setCoverCheckedAt(new Date());
+        if (confident) {
+            update.setSelectedFilename(ranked.get(0));
+            update.setCoverMessage("封面最高相似度 " + top + "%（领先 " + (top - second) + " 分），已预选首位候选");
+            coverMatched.incrementAndGet();
+        } else {
+            update.setCoverMessage("封面最高相似度 " + top + "%"
+                    + (ranked.size() > 1 ? "（与次位相差 " + (top - second) + " 分）" : "") + "，请人工确认");
+        }
+        if (!failures.isEmpty()) {
+            update.setCoverMessage(truncate(update.getCoverMessage() + "；另有 " + failures.size() + " 个候选读取失败"));
+        }
+        reviewMapper.updateById(update);
+    }
+
+    private GalleryPageFingerprint fetchSourceCover(EhGalleriesEntity gallery) throws IOException {
+        String galleryUrl = gallery.getGalleryUrl();
+        if ((galleryUrl == null || galleryUrl.isBlank()) && gallery.getToken() != null && !gallery.getToken().isBlank()) {
+            galleryUrl = Constants.EHENTAI_BASE_URL + "g/" + gallery.getGid() + "/" + gallery.getToken() + "/";
+        }
+        if (galleryUrl == null || galleryUrl.isBlank()) throw new IOException("数据库没有 EH 地址或 token");
+        Document document = Jsoup.parse(networkClient.getHtml(galleryUrl), galleryUrl);
+        List<Element> images = document.select("#gdt img, .gdtm img, .gdtl img").stream().limit(3).toList();
+        Throwable firstFailure = null;
+        for (int index = 0; index < images.size(); index++) {
+            Element image = images.get(index);
+            String attribute = image.hasAttr("data-src") ? "data-src" : "src";
+            String imageUrl = image.absUrl(attribute);
+            if (imageUrl.isBlank()) imageUrl = image.attr(attribute);
+            if (imageUrl.isBlank() || imageUrl.startsWith("data:")) continue;
+            try {
+                byte[] bytes = networkClient.getBytes(imageUrl, MAX_COVER_BYTES);
+                GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
+                        new ByteArrayInputStream(bytes), gallery.getGid(), index, "source-cover", "EH_COVER");
+                if (fingerprint != null) return fingerprint;
+            } catch (Exception failure) {
+                if (firstFailure == null) firstFailure = failure;
+            }
+        }
+        throw new IOException("EH 页面没有可计算的源封面", firstFailure);
+    }
+
+    static int coverSimilarity(GalleryPageFingerprint source, GalleryPageFingerprint candidate) {
+        if (source == null || candidate == null) return 0;
+        int distance = Math.min(
+                PerceptualHash.distance(source.getPerceptualHash(), candidate.getPerceptualHash()),
+                PerceptualHash.distance(source.getCenterHash(), candidate.getCenterHash()));
+        return Math.max(0, Math.min(100, (int) Math.round((64 - distance) * 100D / 64D)));
     }
 
     static MatchResult findCandidates(EhGalleriesEntity gallery, List<String> archives) {
@@ -439,6 +621,10 @@ public class ArchiveSyncService {
         if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".cbz") || lower.endsWith(".zip");
+    }
+
+    private static Long canonicalGid(EhGalleriesEntity gallery) {
+        return gallery.getDuplicateOfGid() == null ? gallery.getGid() : gallery.getDuplicateOfGid();
     }
 
     private static String rootMessage(Throwable failure) {

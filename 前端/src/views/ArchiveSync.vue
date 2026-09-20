@@ -5,7 +5,7 @@
         <div>
           <div class="eyebrow">SYNOLOGY ARCHIVE RECONCILIATION</div>
           <h2>群晖归档同步</h2>
-          <p>筛出数据库文件名在群晖中不存在的画廊，依次按 GID、完整标题和标题片段召回旧文件，再由人工确认。</p>
+          <p>筛出首选画廊中数据库文件名在群晖不存在的记录；标题召回候选后，可拉取 EH 源封面与归档首图比对排序。</p>
         </div>
         <el-button type="primary" size="large" :loading="scanStatus.running" @click="startScan">
           {{ scanStatus.running ? '扫描中' : '重新扫描' }}
@@ -15,7 +15,15 @@
         <el-progress :percentage="scanPercent" :stroke-width="8" />
         <span>{{ scanStatus.scanned || 0 }} / {{ scanStatus.total || 0 }}</span>
       </div>
+      <div v-if="scanStatus.coverRunning" class="cover-progress">
+        <div class="progress-row">
+          <el-progress :percentage="coverPercent" :stroke-width="8" status="success" />
+          <span>{{ scanStatus.coverProcessed || 0 }} / {{ scanStatus.coverTotal || 0 }}</span>
+        </div>
+        <span>正在比对 GID {{ scanStatus.coverCurrentGid || '-' }}，已高置信匹配 {{ scanStatus.coverMatched || 0 }}，失败 {{ scanStatus.coverFailed || 0 }}</span>
+      </div>
       <el-alert v-if="scanStatus.error" :title="scanStatus.error" type="error" show-icon :closable="false" />
+      <el-alert v-if="scanStatus.coverError" :title="scanStatus.coverError" type="error" show-icon :closable="false" />
     </el-card>
 
     <el-card shadow="never" class="toolbar">
@@ -25,6 +33,12 @@
           <span>唯一候选也会保留给人工核查；候选若属于另一条数据库记录会显示冲突 GID。</span>
         </div>
         <div class="filters">
+          <el-button :loading="scanStatus.coverRunning" :disabled="scanStatus.running || !records.length" @click="startCoverMatch(records.map(item => item.gid), '当前页')">
+            比对当前页封面
+          </el-button>
+          <el-button type="success" plain :loading="scanStatus.coverRunning" :disabled="scanStatus.running || !scanStatus.reviewCount" @click="startAllCoverMatch">
+            比对全部候选
+          </el-button>
           <el-select v-model="filterStatus" style="width: 170px" @change="reloadFromFirstPage">
             <el-option label="待处理与失败" value="ACTIVE" />
             <el-option label="仅待核查" value="PENDING" />
@@ -47,6 +61,7 @@
           <div class="case-title">
             <el-tag :type="statusType(item.status)">{{ statusLabel(item.status) }}</el-tag>
             <el-tag effect="plain" :type="matchType(item.matchType).type">{{ matchType(item.matchType).label }}</el-tag>
+            <el-tag v-if="item.coverStatus" effect="plain" :type="coverStatusType(item.coverStatus)">{{ coverStatusLabel(item.coverStatus) }}</el-tag>
             <strong>{{ item.title || '-' }}</strong>
             <span class="gid">GID {{ item.gid }}</span>
           </div>
@@ -59,6 +74,7 @@
           <span class="filename target">{{ item.expectedFilename }}</span>
         </el-descriptions-item>
         <el-descriptions-item label="匹配说明">{{ item.message || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="item.coverMessage" label="封面比对">{{ item.coverMessage }}</el-descriptions-item>
       </el-descriptions>
 
       <div class="candidate-editor">
@@ -70,7 +86,7 @@
           default-first-option
           placeholder="选择候选，或手工输入群晖中的完整原文件名"
           class="candidate-select"
-          :disabled="item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
+          :disabled="scanStatus.coverRunning || item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
         >
           <el-option
             v-for="candidate in item.candidates"
@@ -92,9 +108,17 @@
 
       <div class="actions">
         <el-button
+          plain
+          :loading="scanStatus.coverRunning && scanStatus.coverCurrentGid === item.gid"
+          :disabled="scanStatus.coverRunning || !item.candidates?.length || item.status === 'SYNCING' || item.status === 'COMPLETED'"
+          @click="startCoverMatch([item.gid], `GID ${item.gid}`)"
+        >
+          重新比对封面
+        </el-button>
+        <el-button
           type="primary"
           :loading="workingGid === item.gid && workingAction === 'sync'"
-          :disabled="!drafts[item.gid] || item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
+          :disabled="scanStatus.coverRunning || !drafts[item.gid] || item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
           @click="synchronize(item)"
         >
           无需重下，按此文件同步
@@ -103,7 +127,7 @@
           type="danger"
           plain
           :loading="workingGid === item.gid && workingAction === 'redownload'"
-          :disabled="item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
+          :disabled="scanStatus.coverRunning || item.status === 'SYNCING' || item.status === 'REDOWNLOAD_STARTING' || item.status === 'COMPLETED'"
           @click="redownload(item)"
         >
           重新抓取下载并入库
@@ -132,7 +156,11 @@ import api from '../api'
 
 const records = ref([])
 const loading = ref(false)
-const scanStatus = reactive({ running: false, total: 0, scanned: 0, reviewCount: 0, error: null })
+const scanStatus = reactive({
+  running: false, total: 0, scanned: 0, reviewCount: 0, error: null,
+  coverRunning: false, coverTotal: 0, coverProcessed: 0, coverMatched: 0,
+  coverFailed: 0, coverCurrentGid: null, coverError: null
+})
 const pagination = reactive({ page: 1, size: 20, total: 0 })
 const filterStatus = ref('ACTIVE')
 const drafts = reactive({})
@@ -142,6 +170,9 @@ let pollTimer
 
 const scanPercent = computed(() => scanStatus.total
   ? Math.min(100, Math.round((scanStatus.scanned || 0) * 100 / scanStatus.total))
+  : 0)
+const coverPercent = computed(() => scanStatus.coverTotal
+  ? Math.min(100, Math.round((scanStatus.coverProcessed || 0) * 100 / scanStatus.coverTotal))
   : 0)
 
 const loadStatus = async () => {
@@ -158,7 +189,9 @@ const loadReviews = async () => {
     records.value = res.data.records || []
     pagination.total = Number(res.data.total || 0)
     for (const item of records.value) {
-      if (!drafts[item.gid]) drafts[item.gid] = item.selectedFilename || item.candidates?.[0]?.filename || ''
+      if (item.coverStatus === 'MATCHED' || !drafts[item.gid]) {
+        drafts[item.gid] = item.selectedFilename || item.candidates?.[0]?.filename || ''
+      }
     }
   } finally {
     loading.value = false
@@ -170,6 +203,23 @@ const startScan = async () => {
   ElMessage.success('群晖归档扫描已启动')
   pagination.page = 1
   await loadStatus()
+}
+
+const startCoverMatch = async (gids, label) => {
+  await api.post('/archive-sync/cover-match', { gids })
+  ElMessage.success(`${label}封面比对已启动`)
+  await loadStatus()
+}
+
+const startAllCoverMatch = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将依次访问 EH 并读取群晖候选压缩包的首图。历史记录较多时会运行较长时间，是否继续？',
+      '批量比对全部候选',
+      { type: 'warning', confirmButtonText: '开始比对', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  await startCoverMatch([], '全部候选')
 }
 
 const reloadFromFirstPage = () => {
@@ -219,9 +269,14 @@ const redownload = async item => {
   }
 }
 
-const candidateLabel = candidate => candidate.databaseGid
-  ? `${candidate.filename}（数据库 GID ${candidate.databaseGid}）`
-  : candidate.filename
+const candidateLabel = candidate => {
+  const score = candidate.coverScore == null ? '' : `（封面 ${candidate.coverScore}%）`
+  const owner = candidate.databaseGid ? `（数据库 GID ${candidate.databaseGid}）` : ''
+  return `${candidate.filename}${score}${owner}`
+}
+
+const coverStatusLabel = value => ({ MATCHED: '封面高匹配', AMBIGUOUS: '封面待确认', FAILED: '封面失败' }[value] || value)
+const coverStatusType = value => ({ MATCHED: 'success', AMBIGUOUS: 'warning', FAILED: 'danger' }[value] || 'info')
 
 const matchType = value => ({
   GID: { label: 'GID 匹配', type: 'success' },
@@ -243,8 +298,9 @@ const statusType = value => ({
 const poll = async () => {
   try {
     const wasRunning = scanStatus.running
+    const wasCoverRunning = scanStatus.coverRunning
     await loadStatus()
-    if (scanStatus.running || wasRunning || records.value.some(item => item.status === 'SYNCING')) {
+    if (scanStatus.running || wasRunning || scanStatus.coverRunning || wasCoverRunning || records.value.some(item => item.status === 'SYNCING')) {
       await loadReviews()
     }
   } catch {
@@ -268,6 +324,8 @@ onBeforeUnmount(() => window.clearInterval(pollTimer))
 .hero p { margin: 0; color: #d8edf0; }
 .eyebrow { color: #63e6df; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; }
 .progress-row { margin-top: 22px; display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; }
+.cover-progress { margin-top: 16px; color: #d8edf0; font-size: 13px; }
+.cover-progress .progress-row { margin-top: 0; margin-bottom: 6px; }
 .toolbar, .review-card { margin-top: 16px; }
 .summary, .filters, .case-title, .actions { gap: 10px; }
 .summary span { color: #606266; font-size: 13px; }
