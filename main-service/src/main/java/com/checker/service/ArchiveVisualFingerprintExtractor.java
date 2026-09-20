@@ -2,6 +2,8 @@ package com.checker.service;
 
 import com.checker.common.PerceptualHash;
 import com.checker.dto.GalleryPageFingerprint;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Component;
@@ -21,6 +23,7 @@ import java.util.zip.ZipInputStream;
 
 @Component
 public class ArchiveVisualFingerprintExtractor {
+    private static final Logger log = LoggerFactory.getLogger(ArchiveVisualFingerprintExtractor.class);
     private static final int SAMPLE_COUNT = 16;
     private final TaskExecutor fingerprintExecutor;
 
@@ -31,7 +34,7 @@ public class ArchiveVisualFingerprintExtractor {
 
     public List<GalleryPageFingerprint> extract(InputStream archive, Long gid, Integer expectedPages) throws IOException {
         Set<Integer> selected = sampleIndexes(expectedPages, SAMPLE_COUNT);
-        List<CompletableFuture<GalleryPageFingerprint>> pending = new ArrayList<>();
+        List<PendingFingerprint> pending = new ArrayList<>();
         int imageIndex = 0;
         try (ZipInputStream zip = new ZipInputStream(archive)) {
             ZipEntry entry;
@@ -46,30 +49,36 @@ public class ArchiveVisualFingerprintExtractor {
                     byte[] image = zip.readAllBytes();
                     int pageIndex = imageIndex;
                     String pageName = entry.getName();
-                    pending.add(CompletableFuture.supplyAsync(() -> {
+                    CompletableFuture<GalleryPageFingerprint> future = CompletableFuture.supplyAsync(() -> {
                         try {
                             return PerceptualHash.fingerprint(new ByteArrayInputStream(image),
                                     gid, pageIndex, pageName, "ARCHIVE");
                         } catch (IOException failure) {
                             throw new CompletionException(failure);
                         }
-                    }, fingerprintExecutor));
+                    }, fingerprintExecutor);
+                    pending.add(new PendingFingerprint(pageIndex, pageName, future));
                 }
                 zip.closeEntry();
                 imageIndex++;
             }
         }
         List<GalleryPageFingerprint> result = new ArrayList<>(pending.size());
-        for (CompletableFuture<GalleryPageFingerprint> future : pending) {
+        Throwable firstFailure = null;
+        for (PendingFingerprint item : pending) {
             try {
-                GalleryPageFingerprint fingerprint = future.join();
+                GalleryPageFingerprint fingerprint = item.future().join();
                 if (fingerprint != null) result.add(fingerprint);
             } catch (CompletionException failure) {
-                pending.forEach(item -> item.cancel(true));
-                Throwable cause = failure.getCause();
-                if (cause instanceof IOException ioFailure) throw ioFailure;
-                throw new IOException("并行计算视觉指纹失败", cause);
+                Throwable cause = rootCause(failure);
+                if (cause instanceof Error error) throw error;
+                if (firstFailure == null) firstFailure = cause;
+                log.warn("跳过无法生成视觉指纹的采样页, GID: {}, 页码: {}, 文件: {}, 原因: {}: {}",
+                        gid, item.pageIndex(), item.pageName(), cause.getClass().getSimpleName(), cause.getMessage());
             }
+        }
+        if (result.isEmpty() && !pending.isEmpty() && firstFailure != null) {
+            throw new IOException("所有采样页的视觉指纹均计算失败: " + describe(firstFailure), firstFailure);
         }
         return result;
     }
@@ -104,6 +113,25 @@ public class ArchiveVisualFingerprintExtractor {
         if (dot > 0) basename = basename.substring(0, dot);
         return basename.equals("cover") || basename.equals("front")
                 || basename.startsWith("cover_") || basename.startsWith("cover-");
+    }
+
+    private static Throwable rootCause(Throwable failure) {
+        Throwable current = failure;
+        while ((current instanceof CompletionException || current.getClass() == RuntimeException.class)
+                && current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static String describe(Throwable failure) {
+        String message = failure.getMessage();
+        return failure.getClass().getSimpleName()
+                + (message == null || message.isBlank() ? "" : ": " + message);
+    }
+
+    private record PendingFingerprint(int pageIndex, String pageName,
+                                      CompletableFuture<GalleryPageFingerprint> future) {
     }
 
 }
