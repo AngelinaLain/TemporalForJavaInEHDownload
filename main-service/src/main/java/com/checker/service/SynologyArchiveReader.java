@@ -7,6 +7,7 @@ import com.hierynomus.msfscc.FileAttributes;
 import com.hierynomus.mssmb2.SMB2CreateDisposition;
 import com.hierynomus.mssmb2.SMB2CreateOptions;
 import com.hierynomus.mssmb2.SMB2ShareAccess;
+import com.hierynomus.msfscc.fileinformation.FileIdBothDirectoryInformation;
 import com.hierynomus.smbj.SMBClient;
 import com.hierynomus.smbj.auth.AuthenticationContext;
 import com.hierynomus.smbj.connection.Connection;
@@ -18,11 +19,20 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.Vector;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Opens an existing Komga archive from the same SMB/SFTP destination used by uploads. */
 @Service
 public class SynologyArchiveReader {
+    private static final Pattern GID_PREFIX = Pattern.compile("^\\[(\\d+)](?:\\s|$)");
     private final EhNetworkConfig config;
 
     public SynologyArchiveReader(EhNetworkConfig config) {
@@ -96,6 +106,28 @@ public class SynologyArchiveReader {
                                  ArchiveInputFunction<T> function) throws Exception {
             ensureSmbConnected(smb);
             String directory = normalizeSmbPath(smb.getPath());
+            try {
+                return readSmbPath(directory, filename, function);
+            } catch (ArchiveProcessingException processing) {
+                throw processing;
+            } catch (Exception exactFailure) {
+                List<String> names = new ArrayList<>();
+                String prefix = gidSearchPrefix(filename);
+                if (prefix != null) {
+                    for (FileIdBothDirectoryInformation entry : smbShare.list(directory, prefix + "*")) {
+                        names.add(entry.getFileName());
+                    }
+                }
+                Optional<String> resolved = selectGidArchive(filename, names);
+                if (resolved.isPresent() && !resolved.get().equals(filename)) {
+                    return readSmbPath(directory, resolved.get(), function);
+                }
+                throw exactFailure;
+            }
+        }
+
+        private <T> T readSmbPath(String directory, String filename,
+                                  ArchiveInputFunction<T> function) throws Exception {
             String remotePath = directory.isEmpty() ? filename : directory + "\\" + filename;
             try (com.hierynomus.smbj.share.File file = smbShare.openFile(remotePath,
                     EnumSet.of(AccessMask.FILE_READ_DATA, AccessMask.FILE_READ_ATTRIBUTES),
@@ -122,6 +154,26 @@ public class SynologyArchiveReader {
 
         private <T> T readViaSftp(String filename, ArchiveInputFunction<T> function) throws Exception {
             ensureSftpConnected();
+            try {
+                return readSftpPath(filename, function);
+            } catch (ArchiveProcessingException processing) {
+                throw processing;
+            } catch (Exception exactFailure) {
+                List<String> names = new ArrayList<>();
+                String prefix = gidSearchPrefix(filename);
+                if (prefix != null) {
+                    Vector<ChannelSftp.LsEntry> entries = sftp.ls(prefix + "*");
+                    for (ChannelSftp.LsEntry entry : entries) names.add(entry.getFilename());
+                }
+                Optional<String> resolved = selectGidArchive(filename, names);
+                if (resolved.isPresent() && !resolved.get().equals(filename)) {
+                    return readSftpPath(resolved.get(), function);
+                }
+                throw exactFailure;
+            }
+        }
+
+        private <T> T readSftpPath(String filename, ArchiveInputFunction<T> function) throws Exception {
             try (InputStream input = sftp.get(filename)) {
                 return applyArchiveFunction(input, function);
             }
@@ -207,6 +259,36 @@ public class SynologyArchiveReader {
         while (current.getCause() != null && current.getCause() != current) current = current.getCause();
         String message = current.getMessage();
         return current.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+    }
+
+    static Optional<String> selectGidArchive(String requestedFilename, List<String> names) {
+        String prefix = gidSearchPrefix(requestedFilename);
+        if (prefix == null || names == null || names.isEmpty()) return Optional.empty();
+        String requestedExtension = extension(requestedFilename);
+        return names.stream()
+                .filter(name -> name != null && name.startsWith(prefix))
+                .filter(SynologyArchiveReader::isSupportedArchive)
+                .sorted(Comparator
+                        .comparing((String name) -> !extension(name).equalsIgnoreCase(requestedExtension))
+                        .thenComparing(String.CASE_INSENSITIVE_ORDER))
+                .findFirst();
+    }
+
+    private static String gidSearchPrefix(String filename) {
+        if (filename == null) return null;
+        Matcher matcher = GID_PREFIX.matcher(filename);
+        return matcher.find() ? "[" + matcher.group(1) + "] " : null;
+    }
+
+    private static boolean isSupportedArchive(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return (lower.endsWith(".cbz") || lower.endsWith(".zip")) && !lower.endsWith(".uploading");
+    }
+
+    private static String extension(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot);
     }
 
     private static String normalizeSmbPath(String path) {
