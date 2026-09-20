@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ArchiveVisualFingerprintExtractorTest {
-    private final ArchiveVisualFingerprintExtractor extractor = new ArchiveVisualFingerprintExtractor();
+    private final ArchiveVisualFingerprintExtractor extractor = new ArchiveVisualFingerprintExtractor(Runnable::run);
 
     @Test
     void samplesLargeArchiveWithoutExtractingFilesToDisk() throws Exception {
