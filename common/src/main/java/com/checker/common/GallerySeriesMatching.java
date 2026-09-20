@@ -16,12 +16,17 @@ import java.util.regex.Pattern;
  */
 public final class GallerySeriesMatching {
     private static final Pattern LEADING_EVENT_OR_CREDIT = Pattern.compile(
-            "^(?:\\s*[\\[【(（][^\\]】)）]{1,80}[\\]】)）]\\s*)+");
+            "^(?:\\s*(?:\\[[^\\]]{1,120}]|【[^】]{1,120}】|\\([^)]{1,120}\\)|（[^）]{1,120}）)\\s*)+");
     private static final Pattern TRANSLATION_BLOCK = Pattern.compile(
             "(?i)[\\[【(（][^\\]】)）]*(?:chinese|english|中文|中國翻譯|中国翻译|中国翻訳|漢化|汉化|翻译|翻譯|無修正|无修正|digital|カラー)[^\\]】)）]*[\\]】)）]");
     private static final Pattern VOLUME_MARKER = Pattern.compile(
             "(?iu)(?:\\b(?:vol(?:ume)?|ch(?:apter)?|part|episode|ep|book|season)\\.?\\s*[-_:]?\\s*(?:\\d+(?:\\.\\d+)?|[ivxlcdm]+)\\b|第\\s*[0-9０-９一二三四五六七八九十百]+\\s*[巻卷話话章节集部]|(?:その|其)\\s*[0-9０-９一二三四五六七八九十百]+)");
     private static final Pattern TRAILING_NUMBER = Pattern.compile("(?iu)(?:[-_:# ]+(?:\\d+(?:\\.\\d+)?|[ivxlcdm]+))$");
+    private static final Pattern ATTACHED_SERIES_NUMBER = Pattern.compile(
+            "(?iu)([\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsLatin}])\\s*[0-9０-９]+(?=\\s*[-_:：])");
+    private static final Pattern TITLE_DELIMITER = Pattern.compile("\\s*[-_:：]\\s*");
+    private static final Pattern LEADING_CREDIT = Pattern.compile("^\\s*\\[([^\\]]{2,120})]\\s*");
+    private static final Pattern EVENT_CREDIT = Pattern.compile("(?iu)^(?:c|comiket|コミケ)\\s*\\d+");
     private static final Pattern NON_WORD = Pattern.compile("[^\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsLatin}\\p{IsDigit}]+");
     private static final Set<String> SUPPORT_NAMESPACES = Set.of("artist", "group", "parody", "character");
 
@@ -30,9 +35,10 @@ public final class GallerySeriesMatching {
 
     public static SeriesMatch score(EhGalleriesEntity left, String leftCoverHash,
                                     EhGalleriesEntity right, String rightCoverHash) {
-        String leftBase = baseTitle(effectiveTitle(left));
-        String rightBase = baseTitle(effectiveTitle(right));
-        int title = (int) Math.round(similarity(leftBase, rightBase) * 100D);
+        TitleMatch titleMatch = titleMatch(left, right);
+        String leftBase = titleMatch.leftBase();
+        String rightBase = titleMatch.rightBase();
+        int title = titleMatch.similarity();
         Integer cover = coverSimilarity(leftCoverHash, rightCoverHash);
         int metadata = tagSimilarity(left, right);
 
@@ -56,8 +62,63 @@ public final class GallerySeriesMatching {
         value = TRANSLATION_BLOCK.matcher(value).replaceAll(" ");
         value = LEADING_EVENT_OR_CREDIT.matcher(value).replaceFirst(" ");
         value = VOLUME_MARKER.matcher(value).replaceAll(" ");
+        value = ATTACHED_SERIES_NUMBER.matcher(value).replaceAll("$1");
         value = TRAILING_NUMBER.matcher(value).replaceFirst(" ");
         return NON_WORD.matcher(value).replaceAll(" ").trim().replaceAll("\\s+", " ");
+    }
+
+    private static TitleMatch titleMatch(EhGalleriesEntity left, EhGalleriesEntity right) {
+        List<String> leftTitles = titleCandidates(left);
+        List<String> rightTitles = titleCandidates(right);
+        double best = 0D;
+        String bestLeft = "";
+        String bestRight = "";
+        for (String leftTitle : leftTitles) {
+            for (String rightTitle : rightTitles) {
+                double candidate = similarity(leftTitle, rightTitle);
+                if (candidate > best) {
+                    best = candidate;
+                    bestLeft = leftTitle;
+                    bestRight = rightTitle;
+                }
+            }
+        }
+        return new TitleMatch((int) Math.round(best * 100D), bestLeft, bestRight);
+    }
+
+    /** 同时保留完整标题与 EH 常见“主标题 - 副标题”中的系列主干。 */
+    private static List<String> titleCandidates(EhGalleriesEntity gallery) {
+        if (gallery == null) return List.of();
+        Set<String> result = new HashSet<>();
+        addTitleCandidates(result, gallery.getOriginalTitle());
+        addTitleCandidates(result, gallery.getTitle());
+        return result.stream().toList();
+    }
+
+    private static void addTitleCandidates(Set<String> result, String raw) {
+        if (raw == null || raw.isBlank()) return;
+        String normalized = Normalizer.normalize(raw, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim();
+        normalized = TRANSLATION_BLOCK.matcher(normalized).replaceAll(" ");
+        normalized = LEADING_EVENT_OR_CREDIT.matcher(normalized).replaceFirst(" ").trim();
+        normalized = VOLUME_MARKER.matcher(normalized).replaceAll(" ");
+        normalized = ATTACHED_SERIES_NUMBER.matcher(normalized).replaceAll("$1");
+        String[] segments = TITLE_DELIMITER.split(normalized, 2);
+        String full = baseTitle(raw);
+        if (!full.isBlank()) result.add(full);
+        if (segments.length > 1) {
+            String stem = NON_WORD.matcher(segments[0]).replaceAll(" ").trim().replaceAll("\\s+", " ");
+            if (isMeaningfulStem(stem)) result.add(stem);
+        }
+    }
+
+    private static boolean isMeaningfulStem(String value) {
+        if (value == null || value.isBlank()) return false;
+        int codePoints = value.codePointCount(0, value.length());
+        boolean containsCjk = value.codePoints().anyMatch(codePoint ->
+                Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HAN
+                        || Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.HIRAGANA
+                        || Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.KATAKANA);
+        return containsCjk ? codePoints >= 2 : codePoints >= 4;
     }
 
     static double similarity(String left, String right) {
@@ -103,25 +164,35 @@ public final class GallerySeriesMatching {
     }
 
     private static Set<String> supportingTags(EhGalleriesEntity gallery) {
-        if (gallery == null || gallery.getTags() == null) return Set.of();
+        if (gallery == null) return Set.of();
         Set<String> result = new HashSet<>();
-        for (String tag : gallery.getTags()) {
-            if (tag == null) continue;
-            String normalized = Normalizer.normalize(tag, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim();
-            int separator = normalized.indexOf(':');
-            if (separator > 0 && SUPPORT_NAMESPACES.contains(normalized.substring(0, separator))) result.add(normalized);
+        if (gallery.getTags() != null) {
+            for (String tag : gallery.getTags()) {
+                if (tag == null) continue;
+                String normalized = Normalizer.normalize(tag, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim();
+                int separator = normalized.indexOf(':');
+                if (separator > 0 && SUPPORT_NAMESPACES.contains(normalized.substring(0, separator))) result.add(normalized);
+            }
         }
+        addLeadingCredit(result, gallery.getOriginalTitle());
+        addLeadingCredit(result, gallery.getTitle());
         return result;
     }
 
-    private static String effectiveTitle(EhGalleriesEntity gallery) {
-        if (gallery == null) return "";
-        return gallery.getOriginalTitle() == null || gallery.getOriginalTitle().isBlank()
-                ? gallery.getTitle() : gallery.getOriginalTitle();
+    private static void addLeadingCredit(Set<String> result, String raw) {
+        if (raw == null) return;
+        java.util.regex.Matcher matcher = LEADING_CREDIT.matcher(
+                Normalizer.normalize(raw, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT));
+        if (!matcher.find()) return;
+        String credit = NON_WORD.matcher(matcher.group(1)).replaceAll(" ").trim().replaceAll("\\s+", " ");
+        if (!credit.isBlank() && !EVENT_CREDIT.matcher(credit).find()) result.add("credit:" + credit);
     }
 
     public record SeriesMatch(int score, int titleSimilarity, Integer coverSimilarity,
                               int metadataSimilarity, String reason,
                               String leftBaseTitle, String rightBaseTitle) {
+    }
+
+    private record TitleMatch(int similarity, String leftBase, String rightBase) {
     }
 }

@@ -92,7 +92,12 @@ const progress = computed(() => {
   if (!job.value?.total) return jobRunning.value ? 0 : 100
   return Math.min(100, Math.round((job.value.processed || 0) * 100 / job.value.total))
 })
-const progressStatus = computed(() => job.value?.status === 'FAILED' ? 'exception' : job.value?.status === 'COMPLETED' ? 'success' : undefined)
+const progressStatus = computed(() => {
+  if (job.value?.status === 'FAILED') return 'exception'
+  if (job.value?.status === 'COMPLETED') return 'success'
+  if (job.value?.status === 'COMPLETED_WITH_ERRORS') return 'warning'
+  return undefined
+})
 const jobTag = computed(() => ({
   QUEUED: { label: '等待执行', type: 'info' },
   RUNNING: { label: '执行中', type: 'warning' },

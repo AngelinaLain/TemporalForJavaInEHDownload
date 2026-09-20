@@ -16,6 +16,7 @@ import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.EnumSet;
 
@@ -29,68 +30,186 @@ public class SynologyArchiveReader {
     }
 
     public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
-        if (filename == null || filename.isBlank()) throw new IllegalArgumentException("画廊文件名为空");
-        EhNetworkConfig.Smb smb = config.getSmb();
-        if (smb != null && StrUtil.isNotBlank(smb.getHost()) && StrUtil.isNotBlank(smb.getShare())) {
-            try {
-                return readViaSmb(filename, smb, function);
-            } catch (Exception ignored) {
-                // Keep parity with upload: SFTP is the fallback when SMB is unavailable.
-            }
+        try (ArchiveSession session = openSession()) {
+            return session.read(filename, function);
         }
-        return readViaSftp(filename, function);
     }
 
-    private <T> T readViaSmb(String filename, EhNetworkConfig.Smb smb,
-                             ArchiveInputFunction<T> function) throws Exception {
-        try (SMBClient client = new SMBClient(); Connection connection = client.connect(smb.getHost())) {
+    /**
+     * Opens a task-scoped reader. Connections are reused across sequential archive reads and
+     * transparently recreated after transport failures, avoiding thousands of SSH handshakes.
+     */
+    public ArchiveSession openSession() {
+        return new ReusableArchiveSession();
+    }
+
+    private final class ReusableArchiveSession implements ArchiveSession {
+        private SMBClient smbClient;
+        private Connection smbConnection;
+        private Session smbSession;
+        private DiskShare smbShare;
+        private com.jcraft.jsch.Session sshSession;
+        private ChannelSftp sftp;
+
+        @Override
+        public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
+            if (filename == null || filename.isBlank()) throw new IllegalArgumentException("画廊文件名为空");
+            if (function == null) throw new IllegalArgumentException("归档处理函数不能为空");
+
+            Exception smbFailure = null;
+            EhNetworkConfig.Smb smb = config.getSmb();
+            if (smbConfigured(smb)) {
+                for (int attempt = 0; attempt < 2; attempt++) {
+                    try {
+                        return readViaSmb(filename, smb, function);
+                    } catch (ArchiveProcessingException processing) {
+                        throw processing.original;
+                    } catch (Exception failure) {
+                        smbFailure = failure;
+                        closeSmb();
+                        if (attempt == 0) backoff(attempt);
+                    }
+                }
+            }
+
+            Exception sftpFailure = null;
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    return readViaSftp(filename, function);
+                } catch (ArchiveProcessingException processing) {
+                    throw processing.original;
+                } catch (Exception failure) {
+                    sftpFailure = failure;
+                    closeSftp();
+                    if (attempt < 2) backoff(attempt);
+                }
+            }
+
+            StringBuilder message = new StringBuilder("无法读取群晖归档 ").append(filename);
+            if (smbFailure != null) message.append("；SMB: ").append(rootMessage(smbFailure));
+            if (sftpFailure != null) message.append("；SFTP: ").append(rootMessage(sftpFailure));
+            Exception cause = sftpFailure != null ? sftpFailure : smbFailure;
+            throw new IOException(message.toString(), cause);
+        }
+
+        private <T> T readViaSmb(String filename, EhNetworkConfig.Smb smb,
+                                 ArchiveInputFunction<T> function) throws Exception {
+            ensureSmbConnected(smb);
+            String directory = normalizeSmbPath(smb.getPath());
+            String remotePath = directory.isEmpty() ? filename : directory + "\\" + filename;
+            try (com.hierynomus.smbj.share.File file = smbShare.openFile(remotePath,
+                    EnumSet.of(AccessMask.FILE_READ_DATA, AccessMask.FILE_READ_ATTRIBUTES),
+                    EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL), SMB2ShareAccess.ALL,
+                    SMB2CreateDisposition.FILE_OPEN,
+                    EnumSet.of(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE));
+                 InputStream input = file.getInputStream()) {
+                return applyArchiveFunction(input, function);
+            }
+        }
+
+        private void ensureSmbConnected(EhNetworkConfig.Smb smb) throws Exception {
+            if (smbShare != null && smbShare.isConnected()) return;
+            closeSmb();
+            smbClient = new SMBClient();
+            smbConnection = smbClient.connect(smb.getHost());
             AuthenticationContext auth = new AuthenticationContext(
                     StrUtil.blankToDefault(smb.getUsername(), "guest"),
                     smb.getPassword() == null ? new char[0] : smb.getPassword().toCharArray(),
                     StrUtil.isBlank(smb.getDomain()) ? null : smb.getDomain());
-            Session session = connection.authenticate(auth);
-            try (DiskShare share = (DiskShare) session.connectShare(smb.getShare())) {
-                String directory = normalizeSmbPath(smb.getPath());
-                String remotePath = directory.isEmpty() ? filename : directory + "\\" + filename;
-                try (com.hierynomus.smbj.share.File file = share.openFile(remotePath,
-                        EnumSet.of(AccessMask.FILE_READ_DATA, AccessMask.FILE_READ_ATTRIBUTES),
-                        EnumSet.of(FileAttributes.FILE_ATTRIBUTE_NORMAL), SMB2ShareAccess.ALL,
-                        SMB2CreateDisposition.FILE_OPEN,
-                        EnumSet.of(SMB2CreateOptions.FILE_NON_DIRECTORY_FILE));
-                     InputStream input = file.getInputStream()) {
-                    return function.apply(input);
-                }
+            smbSession = smbConnection.authenticate(auth);
+            smbShare = (DiskShare) smbSession.connectShare(smb.getShare());
+        }
+
+        private <T> T readViaSftp(String filename, ArchiveInputFunction<T> function) throws Exception {
+            ensureSftpConnected();
+            try (InputStream input = sftp.get(filename)) {
+                return applyArchiveFunction(input, function);
             }
         }
-    }
 
-    private <T> T readViaSftp(String filename, ArchiveInputFunction<T> function) throws Exception {
-        EhNetworkConfig.Synology synology = config.getSynology();
-        String host = parseHost(synology.getUrl());
-        if (StrUtil.isBlank(host) || StrUtil.isBlank(synology.getUsername())) {
-            throw new IllegalStateException("未配置可读取历史归档的 SMB 或 SFTP");
-        }
-        com.jcraft.jsch.Session session = new JSch().getSession(synology.getUsername(), host, 22);
-        session.setPassword(StrUtil.blankToDefault(synology.getPassword(), ""));
-        session.setConfig("StrictHostKeyChecking", "no");
-        session.connect(30_000);
-        try {
-            ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
-            sftp.connect(30_000);
+        private <T> T applyArchiveFunction(InputStream input, ArchiveInputFunction<T> function)
+                throws ArchiveProcessingException {
             try {
-                sftp.cd("/volume1" + StrUtil.blankToDefault(synology.getDestination(), ""));
-                try (InputStream input = sftp.get(filename)) {
-                    return function.apply(input);
-                }
-            } finally {
-                sftp.disconnect();
+                return function.apply(input);
+            } catch (Exception processingFailure) {
+                throw new ArchiveProcessingException(processingFailure);
             }
-        } finally {
-            session.disconnect();
+        }
+
+        private void ensureSftpConnected() throws Exception {
+            if (sftp != null && sftp.isConnected() && sshSession != null && sshSession.isConnected()) return;
+            closeSftp();
+            EhNetworkConfig.Synology synology = config.getSynology();
+            String host = synology == null ? null : parseHost(synology.getUrl());
+            if (synology == null || StrUtil.isBlank(host) || StrUtil.isBlank(synology.getUsername())) {
+                throw new IllegalStateException("未配置可读取历史归档的 SMB 或 SFTP");
+            }
+            sshSession = new JSch().getSession(synology.getUsername(), host, 22);
+            sshSession.setPassword(StrUtil.blankToDefault(synology.getPassword(), ""));
+            sshSession.setConfig("StrictHostKeyChecking", "no");
+            sshSession.setServerAliveInterval(15_000);
+            sshSession.setServerAliveCountMax(3);
+            sshSession.connect(30_000);
+            sftp = (ChannelSftp) sshSession.openChannel("sftp");
+            sftp.connect(30_000);
+            sftp.cd("/volume1" + StrUtil.blankToDefault(synology.getDestination(), ""));
+        }
+
+        private void backoff(int attempt) throws IOException {
+            try {
+                Thread.sleep(500L * (1L << attempt));
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException("等待群晖重连时任务被中断", interrupted);
+            }
+        }
+
+        @Override
+        public void close() {
+            closeSftp();
+            closeSmb();
+        }
+
+        private void closeSftp() {
+            if (sftp != null) sftp.disconnect();
+            if (sshSession != null) sshSession.disconnect();
+            sftp = null;
+            sshSession = null;
+        }
+
+        private void closeSmb() {
+            closeQuietly(smbShare);
+            closeQuietly(smbSession);
+            closeQuietly(smbConnection);
+            closeQuietly(smbClient);
+            smbShare = null;
+            smbSession = null;
+            smbConnection = null;
+            smbClient = null;
         }
     }
 
-    private String normalizeSmbPath(String path) {
+    private boolean smbConfigured(EhNetworkConfig.Smb smb) {
+        return smb != null && StrUtil.isNotBlank(smb.getHost()) && StrUtil.isNotBlank(smb.getShare());
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        if (closeable == null) return;
+        try {
+            closeable.close();
+        } catch (Exception ignored) {
+            // The original read/connect error is more useful than a cleanup failure.
+        }
+    }
+
+    private static String rootMessage(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) current = current.getCause();
+        String message = current.getMessage();
+        return current.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+    }
+
+    private static String normalizeSmbPath(String path) {
         if (path == null || path.isBlank()) return "";
         String normalized = path.replace('/', '\\').replaceAll("\\\\+", "\\\\");
         while (normalized.startsWith("\\")) normalized = normalized.substring(1);
@@ -98,7 +217,7 @@ public class SynologyArchiveReader {
         return normalized;
     }
 
-    private String parseHost(String url) {
+    private static String parseHost(String url) {
         if (StrUtil.isBlank(url)) return null;
         String host = url;
         int scheme = host.indexOf("://");
@@ -113,5 +232,21 @@ public class SynologyArchiveReader {
     @FunctionalInterface
     public interface ArchiveInputFunction<T> {
         T apply(InputStream input) throws Exception;
+    }
+
+    public interface ArchiveSession extends AutoCloseable {
+        <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception;
+
+        @Override
+        void close();
+    }
+
+    private static final class ArchiveProcessingException extends Exception {
+        private final Exception original;
+
+        private ArchiveProcessingException(Exception original) {
+            super(original);
+            this.original = original;
+        }
     }
 }

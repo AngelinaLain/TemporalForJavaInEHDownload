@@ -21,6 +21,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.times;
 
 class VisualHistoryRefreshServiceTest {
     private final EhGalleriesMapper galleriesMapper = mock(EhGalleriesMapper.class);
@@ -29,6 +30,8 @@ class VisualHistoryRefreshServiceTest {
     private final VisualFingerprintService fingerprintService = mock(VisualFingerprintService.class);
     private final ArchiveVisualFingerprintExtractor extractor = mock(ArchiveVisualFingerprintExtractor.class);
     private final SynologyArchiveReader archiveReader = mock(SynologyArchiveReader.class);
+    private final SynologyArchiveReader.ArchiveSession archiveSession =
+            mock(SynologyArchiveReader.ArchiveSession.class);
     private final DedupeReviewService reviewService = mock(DedupeReviewService.class);
     private final AtomicReference<VisualRefreshJobEntity> storedJob = new AtomicReference<>();
     private VisualHistoryRefreshService service;
@@ -40,6 +43,7 @@ class VisualHistoryRefreshServiceTest {
             return 1;
         }).when(jobMapper).insert(any());
         when(jobMapper.selectById(anyString())).thenAnswer(invocation -> storedJob.get());
+        when(archiveReader.openSession()).thenReturn(archiveSession);
         service = new VisualHistoryRefreshService(galleriesMapper, jobMapper, failureMapper,
                 fingerprintService, extractor, archiveReader, reviewService, Runnable::run);
     }
@@ -49,7 +53,7 @@ class VisualHistoryRefreshServiceTest {
         when(galleriesMapper.selectList(any())).thenReturn(List.of(
                 gallery(101L, "first.cbz"), gallery(202L, "second.cbz")));
         when(fingerprintService.hasArchiveFingerprints(any())).thenReturn(false);
-        when(archiveReader.read(anyString(), any())).thenThrow(new IOException("NAS unavailable"));
+        when(archiveSession.read(anyString(), any())).thenThrow(new IOException("NAS unavailable"));
 
         VisualRefreshJobEntity result = service.start(false);
 
@@ -66,14 +70,14 @@ class VisualHistoryRefreshServiceTest {
                 gallery(1L, "existing.cbz"), gallery(2L, "missing.cbz")));
         when(fingerprintService.hasArchiveFingerprints(1L)).thenReturn(true);
         when(fingerprintService.hasArchiveFingerprints(2L)).thenReturn(false);
-        when(archiveReader.read(anyString(), any())).thenReturn(1);
+        when(archiveSession.read(anyString(), any())).thenReturn(1);
 
         VisualRefreshJobEntity result = service.start(false);
 
         assertEquals(1, result.getTotal());
         assertEquals(1, result.getSucceeded());
-        verify(archiveReader, never()).read(org.mockito.ArgumentMatchers.eq("existing.cbz"), any());
-        verify(archiveReader).read(org.mockito.ArgumentMatchers.eq("missing.cbz"), any());
+        verify(archiveSession, never()).read(org.mockito.ArgumentMatchers.eq("existing.cbz"), any());
+        verify(archiveSession).read(org.mockito.ArgumentMatchers.eq("missing.cbz"), any());
     }
 
     @Test
@@ -81,15 +85,44 @@ class VisualHistoryRefreshServiceTest {
         when(galleriesMapper.selectList(any())).thenReturn(List.of(
                 gallery(10L, "chosen.cbz"), gallery(20L, "other.cbz")));
         when(fingerprintService.hasArchiveFingerprints(10L)).thenReturn(true);
-        when(archiveReader.read(anyString(), any())).thenReturn(1);
+        when(archiveSession.read(anyString(), any())).thenReturn(1);
 
         VisualRefreshJobEntity result = service.retry(List.of(10L, 10L));
 
         assertEquals(1, result.getTotal());
         assertEquals(1, result.getSucceeded());
-        verify(archiveReader).read(org.mockito.ArgumentMatchers.eq("chosen.cbz"), any());
-        verify(archiveReader, never()).read(org.mockito.ArgumentMatchers.eq("other.cbz"), any());
+        verify(archiveSession).read(org.mockito.ArgumentMatchers.eq("chosen.cbz"), any());
+        verify(archiveSession, never()).read(org.mockito.ArgumentMatchers.eq("other.cbz"), any());
         verify(fingerprintService, never()).hasArchiveFingerprints(any());
+    }
+
+    @Test
+    void reusesOneArchiveSessionForTheWholeRefreshJob() throws Exception {
+        when(galleriesMapper.selectList(any())).thenReturn(List.of(
+                gallery(1L, "first.cbz"), gallery(2L, "second.cbz")));
+        when(fingerprintService.hasArchiveFingerprints(any())).thenReturn(false);
+        when(archiveSession.read(anyString(), any())).thenReturn(1);
+
+        VisualRefreshJobEntity result = service.start(false);
+
+        assertEquals(2, result.getSucceeded());
+        verify(archiveReader, times(1)).openSession();
+        verify(archiveSession, times(2)).read(anyString(), any());
+        verify(archiveSession).close();
+    }
+
+    @Test
+    void marksInterruptedRunningJobAsFailedWhenNoLocalTaskExists() {
+        VisualRefreshJobEntity stale = new VisualRefreshJobEntity();
+        stale.setId("stale");
+        stale.setStatus("RUNNING");
+        when(jobMapper.selectOne(any())).thenReturn(stale);
+
+        VisualRefreshJobEntity result = service.latest();
+
+        assertEquals("FAILED", result.getStatus());
+        assertEquals("服务已重启或任务已中断，请重新执行失败项", result.getLastError());
+        verify(jobMapper).updateById(stale);
     }
 
     private EhGalleriesEntity gallery(long gid, String filename) {

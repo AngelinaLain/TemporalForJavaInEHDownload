@@ -28,6 +28,9 @@ import java.util.stream.Collectors;
 @Service
 public class GalleryCollectionService {
     private static final int SUGGESTION_SCAN_BATCH_SIZE = 500;
+    /**
+     * 评分的阈值
+     */
     private static final int SUGGESTION_SCORE_THRESHOLD = 48;
     private static final Comparator<GalleryCollectionCandidate> BEST_SUGGESTION_FIRST =
             Comparator.comparing(GalleryCollectionCandidate::getScore).reversed()
@@ -225,8 +228,15 @@ public class GalleryCollectionService {
         query.in("gid", gids).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION)
                 .orderByAsc("gid", "page_index");
         Map<Long, String> result = new LinkedHashMap<>();
+        Set<Long> explicitCovers = new java.util.HashSet<>();
         for (GalleryPageHashEntity hash : pageHashMapper.selectList(query)) {
-            result.putIfAbsent(hash.getGid(), hash.getPerceptualHash());
+            boolean explicitCover = ArchiveVisualFingerprintExtractor.isLikelyCover(hash.getPageName());
+            if (explicitCover || !result.containsKey(hash.getGid())) {
+                if (explicitCover || !explicitCovers.contains(hash.getGid())) {
+                    result.put(hash.getGid(), hash.getPerceptualHash());
+                    if (explicitCover) explicitCovers.add(hash.getGid());
+                }
+            }
         }
         return result;
     }
