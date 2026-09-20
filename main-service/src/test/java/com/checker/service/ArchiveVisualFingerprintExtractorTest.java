@@ -42,6 +42,25 @@ class ArchiveVisualFingerprintExtractorTest {
         assertTrue(fingerprints.stream().anyMatch(item -> "cover.png".equals(item.getPageName())));
     }
 
+    @Test
+    void skipsOneBrokenSampleInsteadOfFailingTheWholeGallery() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output)) {
+            writePage(zip, "001.png", 1);
+            zip.putNextEntry(new ZipEntry("002.png"));
+            zip.write("not an image".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.closeEntry();
+            writePage(zip, "003.png", 3);
+        }
+
+        List<GalleryPageFingerprint> fingerprints = extractor.extract(
+                new ByteArrayInputStream(output.toByteArray()), 101L, 3);
+
+        assertEquals(2, fingerprints.size());
+        assertEquals(List.of("001.png", "003.png"),
+                fingerprints.stream().map(GalleryPageFingerprint::getPageName).toList());
+    }
+
     private byte[] archiveWithPages(int count) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try (ZipOutputStream zip = new ZipOutputStream(output)) {
