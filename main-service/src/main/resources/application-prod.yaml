@@ -39,6 +39,9 @@ security:
     password-hash: ${ADMIN_PASSWORD_HASH}
 
 eh-config:
+  # 视觉指纹的 CPU 并行度；0 表示自动使用最多 8 个处理器核心
+  visual-fingerprint:
+    parallelism: ${VISUAL_FINGERPRINT_PARALLELISM:0}
   # Cookie 信息
   cookies:
     member-id: ${EH_MEMBER_ID}

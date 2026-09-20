@@ -6,10 +6,12 @@ import org.springframework.cache.annotation.EnableCaching;
 import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 @EnableCaching
@@ -36,6 +38,30 @@ public class CacheConfig {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(20);
         executor.setThreadNamePrefix("gallery-maintenance-");
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * CPU-bound pool used to decode sampled pages and calculate perceptual hashes in parallel.
+     * It is intentionally separate from maintenance jobs so a large refresh cannot starve
+     * notifications or other background work. Zero selects a conservative CPU-based default.
+     */
+    @Bean(name = "visualFingerprintExecutor")
+    public TaskExecutor visualFingerprintExecutor(
+            @Value("${eh-config.visual-fingerprint.parallelism:0}") int configuredParallelism) {
+        int detectedCores = Runtime.getRuntime().availableProcessors();
+        int parallelism = configuredParallelism > 0
+                ? configuredParallelism
+                : Math.max(1, Math.min(detectedCores, 8));
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(parallelism);
+        executor.setMaxPoolSize(parallelism);
+        executor.setQueueCapacity(Math.max(32, parallelism * 4));
+        executor.setThreadNamePrefix("visual-fingerprint-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();

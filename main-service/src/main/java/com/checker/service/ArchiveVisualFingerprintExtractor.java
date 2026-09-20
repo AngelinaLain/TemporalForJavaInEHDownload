@@ -2,9 +2,11 @@ package com.checker.service;
 
 import com.checker.common.PerceptualHash;
 import com.checker.dto.GalleryPageFingerprint;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Component;
 
-import java.io.FilterInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -12,16 +14,24 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 @Component
 public class ArchiveVisualFingerprintExtractor {
     private static final int SAMPLE_COUNT = 16;
+    private final TaskExecutor fingerprintExecutor;
+
+    public ArchiveVisualFingerprintExtractor(
+            @Qualifier("visualFingerprintExecutor") TaskExecutor fingerprintExecutor) {
+        this.fingerprintExecutor = fingerprintExecutor;
+    }
 
     public List<GalleryPageFingerprint> extract(InputStream archive, Long gid, Integer expectedPages) throws IOException {
         Set<Integer> selected = sampleIndexes(expectedPages, SAMPLE_COUNT);
-        List<GalleryPageFingerprint> result = new ArrayList<>();
+        List<CompletableFuture<GalleryPageFingerprint>> pending = new ArrayList<>();
         int imageIndex = 0;
         try (ZipInputStream zip = new ZipInputStream(archive)) {
             ZipEntry entry;
@@ -33,12 +43,32 @@ public class ArchiveVisualFingerprintExtractor {
                 boolean shouldHash = isLikelyCover(entry.getName())
                         || (selected.isEmpty() ? imageIndex < SAMPLE_COUNT : selected.contains(imageIndex));
                 if (shouldHash) {
-                    GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
-                            new NonClosingInputStream(zip), gid, imageIndex, entry.getName(), "ARCHIVE");
-                    if (fingerprint != null) result.add(fingerprint);
+                    byte[] image = zip.readAllBytes();
+                    int pageIndex = imageIndex;
+                    String pageName = entry.getName();
+                    pending.add(CompletableFuture.supplyAsync(() -> {
+                        try {
+                            return PerceptualHash.fingerprint(new ByteArrayInputStream(image),
+                                    gid, pageIndex, pageName, "ARCHIVE");
+                        } catch (IOException failure) {
+                            throw new CompletionException(failure);
+                        }
+                    }, fingerprintExecutor));
                 }
                 zip.closeEntry();
                 imageIndex++;
+            }
+        }
+        List<GalleryPageFingerprint> result = new ArrayList<>(pending.size());
+        for (CompletableFuture<GalleryPageFingerprint> future : pending) {
+            try {
+                GalleryPageFingerprint fingerprint = future.join();
+                if (fingerprint != null) result.add(fingerprint);
+            } catch (CompletionException failure) {
+                pending.forEach(item -> item.cancel(true));
+                Throwable cause = failure.getCause();
+                if (cause instanceof IOException ioFailure) throw ioFailure;
+                throw new IOException("并行计算视觉指纹失败", cause);
             }
         }
         return result;
@@ -76,14 +106,4 @@ public class ArchiveVisualFingerprintExtractor {
                 || basename.startsWith("cover_") || basename.startsWith("cover-");
     }
 
-    private static final class NonClosingInputStream extends FilterInputStream {
-        private NonClosingInputStream(InputStream input) {
-            super(input);
-        }
-
-        @Override
-        public void close() {
-            // ImageIO may close its wrapper; the surrounding ZIP stream must stay open.
-        }
-    }
 }
