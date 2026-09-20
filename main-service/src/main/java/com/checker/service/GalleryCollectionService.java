@@ -16,18 +16,26 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Service
 public class GalleryCollectionService {
+    private static final int SUGGESTION_SCAN_BATCH_SIZE = 500;
+    private static final int SUGGESTION_SCORE_THRESHOLD = 48;
+    private static final Comparator<GalleryCollectionCandidate> BEST_SUGGESTION_FIRST =
+            Comparator.comparing(GalleryCollectionCandidate::getScore).reversed()
+                    .thenComparing(GalleryCollectionCandidate::getGid, Comparator.reverseOrder());
+    private static final Comparator<GalleryCollectionCandidate> WORST_SUGGESTION_FIRST =
+            Comparator.comparing(GalleryCollectionCandidate::getScore)
+                    .thenComparing(GalleryCollectionCandidate::getGid);
+
     private final GalleryCollectionMapper collectionMapper;
     private final EhGalleriesService galleriesService;
     private final GalleryPageHashMapper pageHashMapper;
@@ -158,37 +166,57 @@ public class GalleryCollectionService {
         if (current.isEmpty()) return List.of();
         List<Long> memberGids = current.stream().map(GalleryCollectionCandidate::getGid).toList();
         List<EhGalleriesEntity> members = galleriesService.listByIds(memberGids);
+        Map<Long, String> memberCoverHashes = firstPageHashes(memberGids);
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        PriorityQueue<GalleryCollectionCandidate> bestSuggestions =
+                new PriorityQueue<>(safeLimit + 1, WORST_SUGGESTION_FIRST);
 
-        QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
-        query.isNull("duplicate_of_gid")
-                .notInSql("gid", "SELECT gid FROM eh_gallery_collection_items")
-                .orderByDesc("crawled_at")
-                .last("LIMIT 2000");
-        List<EhGalleriesEntity> candidates = galleriesService.list(query);
-        List<Long> allGids = new ArrayList<>(memberGids);
-        allGids.addAll(candidates.stream().map(EhGalleriesEntity::getGid).toList());
-        Map<Long, String> coverHashes = firstPageHashes(allGids);
+        // 使用 GID 游标分批扫描全部候选，避免 OFFSET 越往后越慢，也不再漏掉第 2001 条之后的画廊。
+        Long lastGid = null;
+        while (true) {
+            QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
+            query.isNull("duplicate_of_gid")
+                    .notInSql("gid", "SELECT gid FROM eh_gallery_collection_items");
+            if (lastGid != null) query.gt("gid", lastGid);
+            query.orderByAsc("gid").last("LIMIT " + SUGGESTION_SCAN_BATCH_SIZE);
 
-        List<GalleryCollectionCandidate> scored = new ArrayList<>();
-        for (EhGalleriesEntity candidate : candidates) {
-            GallerySeriesMatching.SeriesMatch best = null;
-            for (EhGalleriesEntity member : members) {
-                GallerySeriesMatching.SeriesMatch match = GallerySeriesMatching.score(
-                        member, coverHashes.get(member.getGid()), candidate, coverHashes.get(candidate.getGid()));
-                if (best == null || match.score() > best.score()) best = match;
+            List<EhGalleriesEntity> candidates = galleriesService.list(query);
+            if (candidates.isEmpty()) break;
+            Map<Long, String> candidateCoverHashes = firstPageHashes(
+                    candidates.stream().map(EhGalleriesEntity::getGid).toList());
+
+            for (EhGalleriesEntity candidate : candidates) {
+                GalleryCollectionCandidate scored = scoreCandidate(
+                        candidate, members, memberCoverHashes, candidateCoverHashes.get(candidate.getGid()));
+                if (scored == null) continue;
+                bestSuggestions.offer(scored);
+                if (bestSuggestions.size() > safeLimit) bestSuggestions.poll();
             }
-            if (best != null && best.score() >= 48) {
-                scored.add(GalleryCollectionCandidate.builder()
-                        .gid(candidate.getGid()).title(candidate.getTitle()).originalTitle(candidate.getOriginalTitle())
-                        .galleryUrl(candidate.getGalleryUrl()).pageCount(candidate.getPageCount()).rating(candidate.getRating())
-                        .score(best.score()).titleSimilarity(best.titleSimilarity())
-                        .coverSimilarity(best.coverSimilarity()).metadataSimilarity(best.metadataSimilarity())
-                        .reason(best.reason()).build());
-            }
+
+            lastGid = candidates.get(candidates.size() - 1).getGid();
+            if (candidates.size() < SUGGESTION_SCAN_BATCH_SIZE) break;
         }
-        return scored.stream().sorted(Comparator.comparing(GalleryCollectionCandidate::getScore).reversed()
-                        .thenComparing(GalleryCollectionCandidate::getGid, Comparator.reverseOrder()))
-                .limit(Math.min(Math.max(limit, 1), 100)).toList();
+
+        return bestSuggestions.stream().sorted(BEST_SUGGESTION_FIRST).toList();
+    }
+
+    private GalleryCollectionCandidate scoreCandidate(EhGalleriesEntity candidate,
+                                                       List<EhGalleriesEntity> members,
+                                                       Map<Long, String> memberCoverHashes,
+                                                       String candidateCoverHash) {
+        GallerySeriesMatching.SeriesMatch best = null;
+        for (EhGalleriesEntity member : members) {
+            GallerySeriesMatching.SeriesMatch match = GallerySeriesMatching.score(
+                    member, memberCoverHashes.get(member.getGid()), candidate, candidateCoverHash);
+            if (best == null || match.score() > best.score()) best = match;
+        }
+        if (best == null || best.score() < SUGGESTION_SCORE_THRESHOLD) return null;
+        return GalleryCollectionCandidate.builder()
+                .gid(candidate.getGid()).title(candidate.getTitle()).originalTitle(candidate.getOriginalTitle())
+                .galleryUrl(candidate.getGalleryUrl()).pageCount(candidate.getPageCount()).rating(candidate.getRating())
+                .score(best.score()).titleSimilarity(best.titleSimilarity())
+                .coverSimilarity(best.coverSimilarity()).metadataSimilarity(best.metadataSimilarity())
+                .reason(best.reason()).build();
     }
 
     private Map<Long, String> firstPageHashes(List<Long> gids) {
