@@ -293,7 +293,7 @@ public class SynologyArchiveReader {
                 try {
                     ensureSmbConnected(smb);
                     String directory = joinSmb(normalizeSmbPath(smb.getPath()), safeDirectory);
-                    smbShare.rm(joinSmb(directory, filename));
+                    deleteViaSmb(directory, filename);
                     return;
                 } catch (Exception failure) {
                     smbFailure = failure;
@@ -302,9 +302,51 @@ public class SynologyArchiveReader {
             }
             try {
                 ensureSftpConnected();
-                sftp.rm(joinSftp(safeDirectory, filename));
+                deleteViaSftp(safeDirectory, filename);
             } catch (Exception sftpFailure) {
                 throw combinedFailure("无法删除群晖归档 " + filename, smbFailure, sftpFailure);
+            }
+        }
+
+        private void deleteViaSmb(String directory, String filename) throws Exception {
+            try {
+                smbShare.rm(joinSmb(directory, filename));
+            } catch (Exception exactFailure) {
+                Optional<String> resolved = selectGidArchive(filename, listSmbGidCandidates(directory, filename));
+                if (resolved.isPresent() && !resolved.get().equals(filename)) {
+                    smbShare.rm(joinSmb(directory, resolved.get()));
+                    return;
+                }
+                throw exactFailure;
+            }
+        }
+
+        private List<String> listSmbGidCandidates(String directory, String filename) {
+            List<String> names = new ArrayList<>();
+            String prefix = gidSearchPrefix(filename);
+            if (prefix == null) return names;
+            for (FileIdBothDirectoryInformation entry : smbShare.list(directory, prefix + "*")) {
+                names.add(entry.getFileName());
+            }
+            return names;
+        }
+
+        private void deleteViaSftp(String relativeDirectory, String filename) throws Exception {
+            try {
+                sftp.rm(joinSftp(relativeDirectory, filename));
+            } catch (Exception exactFailure) {
+                List<String> names = new ArrayList<>();
+                String prefix = gidSearchPrefix(filename);
+                if (prefix != null) {
+                    Vector<ChannelSftp.LsEntry> entries = sftp.ls(joinSftp(relativeDirectory, prefix + "*"));
+                    for (ChannelSftp.LsEntry entry : entries) names.add(entry.getFilename());
+                }
+                Optional<String> resolved = selectGidArchive(filename, names);
+                if (resolved.isPresent() && !resolved.get().equals(filename)) {
+                    sftp.rm(joinSftp(relativeDirectory, resolved.get()));
+                    return;
+                }
+                throw exactFailure;
             }
         }
 
