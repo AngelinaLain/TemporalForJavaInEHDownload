@@ -6,10 +6,24 @@
         <h2>画廊合集</h2>
         <p>用 EH 标题结构、封面感知指纹和作品标签发现同系列，再由人工确认归类。</p>
       </div>
-      <el-button type="primary" size="large" @click="openEditor()">
-        <el-icon><Plus /></el-icon> 新建合集
-      </el-button>
+      <div class="hero-actions">
+        <el-button size="large" :loading="syncStatus.running" @click="startKomgaSync">
+          {{ syncStatus.running ? '正在应用到 Komga' : '应用到 Komga 系列' }}
+        </el-button>
+        <el-button type="primary" size="large" @click="openEditor()">
+          <el-icon><Plus /></el-icon> 新建合集
+        </el-button>
+      </div>
     </section>
+
+    <el-card v-if="syncStatus.running || syncStatus.finishedAt || syncStatus.lastError" class="sync-card" shadow="never">
+      <div class="sync-line">
+        <strong>Komga 系列同步</strong>
+        <span>{{ syncStatus.processed || 0 }} / {{ syncStatus.total || 0 }}，成功 {{ syncStatus.succeeded || 0 }}，失败 {{ syncStatus.failed || 0 }}</span>
+      </div>
+      <el-progress v-if="syncStatus.running" :percentage="syncPercent" :stroke-width="8" />
+      <el-alert v-if="syncStatus.lastError" :title="syncStatus.lastError" type="warning" show-icon :closable="false" />
+    </el-card>
 
     <div class="workspace">
       <el-card class="collection-list" shadow="never">
@@ -99,9 +113,9 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onMounted, reactive, ref } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, Plus, Search } from '@element-plus/icons-vue'
-import { ElButton, ElEmpty, ElMessage, ElTag, ElTooltip } from 'element-plus'
+import { ElButton, ElEmpty, ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus'
 import api from '../api'
 
 const GalleryRows = defineComponent({
@@ -154,7 +168,28 @@ const editorVisible = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 const form = reactive({ name: '', description: '' })
+const syncStatus = reactive({ running: false, total: 0, processed: 0, succeeded: 0, failed: 0, currentGid: null, lastError: null, finishedAt: null })
+const syncPercent = computed(() => syncStatus.total ? Math.min(100, Math.round(syncStatus.processed * 100 / syncStatus.total)) : 0)
 const selected = computed(() => collections.value.find(item => item.id === selectedId.value))
+let syncTimer
+
+async function loadSyncStatus() {
+  const res = await api.get('/collections/komga-series-sync/status')
+  Object.assign(syncStatus, res.data || {})
+}
+
+async function startKomgaSync() {
+  try {
+    await ElMessageBox.confirm(
+      '将读取并重写需要迁移的 CBZ，把它们移动到合集子目录，然后触发 Komga 扫描。任务可重试，但运行期间请勿手工移动这些文件。',
+      '应用合集到 Komga 系列',
+      { type: 'warning', confirmButtonText: '开始同步', cancelButtonText: '取消' }
+    )
+  } catch { return }
+  await api.post('/collections/komga-series-sync')
+  ElMessage.success('合集正在后台应用到 Komga 系列')
+  await loadSyncStatus()
+}
 
 async function loadCollections(preferredId) {
   loadingCollections.value = true
@@ -257,9 +292,13 @@ function handleTabChange(name) {
 }
 
 onMounted(async () => {
-  await loadCollections()
+  await Promise.all([loadCollections(), loadSyncStatus()])
   if (selectedId.value) await loadMembers()
+  syncTimer = window.setInterval(async () => {
+    if (syncStatus.running) await loadSyncStatus()
+  }, 2500)
 })
+onBeforeUnmount(() => window.clearInterval(syncTimer))
 </script>
 
 <style scoped>
@@ -268,6 +307,9 @@ onMounted(async () => {
 .hero h2 { margin: 2px 0 6px; font-size: 28px; }
 .hero p { margin: 0; color: rgba(255,255,255,.75); }
 .hero .eyebrow { color: #75d6c4; font-size: 11px; font-weight: 700; letter-spacing: .18em; }
+.hero-actions { display: flex; gap: 10px; }
+.sync-card { margin: -4px 0 18px; border: 0; }
+.sync-line { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 10px; color: #52606d; }
 .workspace { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 18px; align-items: start; }
 .collection-list, .detail-panel { border: 0; border-radius: 12px; }
 .panel-title { display: flex; align-items: center; justify-content: space-between; font-weight: 700; }

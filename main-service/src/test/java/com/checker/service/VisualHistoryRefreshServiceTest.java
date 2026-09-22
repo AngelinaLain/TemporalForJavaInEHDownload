@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -53,7 +54,7 @@ class VisualHistoryRefreshServiceTest {
         when(galleriesMapper.selectList(any())).thenReturn(List.of(
                 gallery(101L, "first.cbz"), gallery(202L, "second.cbz")));
         when(fingerprintService.hasArchiveFingerprints(any())).thenReturn(false);
-        when(archiveSession.read(anyString(), any())).thenThrow(new IOException("NAS unavailable"));
+        when(archiveSession.read(nullable(String.class), anyString(), any())).thenThrow(new IOException("NAS unavailable"));
 
         VisualRefreshJobEntity result = service.start(false);
 
@@ -70,14 +71,14 @@ class VisualHistoryRefreshServiceTest {
                 gallery(1L, "existing.cbz"), gallery(2L, "missing.cbz")));
         when(fingerprintService.hasArchiveFingerprints(1L)).thenReturn(true);
         when(fingerprintService.hasArchiveFingerprints(2L)).thenReturn(false);
-        when(archiveSession.read(anyString(), any())).thenReturn(1);
+        when(archiveSession.read(nullable(String.class), anyString(), any())).thenReturn(1);
 
         VisualRefreshJobEntity result = service.start(false);
 
         assertEquals(1, result.getTotal());
         assertEquals(1, result.getSucceeded());
-        verify(archiveSession, never()).read(org.mockito.ArgumentMatchers.eq("existing.cbz"), any());
-        verify(archiveSession).read(org.mockito.ArgumentMatchers.eq("missing.cbz"), any());
+        verify(archiveSession, never()).read(nullable(String.class), org.mockito.ArgumentMatchers.eq("existing.cbz"), any());
+        verify(archiveSession).read(nullable(String.class), org.mockito.ArgumentMatchers.eq("missing.cbz"), any());
     }
 
     @Test
@@ -85,14 +86,14 @@ class VisualHistoryRefreshServiceTest {
         when(galleriesMapper.selectList(any())).thenReturn(List.of(
                 gallery(10L, "chosen.cbz"), gallery(20L, "other.cbz")));
         when(fingerprintService.hasArchiveFingerprints(10L)).thenReturn(true);
-        when(archiveSession.read(anyString(), any())).thenReturn(1);
+        when(archiveSession.read(nullable(String.class), anyString(), any())).thenReturn(1);
 
         VisualRefreshJobEntity result = service.retry(List.of(10L, 10L));
 
         assertEquals(1, result.getTotal());
         assertEquals(1, result.getSucceeded());
-        verify(archiveSession).read(org.mockito.ArgumentMatchers.eq("chosen.cbz"), any());
-        verify(archiveSession, never()).read(org.mockito.ArgumentMatchers.eq("other.cbz"), any());
+        verify(archiveSession).read(nullable(String.class), org.mockito.ArgumentMatchers.eq("chosen.cbz"), any());
+        verify(archiveSession, never()).read(nullable(String.class), org.mockito.ArgumentMatchers.eq("other.cbz"), any());
         verify(fingerprintService, never()).hasArchiveFingerprints(any());
     }
 
@@ -101,13 +102,13 @@ class VisualHistoryRefreshServiceTest {
         when(galleriesMapper.selectList(any())).thenReturn(List.of(
                 gallery(1L, "first.cbz"), gallery(2L, "second.cbz")));
         when(fingerprintService.hasArchiveFingerprints(any())).thenReturn(false);
-        when(archiveSession.read(anyString(), any())).thenReturn(1);
+        when(archiveSession.read(nullable(String.class), anyString(), any())).thenReturn(1);
 
         VisualRefreshJobEntity result = service.start(false);
 
         assertEquals(2, result.getSucceeded());
         verify(archiveReader, times(1)).openSession();
-        verify(archiveSession, times(2)).read(anyString(), any());
+        verify(archiveSession, times(2)).read(nullable(String.class), anyString(), any());
         verify(archiveSession).close();
     }
 

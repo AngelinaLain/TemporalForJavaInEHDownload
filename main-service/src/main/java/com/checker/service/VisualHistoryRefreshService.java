@@ -126,7 +126,7 @@ public class VisualHistoryRefreshService {
                 for (EhGalleriesEntity gallery : targets) {
                     job.setCurrentGid(gallery.getGid());
                     try {
-                        int inserted = archiveSession.read(gallery.getFilename(), input ->
+                        int inserted = archiveSession.read(gallery.getStoragePath(), gallery.getFilename(), input ->
                                 fingerprintService.replace(gallery.getGid(),
                                         extractor.extract(input, gallery.getGid(), gallery.getPageCount())));
                         if (inserted <= 0) throw new IllegalStateException("归档中没有可解码的采样图片");

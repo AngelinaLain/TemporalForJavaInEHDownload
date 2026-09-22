@@ -24,6 +24,9 @@ public class ComicInfo {
     /** 系列（合集）名称，映射到 Komga Series */
     private String series;
 
+    /** Book order inside the Komga series. */
+    private Integer number;
+
     /** 剧情简介 */
     private String summary;
 
@@ -43,6 +46,7 @@ public class ComicInfo {
                 .append("xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n");
         appendElement(sb, "Title", title);
         appendElement(sb, "Series", series);
+        if (number != null) appendElement(sb, "Number", String.valueOf(number));
         appendElement(sb, "Summary", summary);
         if (writers != null && !writers.isEmpty()) {
             appendElement(sb, "Writer", String.join(", ", writers));

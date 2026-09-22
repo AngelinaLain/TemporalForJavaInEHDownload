@@ -40,8 +40,12 @@ public class SynologyArchiveReader {
     }
 
     public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
+        return read("", filename, function);
+    }
+
+    public <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception {
         try (ArchiveSession session = openSession()) {
-            return session.read(filename, function);
+            return session.read(relativeDirectory, filename, function);
         }
     }
 
@@ -58,8 +62,12 @@ public class SynologyArchiveReader {
     }
 
     public void delete(String filename) throws Exception {
+        delete("", filename);
+    }
+
+    public void delete(String relativeDirectory, String filename) throws Exception {
         try (ArchiveSession session = openSession()) {
-            session.delete(filename);
+            session.delete(relativeDirectory, filename);
         }
     }
 
@@ -80,7 +88,8 @@ public class SynologyArchiveReader {
         private ChannelSftp sftp;
 
         @Override
-        public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
+        public <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception {
+            String safeDirectory = validateRelativeDirectory(relativeDirectory);
             if (filename == null || filename.isBlank()) throw new IllegalArgumentException("画廊文件名为空");
             if (function == null) throw new IllegalArgumentException("归档处理函数不能为空");
 
@@ -89,7 +98,7 @@ public class SynologyArchiveReader {
             if (smbConfigured(smb)) {
                 for (int attempt = 0; attempt < 2; attempt++) {
                     try {
-                        return readViaSmb(filename, smb, function);
+                        return readViaSmb(safeDirectory, filename, smb, function);
                     } catch (ArchiveProcessingException processing) {
                         throw processing.original;
                     } catch (Exception failure) {
@@ -103,7 +112,7 @@ public class SynologyArchiveReader {
             Exception sftpFailure = null;
             for (int attempt = 0; attempt < 3; attempt++) {
                 try {
-                    return readViaSftp(filename, function);
+                    return readViaSftp(safeDirectory, filename, function);
                 } catch (ArchiveProcessingException processing) {
                     throw processing.original;
                 } catch (Exception failure) {
@@ -120,10 +129,10 @@ public class SynologyArchiveReader {
             throw new IOException(message.toString(), cause);
         }
 
-        private <T> T readViaSmb(String filename, EhNetworkConfig.Smb smb,
+        private <T> T readViaSmb(String relativeDirectory, String filename, EhNetworkConfig.Smb smb,
                                  ArchiveInputFunction<T> function) throws Exception {
             ensureSmbConnected(smb);
-            String directory = normalizeSmbPath(smb.getPath());
+            String directory = joinSmb(normalizeSmbPath(smb.getPath()), relativeDirectory);
             try {
                 return readSmbPath(directory, filename, function);
             } catch (ArchiveProcessingException processing) {
@@ -170,29 +179,31 @@ public class SynologyArchiveReader {
             smbShare = (DiskShare) smbSession.connectShare(smb.getShare());
         }
 
-        private <T> T readViaSftp(String filename, ArchiveInputFunction<T> function) throws Exception {
+        private <T> T readViaSftp(String relativeDirectory, String filename,
+                                  ArchiveInputFunction<T> function) throws Exception {
             ensureSftpConnected();
             try {
-                return readSftpPath(filename, function);
+                return readSftpPath(relativeDirectory, filename, function);
             } catch (ArchiveProcessingException processing) {
                 throw processing;
             } catch (Exception exactFailure) {
                 List<String> names = new ArrayList<>();
                 String prefix = gidSearchPrefix(filename);
                 if (prefix != null) {
-                    Vector<ChannelSftp.LsEntry> entries = sftp.ls(prefix + "*");
+                    Vector<ChannelSftp.LsEntry> entries = sftp.ls(joinSftp(relativeDirectory, prefix + "*"));
                     for (ChannelSftp.LsEntry entry : entries) names.add(entry.getFilename());
                 }
                 Optional<String> resolved = selectGidArchive(filename, names);
                 if (resolved.isPresent() && !resolved.get().equals(filename)) {
-                    return readSftpPath(resolved.get(), function);
+                    return readSftpPath(relativeDirectory, resolved.get(), function);
                 }
                 throw exactFailure;
             }
         }
 
-        private <T> T readSftpPath(String filename, ArchiveInputFunction<T> function) throws Exception {
-            try (InputStream input = sftp.get(filename)) {
+        private <T> T readSftpPath(String relativeDirectory, String filename,
+                                   ArchiveInputFunction<T> function) throws Exception {
+            try (InputStream input = sftp.get(joinSftp(relativeDirectory, filename))) {
                 return applyArchiveFunction(input, function);
             }
         }
@@ -273,14 +284,16 @@ public class SynologyArchiveReader {
         }
 
         @Override
-        public void delete(String filename) throws Exception {
+        public void delete(String relativeDirectory, String filename) throws Exception {
+            String safeDirectory = validateRelativeDirectory(relativeDirectory);
             validateFilename(filename);
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
             if (smbConfigured(smb)) {
                 try {
                     ensureSmbConnected(smb);
-                    smbShare.rm(joinSmb(normalizeSmbPath(smb.getPath()), filename));
+                    String directory = joinSmb(normalizeSmbPath(smb.getPath()), safeDirectory);
+                    smbShare.rm(joinSmb(directory, filename));
                     return;
                 } catch (Exception failure) {
                     smbFailure = failure;
@@ -289,7 +302,7 @@ public class SynologyArchiveReader {
             }
             try {
                 ensureSftpConnected();
-                sftp.rm(filename);
+                sftp.rm(joinSftp(safeDirectory, filename));
             } catch (Exception sftpFailure) {
                 throw combinedFailure("无法删除群晖归档 " + filename, smbFailure, sftpFailure);
             }
@@ -386,6 +399,20 @@ public class SynologyArchiveReader {
         return directory.isEmpty() ? filename : directory + "\\" + filename;
     }
 
+    private static String joinSftp(String directory, String filename) {
+        return directory == null || directory.isBlank() ? filename : directory.replace('\\', '/') + "/" + filename;
+    }
+
+    private static String validateRelativeDirectory(String value) {
+        if (value == null || value.isBlank()) return "";
+        String normalized = value.replace('\\', '/');
+        if (normalized.startsWith("/") || normalized.endsWith("/") || normalized.contains("//")
+                || normalized.equals("..") || normalized.contains("../") || normalized.contains("/..")) {
+            throw new IllegalArgumentException("非法系列目录");
+        }
+        return normalized;
+    }
+
     static Optional<String> selectGidArchive(String requestedFilename, List<String> names) {
         String prefix = gidSearchPrefix(requestedFilename);
         if (prefix == null || names == null || names.isEmpty()) return Optional.empty();
@@ -442,13 +469,21 @@ public class SynologyArchiveReader {
     }
 
     public interface ArchiveSession extends AutoCloseable {
-        <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception;
+        <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception;
+
+        default <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
+            return read("", filename, function);
+        }
 
         List<String> listArchives() throws Exception;
 
         void rename(String sourceFilename, String targetFilename) throws Exception;
 
-        void delete(String filename) throws Exception;
+        void delete(String relativeDirectory, String filename) throws Exception;
+
+        default void delete(String filename) throws Exception {
+            delete("", filename);
+        }
 
         @Override
         void close();

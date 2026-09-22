@@ -7,6 +7,7 @@ import com.checker.dto.GalleryCollectionRequest;
 import com.checker.dto.GalleryCollectionSummary;
 import com.checker.entity.GalleryCollectionEntity;
 import com.checker.service.GalleryCollectionService;
+import com.checker.service.KomgaSeriesSyncService;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -20,15 +21,19 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/collections")
 @PreAuthorize("hasRole('ADMIN')")
 public class GalleryCollectionController {
     private final GalleryCollectionService service;
+    private final KomgaSeriesSyncService seriesSyncService;
 
-    public GalleryCollectionController(GalleryCollectionService service) {
+    public GalleryCollectionController(GalleryCollectionService service,
+                                       KomgaSeriesSyncService seriesSyncService) {
         this.service = service;
+        this.seriesSyncService = seriesSyncService;
     }
 
     @GetMapping
@@ -92,6 +97,20 @@ public class GalleryCollectionController {
             return Result.error(400, "scope 只支持 all 或 unassigned");
         }
         return Result.success(service.searchGalleries(keyword, scope, limit));
+    }
+
+    @GetMapping("/komga-series-sync/status")
+    public Result<Map<String, Object>> komgaSeriesSyncStatus() {
+        return Result.success(seriesSyncService.status());
+    }
+
+    @PostMapping("/komga-series-sync")
+    public Result<Map<String, Object>> komgaSeriesSync() {
+        try {
+            return Result.success(seriesSyncService.start());
+        } catch (IllegalStateException failure) {
+            return Result.error(409, failure.getMessage());
+        }
     }
 
     private <T> Result<T> execute(Action<T> action) {

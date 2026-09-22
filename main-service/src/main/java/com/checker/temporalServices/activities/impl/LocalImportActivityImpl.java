@@ -12,6 +12,7 @@ import com.checker.service.SynologyUploadService;
 import com.checker.service.ArchiveVisualFingerprintExtractor;
 import com.checker.service.VisualFingerprintService;
 import com.checker.service.DedupeReviewService;
+import com.checker.service.GallerySeriesPlacementService;
 import com.checker.temporalServices.activities.LocalImportActivity;
 import cn.hutool.core.util.StrUtil;
 import io.temporal.activity.Activity;
@@ -79,6 +80,9 @@ public class LocalImportActivityImpl implements LocalImportActivity {
     @Autowired
     private DedupeReviewService dedupeReviewService;
 
+    @Autowired
+    private GallerySeriesPlacementService placementService;
+
     @Override
     public void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
@@ -107,7 +111,8 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         try (FileChannel lockChannel = FileChannel.open(lockFile,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = acquireWorkLock(lockChannel, ctx, gid)) {
-            ComicInfo comicInfo = buildComicInfo(gallery);
+            GallerySeriesPlacementService.SeriesPlacement placement = placementService.resolve(gid);
+            ComicInfo comicInfo = buildComicInfo(gallery, placement);
             String metadataFingerprint = sha256(comicInfo.toXml());
 
             // 已完成的本地 CBZ 只有在 ZIP 深度校验通过后才允许直接重试上传。
@@ -178,7 +183,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
 
             ctx.heartbeat("上传到群晖: " + targetFilename);
             try {
-                uploadService.upload(cbzFile, targetFilename,
+                uploadService.upload(cbzFile, placement.relativeDirectory(), targetFilename,
                         heartbeatProgress(ctx, gid, "上传到群晖", false));
             } catch (ActivityCompletionException e) {
                 throw e;
@@ -192,6 +197,8 @@ public class LocalImportActivityImpl implements LocalImportActivity {
             EhGalleriesEntity update = new EhGalleriesEntity();
             update.setGid(gid);
             update.setFilename(targetFilename);
+            update.setStoragePath(placement.relativeDirectory());
+            update.setSeriesSyncSignature(placement.signature());
             galleriesMapper.updateById(update);
 
             succeeded = true;
@@ -219,7 +226,8 @@ public class LocalImportActivityImpl implements LocalImportActivity {
      * 由画廊元数据构建 ComicInfo：Series 沿用目标系列，作者取 artist/group 标签，
      * 其余标签写入 Genre（Komga 映射为 book tags）。
      */
-    private ComicInfo buildComicInfo(EhGalleriesEntity gallery) {
+    private ComicInfo buildComicInfo(EhGalleriesEntity gallery,
+                                     GallerySeriesPlacementService.SeriesPlacement placement) {
         List<String> writers = new ArrayList<>();
         List<String> tags = new ArrayList<>();
         if (gallery.getTags() != null) {
@@ -233,7 +241,8 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
         return ComicInfo.builder()
                 .title(gallery.getTitle())
-                .series(Constants.KOMGA_TARGET_SERIES)
+                .series(placement.seriesName())
+                .number(placement.number())
                 .summary(gallery.getSummary())
                 .writers(writers)
                 .tags(tags)

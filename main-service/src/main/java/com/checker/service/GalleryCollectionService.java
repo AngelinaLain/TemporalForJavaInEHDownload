@@ -268,7 +268,7 @@ public class GalleryCollectionService {
 
     private String cleanName(String value) {
         if (value == null || value.isBlank()) throw new IllegalArgumentException("合集名称不能为空");
-        return value.trim();
+        return GallerySeriesPlacementService.safeDirectory(value);
     }
 
     private String cleanDescription(String value) {
