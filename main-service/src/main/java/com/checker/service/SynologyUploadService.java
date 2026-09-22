@@ -17,12 +17,18 @@ public interface SynologyUploadService {
      * @throws Exception 所有上传方式均失败时抛出
      */
     default void upload(Path localFile, String targetFilename) throws Exception {
-        upload(localFile, targetFilename, bytes -> {
+        upload(localFile, "", targetFilename, bytes -> {
         });
     }
 
     /**
      * 上传文件并回调累计上传字节数，供长时间运行的 Temporal Activity 发送心跳。
      */
-    void upload(Path localFile, String targetFilename, LongConsumer progress) throws Exception;
+    default void upload(Path localFile, String targetFilename, LongConsumer progress) throws Exception {
+        upload(localFile, "", targetFilename, progress);
+    }
+
+    /** Upload into a series subdirectory relative to the configured destination. */
+    void upload(Path localFile, String relativeDirectory, String targetFilename,
+                LongConsumer progress) throws Exception;
 }

@@ -48,12 +48,6 @@ public class KomgaActivityImpl implements KomgaActivity {
     @Autowired
     private KomgaApiClient komgaApiClient;
 
-    /** Komga 系列 ID 缓存：目标系列 ID 在 Komga 中基本固定不变，缓存后永久复用，
-     *  避免每次 findBookInKomga 轮询时重复查询 series/list 接口 */
-    private final Cache<String, String> seriesIdCache = Caffeine.newBuilder()
-            .maximumSize(10)
-            .build();
-
     /**
      * Komga 的 fullTextSearch 搜索的是展示元数据，不保证搜索物理文件名。扫描确认时按
      * 系列拉取 BookDto，再用 name/url 做本地精确匹配。短缓存用于合并并发工作流轮询，
@@ -89,20 +83,17 @@ public class KomgaActivityImpl implements KomgaActivity {
 
     @Override
     public String findBookInKomga(Long gid) {
-        String targetSeriesId = getOrCacheTargetSeriesId();
-        if (StrUtil.isBlank(targetSeriesId)) {
-            log.error("❌ 无法在 Komga 中找到 [{}] 系列", Constants.KOMGA_TARGET_SERIES);
-            return null;
-        }
-
         String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list";
         JSONObject searchBody = new JSONObject();
         searchBody.set("fullTextSearch", String.valueOf(gid));
-        JSONObject seriesIdCond = new JSONObject();
-        seriesIdCond.set("operator", "is");
-        seriesIdCond.set("value", targetSeriesId);
         JSONObject condition = new JSONObject();
-        condition.set("seriesId", seriesIdCond);
+        String libraryId = netConfig.getKomga().getLibraryId();
+        if (StrUtil.isNotBlank(libraryId)) {
+            JSONObject libraryCond = new JSONObject();
+            libraryCond.set("operator", "is");
+            libraryCond.set("value", libraryId);
+            condition.set("libraryId", libraryCond);
+        }
         searchBody.set("condition", condition);
 
         HttpResponse response = HttpRequest.post(komgaUrl)
@@ -119,7 +110,7 @@ public class KomgaActivityImpl implements KomgaActivity {
                 log.info("🎯 Komga 命中! GID: {}, BookID: {}", gid, bookId);
                 return bookId;
             }
-            log.warn("⚠️ 在系列 [N8N_Update] 中未找到 GID: {}", gid);
+            log.warn("⚠️ 在目标 Komga Library 中未找到 GID: {}", gid);
         } else {
             log.error("❌ Komga 搜索失败: HTTP {}", response.getStatus());
         }
@@ -133,25 +124,20 @@ public class KomgaActivityImpl implements KomgaActivity {
             return KomgaBookMatchResult.notFound("数据库中不存在画廊记录");
         }
 
-        String targetSeriesId = getOrCacheTargetSeriesId();
-        if (StrUtil.isBlank(targetSeriesId)) {
-            return KomgaBookMatchResult.notFound("目标系列尚未被 Komga 扫描识别");
-        }
-
         try {
-            JSONArray content = getBooksInTargetSeries(targetSeriesId);
+            JSONArray content = getBooksInTargetLibrary();
             List<String> matches = KomgaBookMatcher.exactBookIds(
                     content,
                     gid,
                     gallery.getFilename(),
-                    targetSeriesId,
+                    null,
                     netConfig.getKomga().getLibraryId());
             if (matches.size() == 1) {
                 String bookId = matches.get(0);
                 log.info("🎯 Komga 精确命中! GID: {}, 文件: {}, BookID: {}",
                         gid, gallery.getFilename(), bookId);
                 return KomgaBookMatchResult.found(bookId,
-                        "数据库文件名或历史 [GID] 物理路径与目标系列唯一匹配");
+                        "数据库文件名或历史 [GID] 物理路径与目标 Library 唯一匹配");
             }
             if (matches.size() > 1) {
                 String reason = "Komga 返回多个精确候选: " + matches;
@@ -160,7 +146,7 @@ public class KomgaActivityImpl implements KomgaActivity {
             }
             int candidateCount = content == null ? 0 : content.size();
             return KomgaBookMatchResult.notFound(String.format(
-                    "扫描中，目标系列返回 %d 本书，未发现数据库文件名或 [%d] 物理路径匹配",
+                    "扫描中，目标 Library 返回 %d 本书，未发现数据库文件名或 [%d] 物理路径匹配",
                     candidateCount, gid));
         } catch (ApplicationFailure e) {
             throw e;
@@ -228,6 +214,30 @@ public class KomgaActivityImpl implements KomgaActivity {
         return booksBySeriesCache.get(cacheKey, ignored -> queryBooksInTargetSeries(targetSeriesId));
     }
 
+    private JSONArray getBooksInTargetLibrary() {
+        String libraryId = StrUtil.blankToDefault(netConfig.getKomga().getLibraryId(), "");
+        return booksBySeriesCache.get("library|" + libraryId, ignored -> {
+            String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list?unpaged=true";
+            JSONObject searchBody = new JSONObject();
+            if (StrUtil.isNotBlank(libraryId)) {
+                JSONObject libraryCondition = new JSONObject();
+                libraryCondition.set("operator", "is");
+                libraryCondition.set("value", libraryId);
+                JSONObject condition = new JSONObject();
+                condition.set("libraryId", libraryCondition);
+                searchBody.set("condition", condition);
+            }
+            try (HttpResponse response = HttpRequest.post(komgaUrl)
+                    .header("X-API-Key", netConfig.getKomga().getApiKey())
+                    .header("Content-Type", "application/json")
+                    .body(searchBody.toString()).execute()) {
+                if (!response.isOk()) throw komgaHttpFailure("Komga Library 图书查询失败", response.getStatus());
+                JSONArray content = JSONUtil.parseObj(response.body()).getJSONArray("content");
+                return content == null ? new JSONArray() : content;
+            }
+        });
+    }
+
     private JSONArray queryBooksInTargetSeries(String targetSeriesId) {
         String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list?unpaged=true";
         JSONObject seriesIdCond = new JSONObject();
@@ -259,17 +269,6 @@ public class KomgaActivityImpl implements KomgaActivity {
      * 懒加载并缓存目标系列 ID，只在第一次访问时查询 Komga，后续复用缓存值。
      * 若查询结果为 null（系列不存在），不会缓存，下次调用会重新查询。
      */
-    private String getOrCacheTargetSeriesId() {
-        String cached = seriesIdCache.getIfPresent(Constants.KOMGA_TARGET_SERIES);
-        if (cached != null) return cached;
-
-        String seriesId = getSeriesIdByName(Constants.KOMGA_TARGET_SERIES);
-        if (seriesId != null) {
-            seriesIdCache.put(Constants.KOMGA_TARGET_SERIES, seriesId);
-        }
-        return seriesId;
-    }
-
     /**
      * 根据系列名称在 Komga 中查找对应的 seriesId
      *

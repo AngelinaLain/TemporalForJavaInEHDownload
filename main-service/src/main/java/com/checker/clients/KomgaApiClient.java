@@ -136,6 +136,18 @@ public class KomgaApiClient {
         }
     }
 
+    public void triggerLibraryScan() throws Exception {
+        String libraryId = netConfig.getKomga().getLibraryId();
+        if (libraryId == null || libraryId.isBlank()) throw new IllegalStateException("未配置 Komga Library ID");
+        String url = baseUrl + "/api/v1/libraries/" + libraryId + "/scan";
+        Request request = new Request.Builder().url(url).post(RequestBody.create(new byte[0])).build();
+        try (Response response = httpClient.newCall(request).execute()) {
+            if (!response.isSuccessful() && response.code() != 202) {
+                throw new RuntimeException("触发 Komga 扫描失败: HTTP " + response.code());
+            }
+        }
+    }
+
     /**
      * 根据 bookId 获取图书详情 (为了拿到所属的 seriesId)
      */

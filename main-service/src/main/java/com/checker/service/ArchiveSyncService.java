@@ -159,6 +159,11 @@ public class ArchiveSyncService {
             allGalleryQuery.isNotNull("filename").ne("filename", "").orderByAsc("gid");
             List<EhGalleriesEntity> allGalleries = galleriesMapper.selectList(allGalleryQuery);
             Set<Long> groupsAlreadyArchived = findArchivedGroups(allGalleries, archives);
+            for (EhGalleriesEntity gallery : allGalleries) {
+                if (gallery.getStoragePath() != null && !gallery.getStoragePath().isBlank()) {
+                    groupsAlreadyArchived.add(canonicalGid(gallery));
+                }
+            }
             List<EhGalleriesEntity> galleries = allGalleries.stream()
                     .filter(gallery -> gallery.getDuplicateOfGid() == null)
                     .toList();

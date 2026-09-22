@@ -107,6 +107,12 @@ public class EhGalleriesEntity implements Serializable {
      */
     private String filename;
 
+    /** Relative series directory below the configured Komga upload destination. */
+    private String storagePath;
+
+    /** Last collection/name/order signature written into ComicInfo.xml. */
+    private String seriesSyncSignature;
+
     /**
      * 画廊直达链接
      */

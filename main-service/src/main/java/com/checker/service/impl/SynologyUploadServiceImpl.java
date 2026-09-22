@@ -44,11 +44,13 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
     private EhNetworkConfig netConfig;
 
     @Override
-    public void upload(Path localFile, String targetFilename, LongConsumer progress) throws Exception {
+    public void upload(Path localFile, String relativeDirectory, String targetFilename,
+                       LongConsumer progress) throws Exception {
+        String safeDirectory = validateRelativeDirectory(relativeDirectory);
         EhNetworkConfig.Smb smb = netConfig.getSmb();
         if (smb != null && StrUtil.isNotBlank(smb.getHost()) && StrUtil.isNotBlank(smb.getShare())) {
             try {
-                uploadViaSmb(localFile, targetFilename, smb, progress);
+                uploadViaSmb(localFile, safeDirectory, targetFilename, smb, progress);
                 return;
             } catch (ActivityCompletionException e) {
                 // heartbeat 发现 Activity 已取消或超时，必须立即停止，不能再尝试 SFTP。
@@ -60,10 +62,10 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         } else {
             log.warn("未配置 SMB，直接使用 SFTP 上传");
         }
-        uploadViaSftp(localFile, targetFilename, progress);
+        uploadViaSftp(localFile, safeDirectory, targetFilename, progress);
     }
 
-    private void uploadViaSmb(Path localFile, String targetFilename, EhNetworkConfig.Smb smb,
+    private void uploadViaSmb(Path localFile, String relativeDirectory, String targetFilename, EhNetworkConfig.Smb smb,
                               LongConsumer progress) throws Exception {
         long localSize = Files.size(localFile);
         try (SMBClient client = new SMBClient()) {
@@ -76,7 +78,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
 
                 String shareName = StrUtil.blankToDefault(smb.getShare(), "");
                 try (DiskShare share = (DiskShare) session.connectShare(shareName)) {
-                    String dir = normalizeSmbPath(smb.getPath());
+                    String dir = joinSmb(normalizeSmbPath(smb.getPath()), relativeDirectory);
                     ensureSmbDirectory(share, dir);
 
                     String remotePath = dir.isEmpty() ? targetFilename : dir + "\\" + targetFilename;
@@ -145,7 +147,8 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         return normalized;
     }
 
-    private void uploadViaSftp(Path localFile, String targetFilename, LongConsumer progress) throws Exception {
+    private void uploadViaSftp(Path localFile, String relativeDirectory, String targetFilename,
+                               LongConsumer progress) throws Exception {
         EhNetworkConfig.Synology synology = netConfig.getSynology();
         String host = parseSynologyHost();
         String username = synology.getUsername();
@@ -164,8 +167,10 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
             ChannelSftp sftp = (ChannelSftp) session.openChannel("sftp");
             sftp.connect(30_000);
             try {
-                String dir = "/volume1" + StrUtil.blankToDefault(synology.getDestination(), "");
+                String baseDir = "/volume1" + StrUtil.blankToDefault(synology.getDestination(), "");
+                String dir = relativeDirectory.isBlank() ? baseDir : baseDir + "/" + relativeDirectory;
                 ensureSftpDirectory(sftp, dir);
+                sftp.cd(dir);
                 long localSize = Files.size(localFile);
                 String tempFilename = "." + targetFilename + ".uploading";
                 SftpProgressMonitor monitor = getSftpProgressMonitor(progress);
@@ -265,5 +270,22 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         int colon = host.lastIndexOf(':');
         if (colon > 0 && host.indexOf(':') == colon) host = host.substring(0, colon);
         return host;
+    }
+
+    private static String validateRelativeDirectory(String value) {
+        if (value == null || value.isBlank()) return "";
+        String normalized = value.replace('\\', '/');
+        if (normalized.startsWith("/") || normalized.endsWith("/")
+                || normalized.contains("//") || normalized.contains("../")
+                || normalized.equals("..") || normalized.contains("/..")) {
+            throw new IllegalArgumentException("非法系列目录");
+        }
+        return normalized;
+    }
+
+    private static String joinSmb(String left, String right) {
+        if (left == null || left.isBlank()) return right == null ? "" : right.replace('/', '\\');
+        if (right == null || right.isBlank()) return left;
+        return left + "\\" + right.replace('/', '\\');
     }
 }

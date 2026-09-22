@@ -48,6 +48,7 @@ class ComicInfoInjectorTest {
         ComicInfo info = ComicInfo.builder()
                 .title("Test <Gallery> & 中文")
                 .series("N8N_Update")
+                .number(7)
                 .summary("简介 summary")
                 .writers(List.of("artist-aaa", "group-bbb"))
                 .tags(List.of("language:chinese", "female:stockings"))
@@ -65,6 +66,7 @@ class ComicInfoInjectorTest {
             String xml = readEntry(result, first);
             assertTrue(xml.contains("Test &lt;Gallery&gt; &amp; 中文"), "标题应做 XML 转义: " + xml);
             assertTrue(xml.contains("<Series>N8N_Update</Series>"));
+            assertTrue(xml.contains("<Number>7</Number>"));
             assertTrue(xml.contains("<Writer>artist-aaa, group-bbb</Writer>"));
 
             // 原条目内容完好
