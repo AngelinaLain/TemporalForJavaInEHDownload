@@ -118,6 +118,30 @@ docker run --rm httpd:2.4-alpine htpasswd -bnBC 12 '' '请替换为管理员密�
 docker compose config --quiet
 ~~~
 
+### Docker 直接挂载 Komga Library（推荐）
+
+如果 Docker 主机本身就是群晖，或已经通过 NFS/CIFS 挂载了群晖目录，可让后端直接读写该目录，避免 SMBJ/SFTP 连接开销。`ARCHIVE_HOST_PATH` 必须指向 Komga 当前 Library 的根目录（也就是现有 `N8N_Update` CBZ 所在目录），例如：
+
+~~~dotenv
+ARCHIVE_HOST_PATH=/volume1/n8n_bot/EHentai
+~~~
+
+若 Docker 运行在另一台 Linux 主机，可先把群晖目录挂载到例如 `/mnt/komga-library`，再设置：
+
+~~~dotenv
+ARCHIVE_HOST_PATH=/mnt/komga-library
+~~~
+
+使用挂载覆盖文件启动：
+
+~~~bash
+docker compose -f docker-compose.yml -f docker-compose.mount.yml config --quiet
+docker compose -f docker-compose.yml -f docker-compose.mount.yml up -d --build --remove-orphans
+docker compose exec backend sh -c 'test -r /data/komga-library && test -w /data/komga-library'
+~~~
+
+容器内固定使用 `/data/komga-library`。路径可读写时应用自动优先使用本地文件系统；没有使用该覆盖文件或挂载不可用时，继续回退到 SMB/SFTP。Komga 与后端必须挂载同一个实际目录。
+
 ## 4. 首次启动和升级
 
 先构建镜像，再启动容器：

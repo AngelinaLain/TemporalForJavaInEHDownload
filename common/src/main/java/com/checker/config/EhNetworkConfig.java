@@ -22,6 +22,7 @@ public class EhNetworkConfig {
     private RateLimit rateLimit = new RateLimit();
     private TagDb tagDb = new TagDb();
     private Smb smb = new Smb();
+    private ArchiveStorage archiveStorage = new ArchiveStorage();
     private Download download = new Download();
 
     /** 多代理轮换池：配置后优先于单一 proxy 使用，遇到 403/502 自动冷却并切换 */
@@ -150,6 +151,16 @@ public class EhNetworkConfig {
         private String username;
         private String password;
         private String domain;
+    }
+
+    /**
+     * Container/local filesystem access to the Komga library root. When configured and
+     * accessible it is preferred over SMB/SFTP, which remain compatibility fallbacks.
+     */
+    @Data
+    public static class ArchiveStorage {
+        /** Absolute path inside the running process/container, e.g. /data/komga-library. */
+        private String mountPath;
     }
 
     /**

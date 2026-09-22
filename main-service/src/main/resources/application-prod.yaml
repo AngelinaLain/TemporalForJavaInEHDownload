@@ -60,6 +60,8 @@ eh-config:
     username: ${SYNOLOGY_USERNAME}
     password: ${SYNOLOGY_PASSWORD}
     destination: ${SYNOLOGY_DESTINATION}
+  archive-storage:
+    mount-path: ${ARCHIVE_MOUNT_PATH:}
   notification:
     admin-email: ${NOTIFICATION_ADMIN_EMAIL}
     tenant-id: ${GRAPH_TENANT_ID}

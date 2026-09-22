@@ -171,7 +171,7 @@ Copy-Item .env.example .env
 | 基础设施 | `NACOS_SERVER_ADDR`、`DB_*`、`TEMPORAL_*`、`REDIS_*` |
 | 应用安全 | `JWT_SECRET`、`ADMIN_USERNAME`、`ADMIN_PASSWORD_HASH`、`CORS_ALLOWED_ORIGINS` |
 | EHentai | `EH_MEMBER_ID`、`EH_PASS_HASH`、`EH_SK`、`EH_STAR`、`PROXY_*` |
-| 群晖 | `SYNOLOGY_*`、`SMB_*` |
+| 群晖 | `ARCHIVE_HOST_PATH`、`ARCHIVE_MOUNT_PATH`、`SYNOLOGY_*`、`SMB_*` |
 | Komga | `KOMGA_URL`、`KOMGA_API_KEY`、`KOMGA_LIBRARY_ID` |
 | 通知 | `NOTIFICATION_ADMIN_EMAIL`、`GRAPH_*` |
 | 下载 | `DOWNLOAD_MODE`、`DOWNLOAD_TEMP_DIR` |
@@ -184,6 +184,14 @@ Copy-Item .env.example .env
 ```bash
 docker compose up -d --build
 ```
+
+Docker/Linux 直接挂载 Komga Library 时，设置 `ARCHIVE_HOST_PATH` 后使用：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.mount.yml up -d --build
+```
+
+挂载路径可读写时优先使用本地文件系统，未配置时自动保留 SMB/SFTP 兼容路径。完整说明见 `DEPLOYMENT.md`。
 
 启用完整可观测性组件：
 

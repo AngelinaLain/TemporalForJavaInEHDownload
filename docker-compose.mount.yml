@@ -1,0 +1,8 @@
+services:
+  backend:
+    environment:
+      ARCHIVE_MOUNT_PATH: /data/komga-library
+    volumes:
+      - type: bind
+        source: ${ARCHIVE_HOST_PATH:?Set ARCHIVE_HOST_PATH to the host-mounted Komga library root}
+        target: /data/komga-library

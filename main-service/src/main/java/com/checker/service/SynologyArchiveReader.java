@@ -34,9 +34,11 @@ import java.util.regex.Pattern;
 public class SynologyArchiveReader {
     private static final Pattern GID_PREFIX = Pattern.compile("^\\[(\\d+)](?:\\s|$)");
     private final EhNetworkConfig config;
+    private final MountedArchiveStorage mountedStorage;
 
-    public SynologyArchiveReader(EhNetworkConfig config) {
+    public SynologyArchiveReader(EhNetworkConfig config, MountedArchiveStorage mountedStorage) {
         this.config = config;
+        this.mountedStorage = mountedStorage;
     }
 
     public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
@@ -92,6 +94,9 @@ public class SynologyArchiveReader {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
             if (filename == null || filename.isBlank()) throw new IllegalArgumentException("画廊文件名为空");
             if (function == null) throw new IllegalArgumentException("归档处理函数不能为空");
+            if (mountedStorage.isReadable()) {
+                return mountedStorage.read(safeDirectory, filename, function);
+            }
 
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
@@ -219,6 +224,7 @@ public class SynologyArchiveReader {
 
         @Override
         public List<String> listArchives() throws Exception {
+            if (mountedStorage.isReadable()) return mountedStorage.listArchives();
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
             if (smbConfigured(smb)) {
@@ -254,6 +260,10 @@ public class SynologyArchiveReader {
         public void rename(String sourceFilename, String targetFilename) throws Exception {
             validateFilename(sourceFilename);
             validateFilename(targetFilename);
+            if (mountedStorage.isWritable()) {
+                mountedStorage.rename(sourceFilename, targetFilename);
+                return;
+            }
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
             if (smbConfigured(smb)) {
@@ -287,6 +297,10 @@ public class SynologyArchiveReader {
         public void delete(String relativeDirectory, String filename) throws Exception {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
             validateFilename(filename);
+            if (mountedStorage.isWritable()) {
+                mountedStorage.delete(safeDirectory, filename);
+                return;
+            }
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
             if (smbConfigured(smb)) {
