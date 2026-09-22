@@ -7,6 +7,7 @@ import com.checker.common.ComicInfoInjector;
 import com.checker.config.EhNetworkConfig;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
@@ -26,6 +27,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Reconciles local collection membership to physical Komga series directories. */
 @Service
+@Slf4j
 public class KomgaSeriesSyncService {
     private final EhGalleriesMapper galleriesMapper;
     private final GallerySeriesPlacementService placementService;
@@ -118,6 +120,7 @@ public class KomgaSeriesSyncService {
                 } catch (Exception failure) {
                     failed.incrementAndGet();
                     lastError = "GID " + currentGid + ": " + truncate(rootMessage(failure));
+                    log.warn("Komga 系列同步失败，GID {}: {}", currentGid, lastError, failure);
                 } finally {
                     processed.incrementAndGet();
                 }
@@ -191,7 +194,14 @@ public class KomgaSeriesSyncService {
     private static String rootMessage(Throwable failure) {
         Throwable current = failure;
         while (current.getCause() != null && current.getCause() != current) current = current.getCause();
-        return current.getClass().getSimpleName() + ": " + String.valueOf(current.getMessage());
+        String outer = failure.getMessage();
+        String root = current.getMessage();
+        String summary = failure.getClass().getSimpleName()
+                + (outer == null || outer.isBlank() ? "" : ": " + outer);
+        if (current != failure && root != null && !root.isBlank() && !String.valueOf(outer).contains(root)) {
+            summary += "；根因: " + current.getClass().getSimpleName() + ": " + root;
+        }
+        return summary;
     }
 
     private static String truncate(String value) {
