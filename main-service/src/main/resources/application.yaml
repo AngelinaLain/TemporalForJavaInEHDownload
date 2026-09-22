@@ -134,6 +134,9 @@ eh-config:
     username: ${SMB_USERNAME:}
     password: ${SMB_PASSWORD:}
     domain: ${SMB_DOMAIN:}
+  archive-storage:
+    # Docker/Linux 中把 Komga Library 根目录挂载到此路径；留空时继续使用 SMB/SFTP。
+    mount-path: ${ARCHIVE_MOUNT_PATH:}
   # 下载模式
   download:
     # local：本地下载 + 注入 ComicInfo.xml + 上传群晖（默认）；downloadstation：沿用群晖 DownloadStation

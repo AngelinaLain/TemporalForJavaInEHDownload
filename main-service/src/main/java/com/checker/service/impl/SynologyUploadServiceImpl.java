@@ -2,6 +2,7 @@ package com.checker.service.impl;
 
 import cn.hutool.core.util.StrUtil;
 import com.checker.config.EhNetworkConfig;
+import com.checker.service.MountedArchiveStorage;
 import com.checker.service.SynologyUploadService;
 import com.hierynomus.msdtyp.AccessMask;
 import com.hierynomus.msfscc.FileAttributes;
@@ -43,10 +44,17 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
     @Autowired
     private EhNetworkConfig netConfig;
 
+    @Autowired
+    private MountedArchiveStorage mountedStorage;
+
     @Override
     public void upload(Path localFile, String relativeDirectory, String targetFilename,
                        LongConsumer progress) throws Exception {
         String safeDirectory = validateRelativeDirectory(relativeDirectory);
+        if (mountedStorage.isWritable()) {
+            mountedStorage.upload(localFile, safeDirectory, targetFilename, progress);
+            return;
+        }
         EhNetworkConfig.Smb smb = netConfig.getSmb();
         if (smb != null && StrUtil.isNotBlank(smb.getHost()) && StrUtil.isNotBlank(smb.getShare())) {
             try {
