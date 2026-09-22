@@ -482,6 +482,16 @@ public class SynologyArchiveReader {
                 .findFirst();
     }
 
+    /** True when both supported archive names identify the same stable EH GID. */
+    public static boolean isArchiveForSameGid(String requestedFilename, String candidateFilename) {
+        if (requestedFilename == null || candidateFilename == null || !isSupportedArchive(candidateFilename)) {
+            return false;
+        }
+        Matcher requested = GID_PREFIX.matcher(requestedFilename);
+        Matcher candidate = GID_PREFIX.matcher(candidateFilename);
+        return requested.find() && candidate.find() && requested.group(1).equals(candidate.group(1));
+    }
+
     private static String gidSearchPrefix(String filename) {
         if (filename == null) return null;
         Matcher matcher = GID_PREFIX.matcher(filename);
