@@ -25,4 +25,12 @@ class SynologyArchiveReaderTest {
         assertTrue(SynologyArchiveReader.selectGidArchive("[647361] expected.zip", List.of(
                 "[6473610] wrong.cbz", "[647361] metadata.xml", ".[647361] file.cbz.uploading")).isEmpty());
     }
+
+    @Test
+    void detectsSameGidAcrossZipAndCbzNames() {
+        assertTrue(SynologyArchiveReader.isArchiveForSameGid(
+                "[3627694] current title.zip", "[3627694] historical title.cbz"));
+        assertTrue(!SynologyArchiveReader.isArchiveForSameGid(
+                "[3627694] current title.zip", "[36276940] other.cbz"));
+    }
 }

@@ -3,12 +3,14 @@ package com.checker.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.checker.config.EhNetworkConfig;
 import com.checker.service.MountedArchiveStorage;
+import com.checker.service.SynologyArchiveReader;
 import com.checker.service.SynologyUploadService;
 import com.hierynomus.msdtyp.AccessMask;
 import com.hierynomus.msfscc.FileAttributes;
 import com.hierynomus.mssmb2.SMB2CreateDisposition;
 import com.hierynomus.mssmb2.SMB2CreateOptions;
 import com.hierynomus.mssmb2.SMB2ShareAccess;
+import com.hierynomus.msfscc.fileinformation.FileIdBothDirectoryInformation;
 import com.hierynomus.smbj.SMBClient;
 import com.hierynomus.smbj.auth.AuthenticationContext;
 import com.hierynomus.smbj.connection.Connection;
@@ -30,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.Vector;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
 
@@ -120,6 +123,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
                             file.rename(remotePath, false);
                         }
                     }
+                    cleanupSmbGidDuplicates(share, dir, targetFilename);
                     log.info("✅ SMB 上传成功: //{}/{}", smb.getHost(), remotePath.replace('\\', '/'));
                 }
             }
@@ -200,6 +204,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
                     }
                     sftp.rename(tempFilename, targetFilename);
                 }
+                cleanupSftpGidDuplicates(sftp, targetFilename);
                 log.info("✅ SFTP 上传成功: {} -> {}/{}", host, dir, targetFilename);
             } finally {
                 sftp.disconnect();
@@ -278,6 +283,29 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         int colon = host.lastIndexOf(':');
         if (colon > 0 && host.indexOf(':') == colon) host = host.substring(0, colon);
         return host;
+    }
+
+    private void cleanupSmbGidDuplicates(DiskShare share, String directory, String keepFilename) {
+        for (FileIdBothDirectoryInformation entry : share.list(directory, "*")) {
+            String candidate = entry.getFileName();
+            if (!candidate.equalsIgnoreCase(keepFilename)
+                    && SynologyArchiveReader.isArchiveForSameGid(keepFilename, candidate)) {
+                share.rm(joinSmb(directory, candidate));
+                log.info("🧹 删除 SMB 同 GID 旧归档: {}", candidate);
+            }
+        }
+    }
+
+    private void cleanupSftpGidDuplicates(ChannelSftp sftp, String keepFilename) throws SftpException {
+        Vector<ChannelSftp.LsEntry> entries = sftp.ls("*");
+        for (ChannelSftp.LsEntry entry : entries) {
+            String candidate = entry.getFilename();
+            if (!candidate.equalsIgnoreCase(keepFilename)
+                    && SynologyArchiveReader.isArchiveForSameGid(keepFilename, candidate)) {
+                sftp.rm(candidate);
+                log.info("🧹 删除 SFTP 同 GID 旧归档: {}", candidate);
+            }
+        }
     }
 
     private static String validateRelativeDirectory(String value) {

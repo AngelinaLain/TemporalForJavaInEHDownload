@@ -26,11 +26,15 @@ class MountedArchiveStorageTest {
         Path local = tempDir.resolve("source.cbz");
         Files.writeString(local, "archive", StandardCharsets.UTF_8);
         AtomicLong progress = new AtomicLong();
+        Path stale = tempDir.resolve("OXIDE_Lab/[3627694] historical title.zip");
+        Files.createDirectories(stale.getParent());
+        Files.writeString(stale, "archive", StandardCharsets.UTF_8);
 
         storage.upload(local, "OXIDE_Lab", "[3627694] database title.cbz", progress::set);
 
         Path target = tempDir.resolve("OXIDE_Lab/[3627694] database title.cbz");
         assertTrue(Files.isRegularFile(target));
+        assertFalse(Files.exists(stale));
         assertEquals(Files.size(local), progress.get());
         assertEquals("archive", storage.read("OXIDE_Lab", "[3627694] changed title.cbz",
                 input -> new String(input.readAllBytes(), StandardCharsets.UTF_8)));

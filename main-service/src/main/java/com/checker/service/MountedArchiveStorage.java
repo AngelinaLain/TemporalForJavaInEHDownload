@@ -66,6 +66,7 @@ public class MountedArchiveStorage {
                 }
             }
             moveReplacing(temporary, target);
+            deleteOtherGidArchives(directory, filename);
             log.info("✅ 挂载目录写入成功: {}", target);
         } finally {
             Files.deleteIfExists(temporary);
@@ -101,6 +102,21 @@ public class MountedArchiveStorage {
         String resolved = SynologyArchiveReader.selectGidArchive(filename, names)
                 .orElseThrow(() -> new java.nio.file.NoSuchFileException(exact.toString()));
         return resolveFilename(directory, resolved);
+    }
+
+    private void deleteOtherGidArchives(Path directory, String keepFilename) throws Exception {
+        List<Path> stale;
+        try (Stream<Path> entries = Files.list(directory)) {
+            stale = entries.filter(Files::isRegularFile)
+                    .filter(path -> !path.getFileName().toString().equalsIgnoreCase(keepFilename))
+                    .filter(path -> SynologyArchiveReader.isArchiveForSameGid(
+                            keepFilename, path.getFileName().toString()))
+                    .toList();
+        }
+        for (Path path : stale) {
+            Files.deleteIfExists(path);
+            log.info("🧹 删除同 GID 的旧归档: {}", path);
+        }
     }
 
     private Path resolveDirectory(String relativeDirectory) {
