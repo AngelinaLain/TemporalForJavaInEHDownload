@@ -74,8 +74,13 @@ public class MountedArchiveStorage {
     }
 
     public List<String> listArchives() throws Exception {
-        Path root = requireRoot();
-        try (Stream<Path> entries = Files.list(root)) {
+        return listArchives("");
+    }
+
+    public List<String> listArchives(String relativeDirectory) throws Exception {
+        Path directory = resolveDirectory(relativeDirectory);
+        if (Files.notExists(directory)) return List.of();
+        try (Stream<Path> entries = Files.list(directory)) {
             return entries.filter(Files::isRegularFile).map(path -> path.getFileName().toString())
                     .filter(MountedArchiveStorage::isSupportedArchive).toList();
         }
@@ -88,6 +93,10 @@ public class MountedArchiveStorage {
 
     public void delete(String relativeDirectory, String filename) throws Exception {
         Files.delete(resolveExistingArchive(relativeDirectory, filename));
+    }
+
+    public void deleteExact(String relativeDirectory, String filename) throws Exception {
+        Files.deleteIfExists(resolveFilename(resolveDirectory(relativeDirectory), filename));
     }
 
     private Path resolveExistingArchive(String relativeDirectory, String filename) throws Exception {

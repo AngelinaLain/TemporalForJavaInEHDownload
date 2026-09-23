@@ -15,6 +15,7 @@ import com.hierynomus.smbj.session.Session;
 import com.hierynomus.smbj.share.DiskShare;
 import com.jcraft.jsch.ChannelSftp;
 import com.jcraft.jsch.JSch;
+import com.jcraft.jsch.SftpException;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -54,6 +55,25 @@ public class SynologyArchiveReader {
     public List<String> listArchives() throws Exception {
         try (ArchiveSession session = openSession()) {
             return session.listArchives();
+        }
+    }
+
+    public Optional<String> resolveArchive(String directory, String filename, Long gid) throws Exception {
+        try (ArchiveSession session = openSession()) {
+            return selectSeriesArchive(filename, gid, session.listArchives(directory));
+        }
+    }
+
+    public boolean existsExact(String directory, String filename) throws Exception {
+        try (ArchiveSession session = openSession()) {
+            return session.listArchives(directory).contains(filename);
+        }
+    }
+
+    /** Cleanup must never fall back to deleting a different file by GID. */
+    public void deleteExact(String directory, String filename) throws Exception {
+        try (ArchiveSession session = openSession()) {
+            session.deleteExact(directory, filename);
         }
     }
 
@@ -224,16 +244,25 @@ public class SynologyArchiveReader {
 
         @Override
         public List<String> listArchives() throws Exception {
-            if (mountedStorage.isReadable()) return mountedStorage.listArchives();
+            return listArchives("");
+        }
+
+        @Override
+        public List<String> listArchives(String relativeDirectory) throws Exception {
+            String safeDirectory = validateRelativeDirectory(relativeDirectory);
+            if (mountedStorage.isReadable()) return mountedStorage.listArchives(safeDirectory);
             Exception smbFailure = null;
             EhNetworkConfig.Smb smb = config.getSmb();
             if (smbConfigured(smb)) {
                 try {
                     ensureSmbConnected(smb);
-                    String directory = normalizeSmbPath(smb.getPath());
+                    String directory = joinSmb(normalizeSmbPath(smb.getPath()), safeDirectory);
+                    if (!directory.isEmpty() && !smbShare.folderExists(directory)) return List.of();
                     List<String> names = new ArrayList<>();
                     for (FileIdBothDirectoryInformation entry : smbShare.list(directory, "*")) {
-                        if (isSupportedArchive(entry.getFileName())) names.add(entry.getFileName());
+                        if ((entry.getFileAttributes() & 0x10) == 0 && isSupportedArchive(entry.getFileName())) {
+                            names.add(entry.getFileName());
+                        }
                     }
                     return names;
                 } catch (Exception failure) {
@@ -244,7 +273,13 @@ public class SynologyArchiveReader {
             try {
                 ensureSftpConnected();
                 List<String> names = new ArrayList<>();
-                Vector<ChannelSftp.LsEntry> entries = sftp.ls("*");
+                Vector<ChannelSftp.LsEntry> entries;
+                try {
+                    entries = sftp.ls(joinSftp(safeDirectory, "*"));
+                } catch (SftpException missing) {
+                    if (missing.id == ChannelSftp.SSH_FX_NO_SUCH_FILE && smbFailure == null) return List.of();
+                    throw missing;
+                }
                 for (ChannelSftp.LsEntry entry : entries) {
                     if (!entry.getAttrs().isDir() && isSupportedArchive(entry.getFilename())) {
                         names.add(entry.getFilename());
@@ -295,10 +330,20 @@ public class SynologyArchiveReader {
 
         @Override
         public void delete(String relativeDirectory, String filename) throws Exception {
+            delete(relativeDirectory, filename, false);
+        }
+
+        @Override
+        public void deleteExact(String relativeDirectory, String filename) throws Exception {
+            delete(relativeDirectory, filename, true);
+        }
+
+        private void delete(String relativeDirectory, String filename, boolean exact) throws Exception {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
             validateFilename(filename);
             if (mountedStorage.isWritable()) {
-                mountedStorage.delete(safeDirectory, filename);
+                if (exact) mountedStorage.deleteExact(safeDirectory, filename);
+                else mountedStorage.delete(safeDirectory, filename);
                 return;
             }
             Exception smbFailure = null;
@@ -307,7 +352,10 @@ public class SynologyArchiveReader {
                 try {
                     ensureSmbConnected(smb);
                     String directory = joinSmb(normalizeSmbPath(smb.getPath()), safeDirectory);
-                    deleteViaSmb(directory, filename);
+                    if (exact) {
+                        String path = joinSmb(directory, filename);
+                        if (smbShare.fileExists(path)) smbShare.rm(path);
+                    } else deleteViaSmb(directory, filename);
                     return;
                 } catch (Exception failure) {
                     smbFailure = failure;
@@ -316,7 +364,13 @@ public class SynologyArchiveReader {
             }
             try {
                 ensureSftpConnected();
-                deleteViaSftp(safeDirectory, filename);
+                if (exact) {
+                    try {
+                        sftp.rm(joinSftp(safeDirectory, filename));
+                    } catch (SftpException missing) {
+                        if (missing.id != ChannelSftp.SSH_FX_NO_SUCH_FILE || smbFailure != null) throw missing;
+                    }
+                } else deleteViaSftp(safeDirectory, filename);
             } catch (Exception sftpFailure) {
                 throw combinedFailure("无法删除群晖归档 " + filename, smbFailure, sftpFailure);
             }
@@ -482,6 +536,23 @@ public class SynologyArchiveReader {
                 .findFirst();
     }
 
+    /** Series sync knows the real GID even when legacy database filenames contain no prefix. */
+    static Optional<String> selectSeriesArchive(String filename, Long gid, List<String> names) throws IOException {
+        if (gid == null) throw new IllegalArgumentException("画廊 GID 为空");
+        List<String> candidates = names.stream().filter(SynologyArchiveReader::isSupportedArchive)
+                .filter(name -> {
+                    Matcher prefix = GID_PREFIX.matcher(name);
+                    // An explicit different GID must never be accepted by title.
+                    if (prefix.find()) return prefix.group(1).equals(gid.toString());
+                    return name.equals(filename) || (!isSupportedArchive(filename)
+                            && (name.equals(filename + ".cbz") || name.equals(filename + ".zip")));
+                }).distinct().toList();
+        if (candidates.size() > 1) {
+            throw new IOException("GID " + gid + " 匹配到多个归档，请在群晖归档同步中人工核查: " + candidates);
+        }
+        return candidates.stream().findFirst();
+    }
+
     /** True when both supported archive names identify the same stable EH GID. */
     public static boolean isArchiveForSameGid(String requestedFilename, String candidateFilename) {
         if (requestedFilename == null || candidateFilename == null || !isSupportedArchive(candidateFilename)) {
@@ -542,6 +613,10 @@ public class SynologyArchiveReader {
         }
 
         List<String> listArchives() throws Exception;
+
+        List<String> listArchives(String relativeDirectory) throws Exception;
+
+        void deleteExact(String relativeDirectory, String filename) throws Exception;
 
         void rename(String sourceFilename, String targetFilename) throws Exception;
 
