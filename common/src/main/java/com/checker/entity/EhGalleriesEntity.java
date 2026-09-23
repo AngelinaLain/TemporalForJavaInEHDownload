@@ -3,6 +3,8 @@ package com.checker.entity;
 
 import com.baomidou.mybatisplus.annotation.*;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -14,6 +16,7 @@ import java.util.List;
  */
 @Data // 自动生成 get/set/toString
 @TableName(value = "eh_galleries", autoResultMap = true)
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class EhGalleriesEntity implements Serializable {
 
     /**
@@ -114,7 +117,9 @@ public class EhGalleriesEntity implements Serializable {
     private String seriesSyncSignature;
 
     /** Previous physical archive awaiting cleanup after a successful series publication. */
+    @JsonIgnore // Persistence-only journal; never send it in Temporal/API payloads.
     private String seriesCleanupPath;
+    @JsonIgnore
     private String seriesCleanupFilename;
 
     /**
