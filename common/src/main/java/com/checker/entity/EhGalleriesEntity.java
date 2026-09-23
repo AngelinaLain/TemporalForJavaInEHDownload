@@ -113,6 +113,10 @@ public class EhGalleriesEntity implements Serializable {
     /** Last collection/name/order signature written into ComicInfo.xml. */
     private String seriesSyncSignature;
 
+    /** Previous physical archive awaiting cleanup after a successful series publication. */
+    private String seriesCleanupPath;
+    private String seriesCleanupFilename;
+
     /**
      * 画廊直达链接
      */

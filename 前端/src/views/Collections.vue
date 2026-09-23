@@ -19,10 +19,11 @@
     <el-card v-if="syncStatus.running || syncStatus.finishedAt || syncStatus.lastError" class="sync-card" shadow="never">
       <div class="sync-line">
         <strong>Komga 系列同步</strong>
-        <span>{{ syncStatus.processed || 0 }} / {{ syncStatus.total || 0 }}，成功 {{ syncStatus.succeeded || 0 }}，失败 {{ syncStatus.failed || 0 }}</span>
+        <span>{{ syncStatus.processed || 0 }} / {{ syncStatus.total || 0 }}，成功 {{ syncStatus.succeeded || 0 }}，失败 {{ syncStatus.failed || 0 }}<template v-if="syncStatus.cleanupPending">，旧文件待清理 {{ syncStatus.cleanupPending }}</template></span>
       </div>
       <el-progress v-if="syncStatus.running" :percentage="syncPercent" :stroke-width="8" />
       <el-alert v-if="syncStatus.lastError" :title="syncStatus.lastError" type="warning" show-icon :closable="false" />
+      <p v-if="syncStatus.cleanupPending" class="hint">再次点击“应用到 Komga 系列”可重试旧文件清理，无需重新下载。</p>
     </el-card>
 
     <div class="workspace">
@@ -168,7 +169,7 @@ const editorVisible = ref(false)
 const editingId = ref(null)
 const saving = ref(false)
 const form = reactive({ name: '', description: '' })
-const syncStatus = reactive({ running: false, total: 0, processed: 0, succeeded: 0, failed: 0, currentGid: null, lastError: null, finishedAt: null })
+const syncStatus = reactive({ running: false, total: 0, processed: 0, succeeded: 0, failed: 0, cleanupPending: 0, currentGid: null, lastError: null, finishedAt: null })
 const syncPercent = computed(() => syncStatus.total ? Math.min(100, Math.round(syncStatus.processed * 100 / syncStatus.total)) : 0)
 const selected = computed(() => collections.value.find(item => item.id === selectedId.value))
 let syncTimer
