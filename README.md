@@ -1,16 +1,19 @@
 # GalleryImport
 
-GalleryImport 是一套基于 Temporal 的 EHentai 画廊自动化导入系统，覆盖画廊抓取、重复作品判断、下载、`ComicInfo.xml` 注入、群晖上传、Komga 扫描与元数据处理，并提供人工审核、运行监控和汇总邮件。
+GalleryImport 是一套基于 Temporal 的 EHentai 画廊自动化导入与归档管理系统，覆盖画廊抓取、多信号与视觉去重、断点下载、`ComicInfo.xml` 注入、群晖归档、Komga 入库与元数据处理，并提供人工审核、合集管理、归档反查、运行监控和汇总邮件。
 
 ## 主要能力
 
 - 按关键词抓取画廊，保存标题、原始标题、标签、评分、页数、简介等信息。
 - 使用候选桶与多信号评分判断同一作品的不同版本，灰区结果进入人工审核。
+- 使用抽样页感知哈希进行视觉复核，支持可恢复的历史指纹刷新与失败重试。
 - 默认由后端流式下载，支持断点续传、持久化缓存、ZIP/CRC 深度校验和下载进度展示。
 - 自动生成并注入 `ComicInfo.xml`，然后上传为 Komga 可识别的 `.cbz`。
 - 群晖上传优先使用 SMB/CIFS，失败时自动降级到 SFTP；也可切回 Download Station 模式。
 - 等待全部子工作流结束后只发送一封汇总邮件，不再每个子流程发送一封。
-- 提供画廊管理、重复项审核、操作入口、监控大盘和 Temporal 工作流管理页面。
+- 支持自定义画廊合集，并把合集同步为 Komga Series。
+- 支持扫描既有群晖归档，通过文件名和封面匹配数据库记录，人工确认后同步或重新下载。
+- 提供画廊管理、重复项审核、Komga 复核、归档同步、操作入口、监控大盘和 Temporal 工作流管理页面。
 
 ## 当前处理链路
 
@@ -23,6 +26,19 @@ GalleryImport 是一套基于 Temporal 的 EHentai 画廊自动化导入系统�
 7. 最外层父工作流等待所有已启动的子工作流结束，再根据数据库最终状态发送一封汇总邮件。
 
 Temporal 工作流使用版本标记兼容已存在的历史记录，升级后不需要终止旧流程。
+
+## 系统组成
+
+| 组件 | 默认端口 | 职责 |
+| --- | ---: | --- |
+| `main-service` | `8001` | REST API、Temporal 编排与 Activity、数据库迁移、下载/归档/Komga 集成 |
+| `scraper-worker` | `8081` | EHentai 搜索、详情抓取与下载地址解析 |
+| `ai-service` | `8082` | 简介生成和标签批量翻译 |
+| `前端` | `8002` | Vue 3 管理后台；Nginx 将 `/api` 反向代理到主服务 |
+| MySQL / Temporal / Nacos | 外部提供 | 持久化、可靠工作流与服务配置/发现 |
+| Redis | `6379` | JWT 黑名单与缓存；不可用时部分能力降级为进程内实现 |
+
+主链路为 `前端/API → main-service → Temporal → scraper-worker/main-service Activity → 群晖 → Komga`。AI 服务用于增强元数据，故障不会阻断归档下载和 Komga 确认。
 
 ## 下载实现
 
@@ -247,6 +263,15 @@ npm run build
 | V8 | 升级为候选检索、并发锁与多信号评分判重 |
 | V9 | 持久化 Komga 入库确认进度，增加失败复核与仅 Komga 补偿入口 |
 | V10 | 将历史 ENUM 状态列升级为 VARCHAR，兼容 Komga 等新增状态 |
+| V11 | 增加页面感知哈希、视觉匹配证据与历史刷新任务 |
+| V12 | 修复 Komga 确认次数字段的默认值 |
+| V13 | 持久化视觉指纹刷新失败记录 |
+| V14 | 增加自定义画廊合集与合集成员表 |
+| V15 | 扩展视觉刷新任务状态字段 |
+| V16 | 增加群晖归档同步审核记录 |
+| V17 | 增加归档封面匹配结果与状态 |
+| V18 | 记录实际归档路径与 Series 同步签名 |
+| V19 | 记录 Komga Series 清理路径和文件名 |
 
 迁移文件位于 `main-service/src/main/resources/db/migration/`。
 
@@ -256,26 +281,27 @@ npm run build
 
 - `/dashboard`：整体状态与趋势。
 - `/galleries`：画廊列表、状态、下载进度与详情。
+- `/collections`：创建合集、维护成员、查看匹配建议并同步 Komga Series。
 - `/dedupe-reviews`：重复候选人工审核。
+- `/visual-dedup`：视觉指纹覆盖率、历史刷新状态与失败重试。
+- `/archive-sync`：群晖存量归档扫描、封面匹配、同步与重新下载。
 - `/komga-import-reviews`：Komga 入库失败查看与仅 Komga 补偿。
 - `/operations`：抓取、重试等操作入口。
 - `/monitoring`：Grafana 监控大盘。
 - `/workflows`：Temporal 工作流列表、历史和终止操作。
 
-## 主要接口
+## API 概览
 
-### 重复项审核
+主服务 API 统一位于 `/api`，除 `/api/auth/login` 外均要求 `Authorization: Bearer <token>`；业务响应使用 `{ code, msg, data, timestamp }` 包装。接口按功能分为：
 
-- `GET /api/dedupe-reviews`：分页查询审核记录，可按结论过滤。
-- `POST /api/dedupe-reviews/{id}/resolve`：提交 `MATCH` 或 `DIFFERENT`，必要时派发下载工作流。
+- 认证：登录、注销与 Token 失效。
+- 自动化：抓取导入、失败重试、邮件测试和 Komga 批处理。
+- 数据查询：Dashboard、下载进度、画廊分页筛选、标签查询。
+- 人工处置：去重审核、Komga 入库复核、视觉刷新失败重试、归档同步审核。
+- 合集：合集 CRUD、成员维护、智能建议、Komga Series 同步。
+- 运维：Temporal 工作流树、事件历史与终止操作。
 
-### Temporal 监控
-
-- `GET /api/temporal/monitor/workflows`：查询工作流。
-- `GET /api/temporal/monitor/workflows/{workflowId}/history`：查询执行历史。
-- `POST /api/temporal/monitor/workflows/{workflowId}/terminate`：终止工作流。
-
-完整接口说明参见 [API_文档.md](./API_文档.md)。
+完整的请求参数、请求体、响应字段、错误码和全部端点索引参见 [API_文档.md](./API_文档.md)。Spring Boot 还公开 `/actuator/health`、`/actuator/info` 和 `/actuator/prometheus`；其他 Actuator 端点需要管理员 JWT。
 
 ## 邮件通知
 
