@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -52,5 +53,18 @@ class MountedArchiveStorageTest {
 
         assertThrows(IllegalArgumentException.class,
                 () -> storage.delete("../outside", "[1] file.cbz"));
+    }
+
+    @Test
+    void missingDirectoryErrorExplainsWhatWasNotFound() {
+        EhNetworkConfig config = new EhNetworkConfig();
+        config.getArchiveStorage().setMountPath(tempDir.toString());
+        MountedArchiveStorage storage = new MountedArchiveStorage(config);
+
+        NoSuchFileException failure = assertThrows(NoSuchFileException.class,
+                () -> storage.read("missing-series", "[42] title.cbz", input -> null));
+
+        assertTrue(failure.getMessage().contains("归档目录不存在"));
+        assertTrue(failure.getMessage().contains("missing-series"));
     }
 }
