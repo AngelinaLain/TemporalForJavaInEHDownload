@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -110,6 +111,27 @@ class VisualHistoryRefreshServiceTest {
         verify(archiveReader, times(1)).openSession();
         verify(archiveSession, times(2)).read(nullable(String.class), anyString(), any());
         verify(archiveSession).close();
+    }
+
+    @Test
+    void fallsBackToArchiveRootByGidWhenRecordedSeriesDirectoryIsMissing() throws Exception {
+        EhGalleriesEntity gallery = gallery(303L, "old title.cbz");
+        gallery.setStoragePath("missing-series");
+        when(galleriesMapper.selectList(any())).thenReturn(List.of(gallery));
+        when(fingerprintService.hasArchiveFingerprints(303L)).thenReturn(false);
+        when(archiveSession.read(org.mockito.ArgumentMatchers.eq("missing-series"), anyString(), any()))
+                .thenThrow(new NoSuchFileException("/data/komga-library/missing-series"));
+        when(archiveSession.listArchives("")).thenReturn(List.of("[303] actual title.cbz"));
+        when(archiveSession.read(org.mockito.ArgumentMatchers.eq(""),
+                org.mockito.ArgumentMatchers.eq("[303] actual title.cbz"), any())).thenReturn(1);
+
+        VisualRefreshJobEntity result = service.start(false);
+
+        assertEquals("COMPLETED", result.getStatus());
+        assertEquals(1, result.getSucceeded());
+        verify(archiveSession).read(org.mockito.ArgumentMatchers.eq(""),
+                org.mockito.ArgumentMatchers.eq("[303] actual title.cbz"),
+                org.mockito.ArgumentMatchers.any());
     }
 
     @Test

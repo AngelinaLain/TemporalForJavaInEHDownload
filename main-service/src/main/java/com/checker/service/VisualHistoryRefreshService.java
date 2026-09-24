@@ -8,17 +8,23 @@ import com.checker.entity.VisualRefreshJobEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.mapper.VisualRefreshFailureMapper;
 import com.checker.mapper.VisualRefreshJobMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
+@Slf4j
 public class VisualHistoryRefreshService {
     private final EhGalleriesMapper galleriesMapper;
     private final VisualRefreshJobMapper jobMapper;
@@ -121,21 +127,22 @@ public class VisualHistoryRefreshService {
             job.setStartedAt(new Date());
             job.setTotal(targets.size());
             jobMapper.updateById(job);
+            log.info("视觉指纹刷新开始, jobId: {}, force: {}, total: {}", jobId, force, targets.size());
 
             try (SynologyArchiveReader.ArchiveSession archiveSession = archiveReader.openSession()) {
                 for (EhGalleriesEntity gallery : targets) {
                     job.setCurrentGid(gallery.getGid());
                     try {
-                        int inserted = archiveSession.read(gallery.getStoragePath(), gallery.getFilename(), input ->
-                                fingerprintService.replace(gallery.getGid(),
-                                        extractor.extract(input, gallery.getGid(), gallery.getPageCount())));
+                        int inserted = refreshGallery(archiveSession, gallery);
                         if (inserted <= 0) throw new IllegalStateException("归档中没有可解码的采样图片");
                         reviewService.refreshVisualEvidenceForGid(gallery.getGid());
                         job.setSucceeded(job.getSucceeded() + 1);
                     } catch (Exception failure) {
-                        String error = truncate(failure.getMessage());
+                        String error = truncate(describe(failure));
                         job.setFailed(job.getFailed() + 1);
                         job.setLastError("GID " + gallery.getGid() + ": " + error);
+                        log.warn("视觉指纹刷新失败, jobId: {}, GID: {}, storagePath: {}, filename: {}, error: {}",
+                                jobId, gallery.getGid(), gallery.getStoragePath(), gallery.getFilename(), error, failure);
                         VisualRefreshFailureEntity persistedFailure = new VisualRefreshFailureEntity();
                         persistedFailure.setJobId(jobId);
                         persistedFailure.setGid(gallery.getGid());
@@ -147,15 +154,67 @@ public class VisualHistoryRefreshService {
                 }
             }
             job.setStatus(job.getFailed() > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED");
+            log.info("视觉指纹刷新完成, jobId: {}, status: {}, total: {}, succeeded: {}, failed: {}",
+                    jobId, job.getStatus(), job.getTotal(), job.getSucceeded(), job.getFailed());
         } catch (Exception fatal) {
             job.setStatus("FAILED");
-            job.setLastError(truncate(fatal.getMessage()));
+            job.setLastError(truncate(describe(fatal)));
+            log.error("视觉指纹刷新任务异常终止, jobId: {}", jobId, fatal);
         } finally {
             job.setCurrentGid(null);
             job.setFinishedAt(new Date());
             jobMapper.updateById(job);
             running.set(false);
         }
+    }
+
+    private int refreshGallery(SynologyArchiveReader.ArchiveSession archiveSession,
+                               EhGalleriesEntity gallery) throws Exception {
+        String primaryDirectory = normalizeDirectory(gallery.getStoragePath());
+        try {
+            return readFingerprints(archiveSession, primaryDirectory, gallery.getFilename(), gallery);
+        } catch (NoSuchFileException missingPrimary) {
+            LinkedHashSet<String> fallbackDirectories = new LinkedHashSet<>();
+            fallbackDirectories.add(normalizeDirectory(gallery.getSeriesCleanupPath()));
+            fallbackDirectories.add("");
+            fallbackDirectories.remove(primaryDirectory);
+
+            for (String directory : fallbackDirectories) {
+                Optional<String> resolved = SynologyArchiveReader.selectSeriesArchive(
+                        gallery.getFilename(), gallery.getGid(), archiveSession.listArchives(directory));
+                if (resolved.isEmpty()) continue;
+                log.warn("视觉指纹归档路径已失效，使用回退路径, GID: {}, recordedPath: {}, actualPath: {}, filename: {}",
+                        gallery.getGid(), primaryDirectory, directory, resolved.get());
+                return readFingerprints(archiveSession, directory, resolved.get(), gallery);
+            }
+            throw new IOException("归档位置已失效且回退查找失败（记录目录: "
+                    + displayDirectory(primaryDirectory) + "，文件: " + gallery.getFilename()
+                    + "，已检查旧文件目录和归档根目录）", missingPrimary);
+        }
+    }
+
+    private int readFingerprints(SynologyArchiveReader.ArchiveSession archiveSession,
+                                 String directory, String filename,
+                                 EhGalleriesEntity gallery) throws Exception {
+        return archiveSession.read(directory, filename, input -> fingerprintService.replace(gallery.getGid(),
+                extractor.extract(input, gallery.getGid(), gallery.getPageCount())));
+    }
+
+    private static String normalizeDirectory(String value) {
+        return value == null ? "" : value.trim().replace('\\', '/');
+    }
+
+    private static String displayDirectory(String value) {
+        return value == null || value.isBlank() ? "<归档根目录>" : value;
+    }
+
+    private static String describe(Throwable failure) {
+        if (failure == null) return "unknown";
+        String message = failure.getMessage();
+        if (message != null && !message.isBlank()) return message;
+        Throwable cause = failure.getCause();
+        if (cause != null && cause != failure) return describe(cause);
+        return failure.getClass().getSimpleName();
     }
 
     private VisualRefreshJobEntity newJob(boolean force) {

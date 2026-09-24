@@ -49,6 +49,13 @@ mybatis-plus:
 server:
   port: 8001
 
+# Temporal 的任务获取使用长轮询。空闲队列或短暂网络抖动达到约 70 秒时，SDK 会自动
+# 重试并以 INFO 输出完整 DEADLINE_EXCEEDED 堆栈。生产默认隐藏这类预期日志；其他
+# Poller 故障仍以 WARN 输出。排查 Temporal 网络时可临时设置为 INFO。
+logging:
+  level:
+    io.temporal.internal.worker.BasePoller: ${TEMPORAL_POLLER_LOG_LEVEL:WARN}
+
 # 安全配置
 security:
   jwt:
