@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.color.ColorSpace;
+import java.awt.color.ICC_Profile;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBuffer;
 import java.awt.image.Raster;
@@ -60,6 +62,32 @@ class GalleryVisualMatchingTest {
         assertEquals(0xff0000, converted.getRGB(0, 0) & 0xffffff);
     }
 
+    @Test
+    void ignoresIccProfileWhoseComponentsDoNotMatchJpegRaster() throws Exception {
+        BufferedImage grayscale = new BufferedImage(80, 120, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D graphics = grayscale.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, 80, 120);
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect(10, 20, 60, 70);
+        graphics.dispose();
+        ByteArrayOutputStream encoded = new ByteArrayOutputStream();
+        ImageIO.write(grayscale, "jpeg", encoded);
+
+        byte[] malformed = withIccProfile(encoded.toByteArray(),
+                ICC_Profile.getInstance(ColorSpace.CS_sRGB).getData());
+        byte[] sanitized = PerceptualHash.removeJpegIccProfile(malformed);
+
+        GalleryPageFingerprint fingerprint = PerceptualHash.fingerprint(
+                new ByteArrayInputStream(malformed), 3L, 0, "broken-icc.jpg", "TEST");
+
+        assertNotNull(sanitized);
+        assertTrue(sanitized.length < malformed.length);
+        assertNotNull(fingerprint);
+        assertEquals(80, fingerprint.getWidth());
+        assertEquals(120, fingerprint.getHeight());
+    }
+
     private GalleryPageFingerprint hashDrawing(Long gid, int width, int height) throws Exception {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = image.createGraphics();
@@ -72,6 +100,24 @@ class GalleryVisualMatchingTest {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         ImageIO.write(image, "png", bytes);
         return PerceptualHash.fingerprint(new ByteArrayInputStream(bytes.toByteArray()), gid, 0, "page.png", "TEST");
+    }
+
+    private byte[] withIccProfile(byte[] jpeg, byte[] profile) {
+        byte[] signature = "ICC_PROFILE\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        int payloadLength = signature.length + 2 + profile.length;
+        int segmentLength = payloadLength + 2;
+        ByteArrayOutputStream output = new ByteArrayOutputStream(jpeg.length + segmentLength + 2);
+        output.write(jpeg, 0, 2);
+        output.write(0xff);
+        output.write(0xe2);
+        output.write(segmentLength >>> 8);
+        output.write(segmentLength & 0xff);
+        output.writeBytes(signature);
+        output.write(1);
+        output.write(1);
+        output.writeBytes(profile);
+        output.write(jpeg, 2, jpeg.length - 2);
+        return output.toByteArray();
     }
 
     private List<GalleryPageFingerprint> pages(Long gid, int start, int count, int width, int height) {

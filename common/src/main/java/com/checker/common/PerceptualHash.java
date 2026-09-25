@@ -10,8 +10,12 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Iterator;
 
@@ -21,6 +25,7 @@ public final class PerceptualHash {
     private static final int HASH_SIZE = 8;
     private static final int DCT_SIZE = 32;
     private static final int MAX_DECODE_DIMENSION = 1600;
+    private static final byte[] JPEG_ICC_SIGNATURE = "ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII);
 
     private PerceptualHash() {
     }
@@ -77,7 +82,10 @@ public final class PerceptualHash {
                 ImageReadParam param = reader.getDefaultReadParam();
                 param.setSourceSubsampling(subsampling, subsampling, 0, 0);
                 try {
-                    return new DecodedImage(reader.read(0, param), width, height);
+                    // Normalize while the fallback can still rewind the reader. Some malformed
+                    // JPEGs decode to a lazy color-managed image and only throw when drawImage()
+                    // later touches their mismatched ICC profile.
+                    return new DecodedImage(rgbImage(reader.read(0, param)), width, height);
                 } catch (IllegalArgumentException colorSpaceFailure) {
                     // Some JPEGs contain an ICC profile whose component count does not match
                     // their CMYK/YCCK raster. Read raw samples to bypass ImageIO color conversion.
@@ -89,6 +97,9 @@ public final class PerceptualHash {
                     try {
                         return new DecodedImage(rgbFromRaster(reader.readRaster(0, rasterParam)), width, height);
                     } catch (IOException | RuntimeException fallbackFailure) {
+                        DecodedImage withoutBrokenProfile = retryWithoutJpegIccProfile(
+                                imageInput, colorSpaceFailure, fallbackFailure);
+                        if (withoutBrokenProfile != null) return withoutBrokenProfile;
                         fallbackFailure.addSuppressed(colorSpaceFailure);
                         throw fallbackFailure;
                     }
@@ -97,6 +108,91 @@ public final class PerceptualHash {
                 reader.dispose();
             }
         }
+    }
+
+    private static BufferedImage rgbImage(BufferedImage source) {
+        if (source == null) return null;
+        if (source.getType() == BufferedImage.TYPE_INT_RGB) return source;
+        BufferedImage rgb = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = rgb.createGraphics();
+        try {
+            graphics.drawImage(source, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+        return rgb;
+    }
+
+    /**
+     * Some malformed JPEGs attach an RGB ICC profile to a grayscale/CMYK raster. The JDK JPEG
+     * reader may then fail both normal and raw-raster reads before callers can inspect the pixels.
+     * Retry the same encoded image without APP2 ICC_PROFILE segments; other JPEG metadata and the
+     * compressed scan remain byte-for-byte unchanged.
+     */
+    private static DecodedImage retryWithoutJpegIccProfile(ImageInputStream imageInput,
+                                                            Throwable colorSpaceFailure,
+                                                            Throwable rasterFailure) throws IOException {
+        byte[] encoded = readAll(imageInput);
+        byte[] sanitized = removeJpegIccProfile(encoded);
+        if (sanitized == null) return null;
+        try {
+            return readBounded(new ByteArrayInputStream(sanitized));
+        } catch (IOException | RuntimeException retryFailure) {
+            retryFailure.addSuppressed(colorSpaceFailure);
+            retryFailure.addSuppressed(rasterFailure);
+            throw retryFailure;
+        }
+    }
+
+    private static byte[] readAll(ImageInputStream input) throws IOException {
+        input.seek(0);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[32 * 1024];
+        int read;
+        while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+        return output.toByteArray();
+    }
+
+    /** Returns {@code null} when the input is not a JPEG or contains no ICC APP2 segment. */
+    static byte[] removeJpegIccProfile(byte[] jpeg) {
+        if (jpeg == null || jpeg.length < 4 || (jpeg[0] & 0xff) != 0xff || (jpeg[1] & 0xff) != 0xd8) {
+            return null;
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream(jpeg.length);
+        output.write(jpeg, 0, 2);
+        int position = 2;
+        boolean removed = false;
+        while (position < jpeg.length) {
+            int markerStart = position;
+            if ((jpeg[position] & 0xff) != 0xff) return null;
+            while (position < jpeg.length && (jpeg[position] & 0xff) == 0xff) position++;
+            if (position >= jpeg.length) return null;
+            int marker = jpeg[position++] & 0xff;
+            if (marker == 0xda || marker == 0xd9) {
+                output.write(jpeg, markerStart, jpeg.length - markerStart);
+                return removed ? output.toByteArray() : null;
+            }
+            if (marker == 0x01 || marker == 0xd8 || marker >= 0xd0 && marker <= 0xd7) {
+                output.write(jpeg, markerStart, position - markerStart);
+                continue;
+            }
+            if (position + 2 > jpeg.length) return null;
+            int segmentLength = (jpeg[position] & 0xff) << 8 | jpeg[position + 1] & 0xff;
+            int segmentEnd = position + segmentLength;
+            if (segmentLength < 2 || segmentEnd > jpeg.length) return null;
+            int payloadStart = position + 2;
+            boolean icc = marker == 0xe2
+                    && payloadStart + JPEG_ICC_SIGNATURE.length <= segmentEnd
+                    && Arrays.equals(jpeg, payloadStart, payloadStart + JPEG_ICC_SIGNATURE.length,
+                    JPEG_ICC_SIGNATURE, 0, JPEG_ICC_SIGNATURE.length);
+            if (icc) {
+                removed = true;
+            } else {
+                output.write(jpeg, markerStart, segmentEnd - markerStart);
+            }
+            position = segmentEnd;
+        }
+        return removed ? output.toByteArray() : null;
     }
 
     static BufferedImage rgbFromRaster(Raster raster) {

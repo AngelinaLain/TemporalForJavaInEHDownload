@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
@@ -101,6 +102,9 @@ public class MountedArchiveStorage {
 
     private Path resolveExistingArchive(String relativeDirectory, String filename) throws Exception {
         Path directory = resolveDirectory(relativeDirectory);
+        if (!Files.isDirectory(directory)) {
+            throw new NoSuchFileException(directory.toString(), null, "归档目录不存在");
+        }
         Path exact = resolveFilename(directory, filename);
         if (Files.isRegularFile(exact)) return exact;
 
@@ -109,7 +113,8 @@ public class MountedArchiveStorage {
             names = entries.filter(Files::isRegularFile).map(path -> path.getFileName().toString()).toList();
         }
         String resolved = SynologyArchiveReader.selectGidArchive(filename, names)
-                .orElseThrow(() -> new java.nio.file.NoSuchFileException(exact.toString()));
+                .orElseThrow(() -> new NoSuchFileException(
+                        exact.toString(), null, "归档文件不存在，且未找到同 GID 的归档"));
         return resolveFilename(directory, resolved);
     }
 

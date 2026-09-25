@@ -1,5 +1,11 @@
 server:
   port: 8081
+
+# Temporal 空闲长轮询超时会自动重试；默认不输出预期的 INFO 级完整堆栈。
+logging:
+  level:
+    io.temporal.internal.worker.BasePoller: ${TEMPORAL_POLLER_LOG_LEVEL:WARN}
+
 spring:
   config:
     import: "optional:file:.env[.properties],optional:file:../.env[.properties]"

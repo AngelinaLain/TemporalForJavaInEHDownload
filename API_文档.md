@@ -1,106 +1,88 @@
-# TemporalForJavaInEHDow REST API 文档
+# GalleryImport REST API 文档
 
-## 概述
+本文档以当前控制器源码为准，覆盖 `main-service` 的全部 REST 端点以及 `ai-service` 的内部端点。
 
-- **Base URL**：`http://127.0.0.1:8001`
-- **认证方式**：JWT Bearer Token（`/api/auth/login` 除外）
-- **响应格式**：统一 JSON 包装
+## 1. 约定
 
-### 统一响应结构
+### 1.1 地址与认证
 
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": { },
-  "timestamp": 1700000000000
-}
-```
+- 主服务：`http://127.0.0.1:8001`
+- AI 服务：`http://127.0.0.1:8082`
+- 管理前端通过同源 `/api` 访问主服务。
+- `POST /api/auth/login` 无需认证；主服务其他业务端点均需管理员 JWT。
+- 请求头：`Authorization: Bearer <jwt-token>`
+- JSON 请求应携带：`Content-Type: application/json`
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `code` | Integer | 状态码，见下表 |
-| `msg` | String | 提示消息 |
-| `data` | Any | 业务数据，无数据时为 `null` |
-| `timestamp` | Long | 服务器响应时间戳（毫秒） |
+### 1.2 主服务响应
 
-### 状态码说明
-
-| code | 含义 |
-| --- | --- |
-| 200 | 操作成功 |
-| 400 | 参数校验失败 |
-| 401 | 未登录或 Token 已过期 |
-| 403 | 无权限 |
-| 500 | 系统繁忙 |
-
----
-
-## 一、认证
-
-### 登录
-
-`POST /api/auth/login`
-
-不需要认证 Header。
-
-**请求体：**
-
-```json
-{
-  "username": "admin",
-  "password": "your_password"
-}
-```
-
-**成功响应：**
+主服务使用统一业务响应。除 Spring Security 在认证/授权失败时直接返回 HTTP `401/403` 外，控制器中的业务错误通常仍是 HTTP `200`，调用方应以响应体 `code` 判断成功与否。
 
 ```json
 {
   "code": 200,
   "msg": "操作成功",
-  "data": {
-    "token": "<jwt-token>",
-    "username": "admin"
-  },
-  "timestamp": 1700000000000
+  "data": {},
+  "timestamp": 1790123456789
 }
 ```
 
-**失败响应（用户名或密码错误）：**
+| `code` | 含义 | 常见场景 |
+| ---: | --- | --- |
+| `200` | 成功 | 请求已完成或异步任务已启动 |
+| `400` | 参数错误 | 状态、筛选值、请求体不合法 |
+| `401` | 未认证 | 凭据错误、Token 缺失/过期/已注销 |
+| `403` | 无权限 | 当前身份不是管理员 |
+| `404` | 资源不存在 | GID 或审核对象不存在 |
+| `409` | 状态冲突 | 任务正在运行、记录已被其他任务认领 |
+| `429` | 请求过多 | 登录失败次数超限 |
+| `500` | 服务错误 | Temporal、Komga、数据库等下游调用失败 |
+
+分页接口会把 `page` 修正为至少 `1`，把 `size` 限制在 `1–100`。
+
+### 1.3 快速调用
+
+```bash
+curl -X POST http://127.0.0.1:8001/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"your_password"}'
+
+curl http://127.0.0.1:8001/api/dashboard/stats \
+  -H "Authorization: Bearer <jwt-token>"
+```
+
+## 2. 认证
+
+### `POST /api/auth/login`
+
+请求体：
 
 ```json
-{
-  "code": 401,
-  "msg": "用户名或密码错误",
-  "data": null,
-  "timestamp": 1700000000000
-}
+{ "username": "admin", "password": "your_password" }
 ```
 
-获取到 token 后，后续所有请求需在 Header 中携带：
+`username` 必填且最长 64 字符，`password` 必填且最长 256 字符。成功时 `data` 为：
 
-```http
-Authorization: Bearer <jwt-token>
+```json
+{ "token": "<jwt-token>", "username": "admin" }
 ```
 
----
+连续失败可能返回业务码 `429`，封禁周期为 15 分钟。
 
-## 二、自动化工作流
+### `POST /api/auth/logout`
 
-### 2.1 启动自动化工作流
+将当前 JWT 的 JTI 加入黑名单，使 Token 立即失效。Redis 不可用时使用本地缓存降级。无需请求体。
 
-`POST /api/temporal/eh/start`
+## 3. 自动化与 Komga 批处理
 
-按搜索条件抓取 EHentai 画廊并推送到 Synology 下载。
+### `POST /api/temporal/eh/start`
 
-**请求体：**
+启动完整抓取和导入工作流。请求体：
 
 ```json
 {
   "keyword": "language:chinese",
   "filterCats": 0,
-  "minimumRating": 2,
+  "minimumRating": 1,
   "language": "chinese",
   "pageAtLeast": 10,
   "pageAtMost": 100,
@@ -112,123 +94,23 @@ Authorization: Bearer <jwt-token>
 }
 ```
 
-**字段说明：**
+只有 `keyword` 必填；其余字段可省略并采用示例中的默认值，页数上下限默认为空。成功时返回 `workflowId` 和 `runId`。
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `keyword` | String | 是 | — | EHentai 搜索关键词（支持标签语法，如 `language:chinese`） |
-| `filterCats` | Integer | 否 | `0` | 分类排除码 `f_cats`，`0` 表示不排除 |
-| `minimumRating` | Integer | 否 | `1` | 最低星级过滤 `f_srdd`，`1` 表示不过滤 |
-| `language` | String | 否 | — | 语言代码，如 `chinese`、`japanese` |
-| `pageAtLeast` | Integer | 否 | — | 最少页数 `f_spf` |
-| `pageAtMost` | Integer | 否 | — | 最多页数 `f_spt` |
-| `searchExpungedGalleries` | Boolean | 否 | `false` | 是否搜索已删除的画廊 `f_sh` |
-| `showOnlyWithTorrents` | Boolean | 否 | `false` | 仅显示有种子的画廊 `f_sto` |
-| `disableLanguageFilter` | Boolean | 否 | `false` | 禁用语言过滤 `f_sfl` |
-| `disableUploaderFilter` | Boolean | 否 | `false` | 禁用上传者过滤 `f_sfu` |
-| `disableTagsFilter` | Boolean | 否 | `false` | 禁用标签过滤 `f_sft` |
+### `POST /api/temporal/eh/retry-failed`
 
-**成功响应：**
+异步重试数据库中的下载失败任务。无请求体，返回 `workflowId` 和 `runId`。
+
+### `POST /api/temporal/eh/test-email`
+
+发送测试邮件。请求体可省略，也可传：
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "workflowId": "eh-auto-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "runId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  },
-  "timestamp": 1700000000000
-}
+{ "subject": "邮件测试", "content": "测试内容" }
 ```
 
-**curl 示例：**
+### `POST /api/temporal/eh/collections/build-by-tags`
 
-```bash
-curl -X POST http://127.0.0.1:8001/api/temporal/eh/start \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <jwt-token>" \
-  -d '{
-    "keyword": "language:chinese",
-    "minimumRating": 3,
-    "pageAtLeast": 20
-  }'
-```
-
----
-
-### 2.2 重试失败任务
-
-`POST /api/temporal/eh/retry-failed`
-
-对数据库中所有 `download_status = '下载失败'` 的画廊重新触发下载工作流。
-
-**无请求体。**
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "workflowId": "eh-retry-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-    "runId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  },
-  "timestamp": 1700000000000
-}
-```
-
-**curl 示例：**
-
-```bash
-curl -X POST http://127.0.0.1:8001/api/temporal/eh/retry-failed \
-  -H "Authorization: Bearer <jwt-token>"
-```
-
----
-
-### 2.3 测试邮件通知
-
-`POST /api/temporal/eh/test-email`
-
-直接调用 Microsoft Graph API 发送测试邮件，用于验证通知配置是否正确。
-
-**请求体（可选）：**
-
-```json
-{
-  "subject": "EHentai 自动化 - 邮件测试",
-  "content": "如果收到此邮件，说明 Microsoft E5 Graph API 凭证配置正确。"
-}
-```
-
-不传请求体时使用内置默认主题和内容。
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "message": "发送邮件指令已执行，请查看控制台日志以及您的管理员邮箱接收情况。"
-  },
-  "timestamp": 1700000000000
-}
-```
-
----
-
-## 三、Komga 管理
-
-### 3.1 构建 Komga 合集
-
-`POST /api/temporal/eh/collections/build-by-tags`
-
-根据指定的 EHentai 标签，从数据库中筛选画廊并在 Komga 中创建或更新对应合集。
-
-**请求体：**
+按标签创建或更新 Komga 合集。该端点是旧的“按标签直接构建”能力；自定义合集管理请使用第 9 节接口。
 
 ```json
 {
@@ -238,399 +120,265 @@ curl -X POST http://127.0.0.1:8001/api/temporal/eh/retry-failed \
 }
 ```
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `collectionName` | String | 是 | — | Komga 合集名称 |
-| `tags` | String[] | 是 | — | EHentai 英文标签列表（格式：`namespace:tag`） |
-| `matchAllTags` | Boolean | 否 | `false` | `false`：满足任意一个标签即加入；`true`：必须包含所有标签 |
+`collectionName` 和非空 `tags` 必填；`matchAllTags=false` 表示任一标签命中即可。
 
-**成功响应：**
+### Komga 维护端点
 
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": "合集 [纯爱 / Vanilla] 构建指令已接收并处理成功",
-  "timestamp": 1700000000000
-}
-```
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/temporal/eh/sync-tags` | 后台同步数据库标签到 Komga Book 与 Series |
+| POST | `/api/temporal/eh/batch-refresh-metadata` | 后台刷新全部已入库书籍的 Komga 元数据 |
+| POST | `/api/temporal/eh/batch-update-filesize` | 后台补齐缺失或为 0 的 `file_size_mb` |
 
-**参数校验失败响应：**
+以上三个端点均无请求体，并在后台异步执行。
 
-```json
-{
-  "code": 500,
-  "msg": "合集名称和Tags不能为空",
-  "data": null,
-  "timestamp": 1700000000000
-}
-```
+## 4. Dashboard 与画廊查询
 
----
+### 统计和状态
 
-### 3.2 同步标签到 Komga
+| 方法 | 路径 | `data` 说明 |
+| --- | --- | --- |
+| GET | `/api/dashboard/stats` | `total`、`downloaded`、`imported`、`failed`、`pending`、`totalSizeGb` |
+| GET | `/api/dashboard/status-distribution` | `[{name, value}]` 状态分布 |
+| GET | `/api/dashboard/download-progress` | 下载中项目的 `gid`、`title`、字节数、大小和百分比 |
+| GET | `/api/dashboard/db-status` | `connected`、`total`、`totalSizeGb`，失败时含 `error` |
+| GET | `/api/dashboard/file-size-distribution` | `{labels, data}` 文件大小分桶 |
+| GET | `/api/dashboard/crawl-timeline` | `{dates, counts}` 最近 60 个有数据日期的抓取量 |
+| GET | `/api/dashboard/tag-stats` | Top 20 标签命名空间统计 `[{name,nameCn,value}]` |
 
-`POST /api/temporal/eh/sync-tags`
+### `GET /api/dashboard/galleries`
 
-将数据库中存储的 EHentai 标签强制覆盖同步到 Komga 的 Book 和 Series 元数据。异步执行，立即返回。
+分页查询画廊。
 
-**无请求体。**
+| Query 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `page` | `1` | 页码 |
+| `size` | `20` | 每页数量，最大 100 |
+| `status` | 空 | 英文枚举或中文状态名 |
+| `keyword` | 空 | 标题或文件名模糊搜索 |
+| `tag` | 空 | 完整标签精确匹配 |
+| `dedupe` | `preferred` | `preferred`、`duplicates` 或 `all` |
+| `sortBy` | `crawledAt` | `crawledAt`、`gid`、`title`、`downloadStatus`、`fileSizeMb` |
+| `sortOrder` | `desc` | `asc` 或 `desc`；其他值按降序处理 |
 
-**成功响应：**
+响应 `data` 是 MyBatis-Plus 分页结构，主要字段为 `records`、`total`、`size`、`current`、`pages`。支持的状态为：
 
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": "同步任务已在后台启动，请查看控制台日志！",
-  "timestamp": 1700000000000
-}
-```
+`PENDING`、`DOWNLOADING`、`DOWNLOADED`、`WAITING_KOMGA`、`PARTIAL`、`DOWNLOAD_FAILED`、`KOMGA_IMPORT_FAILED`、`IMPORTED`、`REVIEW_REQUIRED`、`BLOCKED`、`IGNORED`。
 
----
+### 搜索和标签
 
-### 3.3 批量刷新 Komga 元数据
+| 方法 | 路径 | 参数/说明 |
+| --- | --- | --- |
+| GET | `/api/dashboard/suggestions` | `q` 必填；`limit=10`，最大 30；`type=all|title|tag` |
+| GET | `/api/dashboard/tag-translations` | 返回完整的英文标签到中文名称映射 |
+| POST | `/api/dashboard/tag-translations/refresh` | 刷新标签翻译缓存，无请求体 |
+| GET | `/api/dashboard/tag-detail` | `tag` 必填；返回 `tag`、`name`、`intro` |
 
-`POST /api/temporal/eh/batch-refresh-metadata`
+## 5. 重复项人工审核
 
-对所有已入库书籍触发 Komga 元数据刷新。异步执行，立即返回。
+### `GET /api/dedupe-reviews`
 
-**无请求体。**
+Query：`page=1`、`size=20`、`decision=PENDING`。`decision` 可使用 `PENDING`、`MATCH`、`DIFFERENT`、`VARIANT` 或 `ALL`。
 
-**成功响应：**
+响应 `data` 包含 `records`、`total`、`page`、`size`、`pendingCount`。记录包含匹配分数/原因、视觉证据、推荐 GID、审核信息，以及完整的 `left`、`right` 画廊对象。
 
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": "批量刷新任务已在后台启动！请查看控制台日志获取进度。",
-  "timestamp": 1700000000000
-}
-```
+### `POST /api/dedupe-reviews/{id}/resolve`
 
----
-
-### 3.4 批量更新文件大小
-
-`POST /api/temporal/eh/batch-update-filesize`
-
-补全数据库中 `file_size_mb` 为空或为 `0` 的记录。异步执行，立即返回。
-
-**无请求体。**
-
-**成功响应：**
+判定为同一作品：
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": "批量更新文件大小任务已在后台启动！请查看控制台日志获取进度。",
-  "timestamp": 1700000000000
-}
+{ "decision": "MATCH", "preferredGid": 123 }
 ```
 
----
-
-## 四、Dashboard 统计看板
-
-> 所有 Dashboard 接口均需 JWT 认证。
-
-### 4.1 统计概览
-
-`GET /api/dashboard/stats`
-
-返回画廊总数、各状态数量及总存储大小。
-
-**成功响应：**
+判定为不同作品：
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "total": 1500,
-    "downloaded": 800,
-    "imported": 600,
-    "failed": 30,
-    "pending": 70,
-    "totalSizeGb": 215.43
-  },
-  "timestamp": 1700000000000
-}
+{ "decision": "DIFFERENT" }
 ```
 
----
+也可提交 `{"decision":"VARIANT"}`，表示相关但应保留为独立版本。`MATCH` 时 `preferredGid` 必须是审核记录左右两侧之一。响应包含 `reviewId`、`decision`、`dispatchGids`，以及实际启动的 `workflows`。
 
-### 4.2 下载状态分布
+## 6. Komga 入库复核
 
-`GET /api/dashboard/status-distribution`
+### `GET /api/komga-import-reviews`
 
-返回各 `download_status` 的数量，用于饼图展示。只返回数量 > 0 的状态。
+Query：`page=1`、`size=20`、`status=KOMGA_IMPORT_FAILED`。`status` 支持 `KOMGA_IMPORT_FAILED`、`WAITING_KOMGA`、`DOWNLOADED` 或 `ALL`，也接受对应中文状态。
 
-**成功响应：**
+响应包含 `records`、`total`、`page`、`size`、`failedCount`、`waitingCount`。记录字段包括 `gid`、`title`、`filename`、`galleryUrl`、`downloadStatus`、`komgaBookId`、`confirmationAttempts`、`lastConfirmationAt`、`confirmationReason`、`candidateBookIds`。
+
+### `POST /api/komga-import-reviews/{gid}/retry`
+
+仅重新执行 Komga 扫描与入库确认，不重新下载。仅 `KOMGA_IMPORT_FAILED` 或 `DOWNLOADED` 状态可重试；成功时返回 `gid`、`workflowId`、`runId`。
+
+## 7. 视觉去重
+
+| 方法 | 路径 | 请求/响应 |
+| --- | --- | --- |
+| GET | `/api/visual-dedup/status` | 返回 `algorithmVersion`、`fingerprintedGalleries`、`latestJob`、`failedGalleries` |
+| POST | `/api/visual-dedup/refresh` | 可选请求体 `{"force":false}`；启动历史指纹刷新并返回任务 |
+| POST | `/api/visual-dedup/refresh/retry` | 请求体 `{"gids":[123,456]}`；重试指定失败项并返回任务 |
+
+已有刷新任务运行时返回业务码 `409`；重试列表非法时返回 `400`。
+
+## 8. 群晖归档同步
+
+### 状态与扫描
+
+| 方法 | 路径 | 请求/响应 |
+| --- | --- | --- |
+| GET | `/api/archive-sync/status` | 返回扫描任务状态和归档统计 |
+| POST | `/api/archive-sync/scan` | 启动归档文件扫描，无请求体 |
+| POST | `/api/archive-sync/cover-match` | 可选 `{"gids":[123,456]}`；为空时处理服务选定的待匹配项 |
+
+重复启动同类任务会返回业务码 `409`。
+
+### `GET /api/archive-sync/reviews`
+
+Query：`page=1`、`size=20`、`status=ACTIVE`。`ACTIVE` 包含 `PENDING`、`SYNCING`、`FAILED`；`ALL` 不过滤，其余值按具体状态过滤。
+
+记录主要字段：`gid`、`title`、`expectedFilename`、`selectedFilename`、`matchType`、`status`、`message`、`coverStatus`、`coverMessage`、`coverCheckedAt`、`galleryUrl`、`candidates`。每个候选包含 `filename`、`coverScore`、`databaseGid`。
+
+### 处置端点
+
+| 方法 | 路径 | 请求/说明 |
+| --- | --- | --- |
+| POST | `/api/archive-sync/{gid}/synchronize` | `{"filename":"实际文件.cbz"}`；确认文件并同步数据库/归档状态 |
+| POST | `/api/archive-sync/{gid}/redownload` | 认领记录并启动单画廊重新下载；返回工作流标识 |
+
+## 9. 自定义画廊合集
+
+### 合集 CRUD
+
+| 方法 | 路径 | 请求/响应 |
+| --- | --- | --- |
+| GET | `/api/collections` | 返回合集摘要：`id`、`name`、`description`、`itemCount`、`updatedAt` |
+| POST | `/api/collections` | 创建合集，请求体见下方 |
+| PUT | `/api/collections/{id}` | 更新合集，请求体同创建 |
+| DELETE | `/api/collections/{id}` | 删除合集 |
+
+创建/更新请求：
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": [
-    { "name": "已入库", "value": 600 },
-    { "name": "已下载", "value": 800 },
-    { "name": "下载失败", "value": 30 },
-    { "name": "未下载", "value": 70 }
-  ],
-  "timestamp": 1700000000000
-}
+{ "name": "合集名称", "description": "可选说明" }
 ```
 
-可能出现的状态值：`未下载`、`下载中`、`已下载`、`下载失败`、`已入库`、`阻断`、`已忽略`
+`name` 必填且最长 200 字符；`description` 最长 1000 字符。
 
----
+### 成员与建议
 
-### 4.3 文件大小分布
+| 方法 | 路径 | 参数/请求 |
+| --- | --- | --- |
+| GET | `/api/collections/{id}/items` | 返回合集成员 |
+| POST | `/api/collections/{id}/items` | `{"gids":[123,456],"source":"MANUAL"}` |
+| DELETE | `/api/collections/{id}/items/{gid}` | 移除单个成员 |
+| GET | `/api/collections/{id}/suggestions` | `limit=30`，返回标题、封面、元数据综合匹配建议 |
+| GET | `/api/collections/gallery-search` | `keyword` 可选，`scope=unassigned|all`，`limit=30` |
 
-`GET /api/dashboard/file-size-distribution`
+成员/候选字段包括 `gid`、`title`、`originalTitle`、`galleryUrl`、`pageCount`、`rating`、合集信息，以及建议场景下的 `score`、`titleSimilarity`、`coverSimilarity`、`metadataSimilarity`、`reason`。
 
-返回画廊按文件大小分桶的统计，用于柱状图展示。
+### Komga Series 同步
 
-**成功响应：**
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/collections/komga-series-sync/status` | 查询最近或当前同步任务状态 |
+| POST | `/api/collections/komga-series-sync` | 启动合集到 Komga Series 的同步 |
+
+同步任务已运行时返回业务码 `409`。
+
+## 10. Temporal 监控
+
+### `GET /api/temporal/monitor/workflows`
+
+读取最近最多 1000 个工作流并按父子关系返回树。节点包含 `workflowId`、`runId`、`type`、`status`、`startTime`、`closeTime`、`historyLength`、`children`。
+
+### `GET /api/temporal/monitor/workflows/{workflowId}/history`
+
+可选 Query：`runId`。返回按事件顺序排列的可读日志：`eventId`、Unix 秒时间戳 `time`、`type`、`level`、`message`。
+
+### `POST /api/temporal/monitor/workflows/{workflowId}/terminate`
+
+可选 Query：`runId`、`reason`。默认原因为“用户在监控页面手动终止”。该操作不可撤销。
+
+## 11. AI 服务内部接口
+
+AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP 状态和响应体。当前未在管理前端直接调用。
+
+### `POST /api/ai/generate-summary`
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "labels": ["<50MB", "50-100MB", "100-200MB", "200-500MB", "500MB-1GB", ">1GB"],
-    "data": [120, 340, 580, 350, 80, 30]
-  },
-  "timestamp": 1700000000000
-}
+{ "title": "画廊标题", "tags": ["language:chinese", "female:..."] }
 ```
 
----
+成功响应是纯文本中文简介。AI 节点不可用时返回 HTTP `503` 和错误文本，其他内部错误返回 `500`。
 
-### 4.4 抓取时间线
-
-`GET /api/dashboard/crawl-timeline`
-
-按日统计画廊抓取数量，返回最近 60 天的数据。
-
-**成功响应：**
+### `POST /api/ai/batch-translate-tags`
 
 ```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "dates": ["2024-01-01", "2024-01-02", "2024-01-03"],
-    "counts": [45, 120, 87]
-  },
-  "timestamp": 1700000000000
-}
+{ "tags": ["artist:aaa", "language:chinese"] }
 ```
 
----
+成功响应为输入标签到中文翻译的 JSON 对象；空列表返回 `{}`。AI 节点不可用时返回 HTTP `503`，内部错误返回 `500`。
 
-### 4.5 标签命名空间统计
+## 12. Actuator
 
-`GET /api/dashboard/tag-stats`
+| 路径 | 认证 | 说明 |
+| --- | --- | --- |
+| `/actuator/health` | 无 | 健康检查 |
+| `/actuator/info` | 无 | 应用信息 |
+| `/actuator/prometheus` | 无 | Prometheus 指标 |
+| `/actuator/**` 其他端点 | 管理员 JWT | Spring Boot 运维端点 |
 
-统计各标签命名空间（`female:`、`male:`、`language:` 等）出现次数，返回 Top 20。
+## 13. 完整端点索引
 
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": [
-    { "name": "female", "nameCn": "女性", "value": 5800 },
-    { "name": "male", "nameCn": "男性", "value": 4200 },
-    { "name": "language", "nameCn": "语言", "value": 1500 }
-  ],
-  "timestamp": 1700000000000
-}
-```
-
----
-
-### 4.6 画廊列表（分页）
-
-`GET /api/dashboard/galleries`
-
-支持分页、状态筛选、关键词搜索和标签过滤。
-
-**Query 参数：**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `page` | Integer | 否 | `1` | 页码 |
-| `size` | Integer | 否 | `20` | 每页数量 |
-| `status` | String | 否 | — | 按 `download_status` 过滤，如 `已入库` |
-| `keyword` | String | 否 | — | 按 `title` 或 `filename` 模糊搜索 |
-| `tag` | String | 否 | — | 按标签精确匹配，如 `female:sole female` |
-
-**成功响应（MyBatis-Plus IPage 结构）：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "records": [
-      {
-        "gid": 123456,
-        "token": "abcdef1234",
-        "title": "Gallery Title",
-        "filename": "Gallery_Title",
-        "galleryUrl": "https://e-hentai.org/g/123456/abcdef1234/",
-        "searchQuery": "language:chinese",
-        "crawledAt": "2024-01-01T12:00:00.000+00:00",
-        "downloadStatus": "已入库",
-        "tags": ["language:chinese", "female:sole female"],
-        "komgaBookId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-        "fileSizeMb": 150.5
-      }
-    ],
-    "total": 1500,
-    "size": 20,
-    "current": 1,
-    "pages": 75
-  },
-  "timestamp": 1700000000000
-}
-```
-
-**curl 示例：**
-
-```bash
-curl "http://127.0.0.1:8001/api/dashboard/galleries?page=1&size=20&status=已入库&keyword=chinese" \
-  -H "Authorization: Bearer <jwt-token>"
-```
-
----
-
-### 4.7 搜索联想
-
-`GET /api/dashboard/suggestions`
-
-根据输入返回匹配的标题和标签建议，同时支持英文原名和中文翻译匹配。
-
-**Query 参数：**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-| --- | --- | --- | --- | --- |
-| `q` | String | 是 | — | 搜索词 |
-| `limit` | Integer | 否 | `10` | 返回数量上限，最大 30 |
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": [
-    { "value": "Some Gallery Title", "type": "title" },
-    { "value": "female:sole female", "label": "独女 (female:sole female)", "type": "tag" }
-  ],
-  "timestamp": 1700000000000
-}
-```
-
----
-
-### 4.8 标签翻译映射表
-
-`GET /api/dashboard/tag-translations`
-
-返回完整的标签翻译映射表（英文 `namespace:tag` → 中文名）。
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "female:sole female": "独女",
-    "male:sole male": "独男",
-    "language:chinese": "中文"
-  },
-  "timestamp": 1700000000000
-}
-```
-
----
-
-### 4.9 刷新翻译缓存
-
-`POST /api/dashboard/tag-translations/refresh`
-
-手动触发 EhTag 翻译缓存刷新。
-
-**无请求体。**
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": "翻译缓存刷新成功",
-  "timestamp": 1700000000000
-}
-```
-
----
-
-### 4.10 标签详情
-
-`GET /api/dashboard/tag-detail`
-
-获取单个标签的中文名和描述。
-
-**Query 参数：**
-
-| 参数 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `tag` | String | 是 | 标签，格式 `namespace:tag`，如 `female:sole female` |
-
-**成功响应：**
-
-```json
-{
-  "code": 200,
-  "msg": "操作成功",
-  "data": {
-    "tag": "female:sole female",
-    "name": "独女",
-    "intro": "作品中只有一名女性角色。"
-  },
-  "timestamp": 1700000000000
-}
-```
-
----
-
-## 五、接口汇总
-
-| 功能 | 方法 | 路径 | 认证 |
-| --- | --- | --- | --- |
-| 登录获取 Token | POST | `/api/auth/login` | 无 |
-| 启动自动化工作流 | POST | `/api/temporal/eh/start` | JWT |
-| 重试失败任务 | POST | `/api/temporal/eh/retry-failed` | JWT |
-| 测试邮件通知 | POST | `/api/temporal/eh/test-email` | JWT |
-| 构建 Komga 合集 | POST | `/api/temporal/eh/collections/build-by-tags` | JWT |
-| 同步标签到 Komga | POST | `/api/temporal/eh/sync-tags` | JWT |
-| 批量刷新 Komga 元数据 | POST | `/api/temporal/eh/batch-refresh-metadata` | JWT |
-| 批量更新文件大小 | POST | `/api/temporal/eh/batch-update-filesize` | JWT |
-| 统计概览 | GET | `/api/dashboard/stats` | JWT |
-| 下载状态分布 | GET | `/api/dashboard/status-distribution` | JWT |
-| 文件大小分布 | GET | `/api/dashboard/file-size-distribution` | JWT |
-| 抓取时间线 | GET | `/api/dashboard/crawl-timeline` | JWT |
-| 标签命名空间统计 | GET | `/api/dashboard/tag-stats` | JWT |
-| 画廊列表（分页） | GET | `/api/dashboard/galleries` | JWT |
-| 搜索联想 | GET | `/api/dashboard/suggestions` | JWT |
-| 标签翻译映射表 | GET | `/api/dashboard/tag-translations` | JWT |
-| 刷新翻译缓存 | POST | `/api/dashboard/tag-translations/refresh` | JWT |
-| 标签详情 | GET | `/api/dashboard/tag-detail` | JWT |
+| 分组 | 方法 | 路径 |
+| --- | --- | --- |
+| 认证 | POST | `/api/auth/login` |
+| 认证 | POST | `/api/auth/logout` |
+| 自动化 | POST | `/api/temporal/eh/start` |
+| 自动化 | POST | `/api/temporal/eh/retry-failed` |
+| 自动化 | POST | `/api/temporal/eh/test-email` |
+| Komga | POST | `/api/temporal/eh/collections/build-by-tags` |
+| Komga | POST | `/api/temporal/eh/sync-tags` |
+| Komga | POST | `/api/temporal/eh/batch-refresh-metadata` |
+| Komga | POST | `/api/temporal/eh/batch-update-filesize` |
+| Dashboard | GET | `/api/dashboard/stats` |
+| Dashboard | GET | `/api/dashboard/status-distribution` |
+| Dashboard | GET | `/api/dashboard/download-progress` |
+| Dashboard | GET | `/api/dashboard/db-status` |
+| Dashboard | GET | `/api/dashboard/file-size-distribution` |
+| Dashboard | GET | `/api/dashboard/crawl-timeline` |
+| Dashboard | GET | `/api/dashboard/tag-stats` |
+| Dashboard | GET | `/api/dashboard/galleries` |
+| Dashboard | GET | `/api/dashboard/suggestions` |
+| Dashboard | GET | `/api/dashboard/tag-translations` |
+| Dashboard | POST | `/api/dashboard/tag-translations/refresh` |
+| Dashboard | GET | `/api/dashboard/tag-detail` |
+| 去重审核 | GET | `/api/dedupe-reviews` |
+| 去重审核 | POST | `/api/dedupe-reviews/{id}/resolve` |
+| Komga 复核 | GET | `/api/komga-import-reviews` |
+| Komga 复核 | POST | `/api/komga-import-reviews/{gid}/retry` |
+| 视觉去重 | GET | `/api/visual-dedup/status` |
+| 视觉去重 | POST | `/api/visual-dedup/refresh` |
+| 视觉去重 | POST | `/api/visual-dedup/refresh/retry` |
+| 归档同步 | GET | `/api/archive-sync/status` |
+| 归档同步 | POST | `/api/archive-sync/scan` |
+| 归档同步 | POST | `/api/archive-sync/cover-match` |
+| 归档同步 | GET | `/api/archive-sync/reviews` |
+| 归档同步 | POST | `/api/archive-sync/{gid}/synchronize` |
+| 归档同步 | POST | `/api/archive-sync/{gid}/redownload` |
+| 合集 | GET | `/api/collections` |
+| 合集 | POST | `/api/collections` |
+| 合集 | PUT | `/api/collections/{id}` |
+| 合集 | DELETE | `/api/collections/{id}` |
+| 合集 | GET | `/api/collections/{id}/items` |
+| 合集 | POST | `/api/collections/{id}/items` |
+| 合集 | DELETE | `/api/collections/{id}/items/{gid}` |
+| 合集 | GET | `/api/collections/{id}/suggestions` |
+| 合集 | GET | `/api/collections/gallery-search` |
+| 合集 | GET | `/api/collections/komga-series-sync/status` |
+| 合集 | POST | `/api/collections/komga-series-sync` |
+| Temporal | GET | `/api/temporal/monitor/workflows` |
+| Temporal | GET | `/api/temporal/monitor/workflows/{workflowId}/history` |
+| Temporal | POST | `/api/temporal/monitor/workflows/{workflowId}/terminate` |
+| AI | POST | `/api/ai/generate-summary` |
+| AI | POST | `/api/ai/batch-translate-tags` |

@@ -29,6 +29,12 @@ mybatis-plus:
 server:
   port: 8001
 
+# 隐藏 Temporal 空闲长轮询的预期 DEADLINE_EXCEEDED INFO 堆栈；真实 Poller
+# 故障仍会按 WARN 输出。需要诊断连接时设置 TEMPORAL_POLLER_LOG_LEVEL=INFO。
+logging:
+  level:
+    io.temporal.internal.worker.BasePoller: ${TEMPORAL_POLLER_LOG_LEVEL:WARN}
+
 # 安全配置
 security:
   jwt:
