@@ -107,7 +107,10 @@ public class VisualHistoryRefreshService {
         VisualRefreshJobEntity job = jobMapper.selectById(jobId);
         try {
             QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
-            query.isNotNull("filename").ne("filename", "").orderByAsc("gid");
+            query.isNotNull("filename")
+                    .ne("filename", "")
+                    .orderByAsc("gid")
+                    .isNull("duplicate_of_gid");
             List<EhGalleriesEntity> all = galleriesMapper.selectList(query);
             List<EhGalleriesEntity> targets;
             if (selectedGids != null) {
