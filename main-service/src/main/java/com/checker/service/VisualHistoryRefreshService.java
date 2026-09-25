@@ -184,12 +184,22 @@ public class VisualHistoryRefreshService {
 
             for (String directory : fallbackDirectories) {
                 Optional<String> resolved = SynologyArchiveReader.selectSeriesArchive(
-                        gallery.getFilename(), gallery.getGid(), archiveSession.listArchives(directory));
+                        gallery.getFilename(),
+                        gallery.getGid(),
+                        archiveSession.listArchives(directory));
+
                 if (resolved.isEmpty()) continue;
-                log.warn("视觉指纹归档路径已失效，使用回退路径, GID: {}, recordedPath: {}, actualPath: {}, filename: {}",
-                        gallery.getGid(), primaryDirectory, directory, resolved.get());
+
+                log.warn(
+                        "视觉指纹使用 GID 回退归档, GID: {}, recordedPath: {}, actualPath: {}, filename: {}",
+                        gallery.getGid(),
+                        primaryDirectory,
+                        directory,
+                        resolved.get());
+
                 return readFingerprints(archiveSession, directory, resolved.get(), gallery);
             }
+
             throw new IOException("归档位置已失效且回退查找失败（记录目录: "
                     + displayDirectory(primaryDirectory) + "，文件: " + gallery.getFilename()
                     + "，已检查旧文件目录和归档根目录）", missingPrimary);
