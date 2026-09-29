@@ -17,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -49,7 +50,32 @@ class GalleryVisualMatchingTest {
 
         assertNotNull(small);
         assertNotNull(large);
+        assertEquals(2, small.getAlgorithmVersion());
+        assertEquals(16, small.getPerceptualHash().length());
+        assertEquals(16, small.getCenterHash().length());
+        assertTrue(small.getPerceptualHash().matches("[0-9a-f]{16}"));
         assertTrue(PerceptualHash.distance(small.getPerceptualHash(), large.getPerceptualHash()) <= 8);
+    }
+
+    @Test
+    void hashesConcurrentlyWithTheSharedJImageHashInstance() throws Exception {
+        byte[] image = drawingBytes(640, 960);
+        List<CompletableFuture<GalleryPageFingerprint>> tasks = new ArrayList<>();
+        for (int i = 0; i < 24; i++) {
+            int pageIndex = i;
+            tasks.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    return PerceptualHash.fingerprint(new ByteArrayInputStream(image), 1L,
+                            pageIndex, "page.png", "TEST");
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            }));
+        }
+
+        List<GalleryPageFingerprint> fingerprints = tasks.stream().map(CompletableFuture::join).toList();
+        assertEquals(1, fingerprints.stream().map(GalleryPageFingerprint::getPerceptualHash).distinct().count());
+        assertEquals(1, fingerprints.stream().map(GalleryPageFingerprint::getCenterHash).distinct().count());
     }
 
     @Test
@@ -89,6 +115,11 @@ class GalleryVisualMatchingTest {
     }
 
     private GalleryPageFingerprint hashDrawing(Long gid, int width, int height) throws Exception {
+        return PerceptualHash.fingerprint(new ByteArrayInputStream(drawingBytes(width, height)),
+                gid, 0, "page.png", "TEST");
+    }
+
+    private byte[] drawingBytes(int width, int height) throws Exception {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = image.createGraphics();
         graphics.setColor(Color.WHITE);
@@ -99,7 +130,7 @@ class GalleryVisualMatchingTest {
         graphics.dispose();
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         ImageIO.write(image, "png", bytes);
-        return PerceptualHash.fingerprint(new ByteArrayInputStream(bytes.toByteArray()), gid, 0, "page.png", "TEST");
+        return bytes.toByteArray();
     }
 
     private byte[] withIccProfile(byte[] jpeg, byte[] profile) {

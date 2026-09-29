@@ -161,6 +161,12 @@ jasypt:
   encryptor:
     password: ${JASYPT_PASSWORD:}
 
+ai:
+  internal-token: ${AI_INTERNAL_TOKEN:}
+  config:
+    # 用于 AES-GCM 加密前端保存的供应商 API Key；生产环境必须设置独立强密钥。
+    master-key: ${AI_CONFIG_MASTER_KEY:}
+
 # Resilience4j 断路器：AI 端点连续失败自动熔断 → 本地词典降级
 resilience4j:
   circuitbreaker:

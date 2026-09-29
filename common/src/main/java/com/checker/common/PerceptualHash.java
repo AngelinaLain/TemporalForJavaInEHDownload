@@ -1,13 +1,15 @@
 package com.checker.common;
 
 import com.checker.dto.GalleryPageFingerprint;
+import dev.brachtendorf.jimagehash.hash.Hash;
+import dev.brachtendorf.jimagehash.hashAlgorithms.HashingAlgorithm;
+import dev.brachtendorf.jimagehash.hashAlgorithms.PerceptiveHash;
 
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReadParam;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.image.Raster;
 import java.io.ByteArrayInputStream;
@@ -16,14 +18,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.Iterator;
 
-/** Pure-Java 64-bit DCT perceptual hashing with bounded image decoding. */
+/** JImageHash 64位DCT感知哈希与有界图像解码。 */
 public final class PerceptualHash {
-    public static final int ALGORITHM_VERSION = 1;
-    private static final int HASH_SIZE = 8;
-    private static final int DCT_SIZE = 32;
+    public static final int ALGORITHM_VERSION = 2;
+    private static final int HASH_BITS = 64;
+    private static final int HASH_HEX_LENGTH = HASH_BITS / 4;
+    private static final HashingAlgorithm HASHER = createHasher();
     private static final int MAX_DECODE_DIMENSION = 1600;
     private static final byte[] JPEG_ICC_SIGNATURE = "ICC_PROFILE\0".getBytes(StandardCharsets.US_ASCII);
 
@@ -82,13 +84,13 @@ public final class PerceptualHash {
                 ImageReadParam param = reader.getDefaultReadParam();
                 param.setSourceSubsampling(subsampling, subsampling, 0, 0);
                 try {
-                    // Normalize while the fallback can still rewind the reader. Some malformed
-                    // JPEGs decode to a lazy color-managed image and only throw when drawImage()
-                    // later touches their mismatched ICC profile.
+                    // 规范化，而回退仍然可以倒带阅读器。有些畸形
+                    // jpeg解码为延迟的彩色管理图像，仅在drawImage（）时抛出
+                    // 稍后触及他们不匹配的ICC配置文件。
                     return new DecodedImage(rgbImage(reader.read(0, param)), width, height);
                 } catch (IllegalArgumentException colorSpaceFailure) {
-                    // Some JPEGs contain an ICC profile whose component count does not match
-                    // their CMYK/YCCK raster. Read raw samples to bypass ImageIO color conversion.
+                    // 有些jpeg包含组件数不匹配的ICC配置文件
+                    // 他们的CMYK/YCCK光栅。读取原始示例以绕过ImageIO颜色转换。
                     imageInput.seek(0);
                     reader.reset();
                     reader.setInput(imageInput, true, true);
@@ -124,10 +126,10 @@ public final class PerceptualHash {
     }
 
     /**
-     * Some malformed JPEGs attach an RGB ICC profile to a grayscale/CMYK raster. The JDK JPEG
-     * reader may then fail both normal and raw-raster reads before callers can inspect the pixels.
-     * Retry the same encoded image without APP2 ICC_PROFILE segments; other JPEG metadata and the
-     * compressed scan remain byte-for-byte unchanged.
+     *  一些畸形的jpeg将RGB ICC配置文件附加到灰度/CMYK栅格。JDK JPEG
+     *  在调用者可以检查像素之前，阅读器可能会同时失败正常和原始光栅读取。
+     *  重试没有APP2 ICC_PROFILE段的相同编码图像；其他JPEG元数据和
+     *  压缩扫描保持字节对字节不变。
      */
     private static DecodedImage retryWithoutJpegIccProfile(ImageInputStream imageInput,
                                                             Throwable colorSpaceFailure,
@@ -153,7 +155,7 @@ public final class PerceptualHash {
         return output.toByteArray();
     }
 
-    /** Returns {@code null} when the input is not a JPEG or contains no ICC APP2 segment. */
+    /** 当输入不是JPEG或不包含ICC APP2段时返回{@code null}. */
     static byte[] removeJpegIccProfile(byte[] jpeg) {
         if (jpeg == null || jpeg.length < 4 || (jpeg[0] & 0xff) != 0xff || (jpeg[1] & 0xff) != 0xd8) {
             return null;
@@ -242,62 +244,20 @@ public final class PerceptualHash {
     }
 
     private static String hash(BufferedImage source) {
-        BufferedImage scaled = new BufferedImage(DCT_SIZE, DCT_SIZE, BufferedImage.TYPE_BYTE_GRAY);
-        Graphics2D graphics = scaled.createGraphics();
-        try {
-            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            graphics.drawImage(source, 0, 0, DCT_SIZE, DCT_SIZE, null);
-        } finally {
-            graphics.dispose();
+        Hash result = HASHER.hash(source);
+        String hex = result.getHashValue().toString(16);
+        if (result.getBitResolution() != HASH_BITS || hex.length() > HASH_HEX_LENGTH) {
+            throw new IllegalStateException("JImageHash返回了非64位感知哈希");
         }
-
-        double[][] pixels = new double[DCT_SIZE][DCT_SIZE];
-        for (int y = 0; y < DCT_SIZE; y++) {
-            for (int x = 0; x < DCT_SIZE; x++) {
-                pixels[y][x] = scaled.getRaster().getSample(x, y, 0);
-            }
-        }
-        double[][] low = dctLowFrequency(pixels);
-        double sum = 0;
-        int count = 0;
-        for (int y = 0; y < HASH_SIZE; y++) {
-            for (int x = 0; x < HASH_SIZE; x++) {
-                if (x != 0 || y != 0) {
-                    sum += low[y][x];
-                    count++;
-                }
-            }
-        }
-        double mean = sum / count;
-        long bits = 0;
-        int bit = 0;
-        for (int y = 0; y < HASH_SIZE; y++) {
-            for (int x = 0; x < HASH_SIZE; x++) {
-                if (low[y][x] > mean) bits |= 1L << bit;
-                bit++;
-            }
-        }
-        return HexFormat.of().toHexDigits(bits);
+        return "0".repeat(HASH_HEX_LENGTH - hex.length()) + hex;
     }
 
-    private static double[][] dctLowFrequency(double[][] pixels) {
-        double[][] result = new double[HASH_SIZE][HASH_SIZE];
-        for (int v = 0; v < HASH_SIZE; v++) {
-            for (int u = 0; u < HASH_SIZE; u++) {
-                double sum = 0;
-                for (int y = 0; y < DCT_SIZE; y++) {
-                    for (int x = 0; x < DCT_SIZE; x++) {
-                        sum += pixels[y][x]
-                                * Math.cos((2 * x + 1) * u * Math.PI / (2 * DCT_SIZE))
-                                * Math.cos((2 * y + 1) * v * Math.PI / (2 * DCT_SIZE));
-                    }
-                }
-                double cu = u == 0 ? 1 / Math.sqrt(2) : 1;
-                double cv = v == 0 ? 1 / Math.sqrt(2) : 1;
-                result[v][u] = 0.25 * cu * cv * sum;
-            }
+    private static HashingAlgorithm createHasher() {
+        HashingAlgorithm hasher = new PerceptiveHash(HASH_BITS);
+        if (hasher.getKeyResolution() != HASH_BITS) {
+            throw new IllegalStateException("JImageHash PerceptiveHash(64)未生成64位指纹");
         }
-        return result;
+        return hasher;
     }
 
     private static int quality(BufferedImage image) {
