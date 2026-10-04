@@ -94,12 +94,12 @@ curl http://127.0.0.1:8001/api/dashboard/stats \
 }
 ```
 
-`keyword` 与 `gids` 至少提供其一；其余字段可省略并采用示例中的默认值，页数上下限默认为空。成功时返回 `workflowId` 和 `runId`。
+`keyword` 与 `galleryUrls` 至少提供其一；其余字段可省略并采用示例中的默认值，页数上下限默认为空。成功时返回 `workflowId` 和 `runId`。
 
-按 GID 直接抓取时传入 `gids`，系统会先从 EH API 获取 token 和元数据，再进入正常的去重、下载与入库流程：
+按 GID 直接抓取必须同时携带画廊 token。传入 `galleryUrls`（完整画廊链接，或 `GID/token`）后，系统获取元数据并进入正常的去重、下载与入库流程：
 
 ```json
-{ "gids": [123456, 234567] }
+{ "galleryUrls": ["https://e-hentai.org/g/123456/abcdef1234/", "234567/fedcba4321"] }
 ```
 
 ### `POST /api/temporal/eh/retry-failed`

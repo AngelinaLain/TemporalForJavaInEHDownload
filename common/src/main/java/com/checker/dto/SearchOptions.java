@@ -24,9 +24,9 @@ public class SearchOptions {
     private String keyword;              // 搜索关键词
 
     /**
-     * 指定画廊 GID。非空时工作流直接抓取这些画廊，不执行关键词搜索。
+     * 指定画廊链接；每项必须带画廊 token，例如 https://e-hentai.org/g/123/token/。
      */
-    private List<Long> gids;
+    private List<String> galleryUrls;
 
     @Default
     private Integer filterCats = 0;           // 分类排除码 (f_cats)

@@ -56,6 +56,8 @@ public class ScraperActivityImpl implements ScraperActivity {
 
     private static final String STATUS_PENDING = DownloadStatus.PENDING.getValue();
     private static final Pattern GALLERY_PATTERN = Pattern.compile("https://e-hentai\\.org/g/(\\d+)/([a-z0-9]+)/");
+    private static final Pattern GALLERY_REFERENCE_PATTERN = Pattern.compile(
+            "(?i)(?:https?://(?:e-hentai|exhentai)\\.org/)?(?:g/)?(\\d+)[/:]([a-z0-9]+)(?:/.*)?");
     private static final int DELAY_MS = 3000;
     private static final int MAX_SAFE_PAGES = 100; // 防止网站结构突变导致无限死循环的安全阈值
     private static final int METADATA_BATCH_SIZE = 25; // EH gdata 单次请求上限
@@ -194,42 +196,18 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     @Override
-    public List<EhGalleriesEntity> scrapeGalleriesByGids(List<Long> gids) {
-        List<Long> requestedGids = gids == null ? List.of() : gids.stream()
-                .filter(gid -> gid != null && gid > 0)
-                .distinct()
-                .toList();
-        if (requestedGids.isEmpty()) return List.of();
-
-        Map<Long, String> tokens = new LinkedHashMap<>();
-        for (int offset = 0; offset < requestedGids.size(); offset += METADATA_BATCH_SIZE) {
-            List<Long> batch = requestedGids.subList(offset, Math.min(offset + METADATA_BATCH_SIZE, requestedGids.size()));
-            Activity.getExecutionContext().heartbeat("正在获取 GID token: " + batch.get(0));
-            try {
-                JSONObject request = JSONUtil.createObj();
-                request.set("method", "gtoken");
-                request.set("gidlist", JSONUtil.parseArray(batch));
-                JSONArray tokenList = JSONUtil.parseObj(ehNetworkClient.postJson(Constants.EHENTAI_API_URL, request.toString()))
-                        .getJSONArray("tokenlist");
-                if (tokenList == null) continue;
-                for (int index = 0; index < tokenList.size(); index++) {
-                    JSONObject item = tokenList.getJSONObject(index);
-                    Long gid = item.getLong("gid");
-                    String token = item.getStr("token");
-                    if (gid != null && StrUtil.isNotBlank(token)) tokens.put(gid, token);
-                }
-            } catch (Exception exception) {
-                log.warn("通过 GID 获取 EH token 失败，批次 {}: {}", batch, exception.getMessage());
-            }
-        }
-
+    public List<EhGalleriesEntity> scrapeGalleriesByUrls(List<String> galleryUrls) {
         List<EhGalleriesEntity> galleries = new ArrayList<>();
-        for (Long gid : requestedGids) {
-            String token = tokens.get(gid);
-            if (token == null) {
-                log.warn("未找到 GID {} 的 EH token，跳过", gid);
+        if (galleryUrls == null) return galleries;
+        for (String reference : new LinkedHashSet<>(galleryUrls)) {
+            if (StrUtil.isBlank(reference)) continue;
+            Matcher matcher = GALLERY_REFERENCE_PATTERN.matcher(StrUtil.trim(reference));
+            if (!matcher.matches()) {
+                log.warn("无效画廊链接或 GID/token 格式，跳过: {}", reference);
                 continue;
             }
+            long gid = Long.parseLong(matcher.group(1));
+            String token = matcher.group(2);
             EhGalleriesEntity gallery = new EhGalleriesEntity();
             gallery.setGid(gid);
             gallery.setToken(token);
@@ -242,7 +220,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         enrichGalleryMetadata(galleries);
         galleries.removeIf(gallery -> StrUtil.isBlank(gallery.getTitle()));
         galleries.forEach(gallery -> gallery.setFilename(gallery.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_")));
-        log.info("按 GID 抓取完成：请求 {} 个，成功解析 {} 个", requestedGids.size(), galleries.size());
+        log.info("按画廊链接抓取完成：请求 {} 个，成功解析 {} 个", galleryUrls.size(), galleries.size());
         return galleries;
     }
 

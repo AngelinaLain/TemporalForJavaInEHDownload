@@ -90,9 +90,9 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 "paginated-scraper-results", Workflow.DEFAULT_VERSION, 1);
         int gidScraperVersion = Workflow.getVersion(
                 "direct-gid-scraper", Workflow.DEFAULT_VERSION, 1);
-        boolean hasGids = searchOptions.getGids() != null && !searchOptions.getGids().isEmpty();
-        List<EhGalleriesEntity> scraped = gidScraperVersion != Workflow.DEFAULT_VERSION && hasGids
-                ? scraperActivity.scrapeGalleriesByGids(searchOptions.getGids())
+        boolean hasGalleryUrls = searchOptions.getGalleryUrls() != null && !searchOptions.getGalleryUrls().isEmpty();
+        List<EhGalleriesEntity> scraped = gidScraperVersion != Workflow.DEFAULT_VERSION && hasGalleryUrls
+                ? scraperActivity.scrapeGalleriesByUrls(searchOptions.getGalleryUrls())
                 : (pagedScraperVersion == Workflow.DEFAULT_VERSION
                     ? scraperActivity.scrapeGalleries(searchOptions)
                     : scrapeGalleriesByPage(searchOptions));

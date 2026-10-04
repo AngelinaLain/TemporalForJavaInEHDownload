@@ -15,13 +15,14 @@
             <el-radio value="gid">按 GID 抓取</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item v-if="crawlMode === 'gid'" label="GID" required>
+        <el-form-item v-if="crawlMode === 'gid'" label="画廊链接" required>
           <el-input
             v-model="gidInput"
             type="textarea"
             :rows="3"
-            placeholder="输入单个或多个 GID，使用逗号、分号、空格或换行分隔"
+            placeholder="粘贴单个或多个完整画廊链接，或 GID/token；使用换行、逗号或分号分隔"
           />
+          <div style="color: #909399; font-size: 12px; margin-top: 4px">EH 画廊 token 必填；仅输入 GID 无法定位画廊。</div>
         </el-form-item>
         <template v-else>
         <el-row :gutter="20">
@@ -400,21 +401,18 @@ const handleCollectionTagSelect = (item) => {
 
 const startWorkflow = async () => {
   if (crawlMode.value === 'gid') {
-    const gids = [...new Set(gidInput.value.split(/[\s,，;；]+/)
-      .filter(Boolean)
-      .map(value => Number(value))
-      .filter(value => Number.isSafeInteger(value) && value > 0))]
-    if (!gids.length) {
-      ElMessage.warning('请输入至少一个有效 GID')
+    const galleryUrls = [...new Set(gidInput.value.split(/[\n,，;；]+/).map(value => value.trim()).filter(Boolean))]
+    if (!galleryUrls.length) {
+      ElMessage.warning('请输入至少一个包含 token 的画廊链接或 GID/token')
       return
     }
     loading.start = true
     try {
-      const res = await api.post('/temporal/eh/start', { gids })
-      addLog('GID 抓取工作流已启动', true, `workflowId: ${res.data.workflowId}；GID 数量: ${gids.length}`)
-      ElMessage.success('GID 抓取工作流已启动')
+      const res = await api.post('/temporal/eh/start', { galleryUrls })
+      addLog('画廊链接抓取工作流已启动', true, `workflowId: ${res.data.workflowId}；画廊数量: ${galleryUrls.length}`)
+      ElMessage.success('画廊链接抓取工作流已启动')
     } catch (e) {
-      addLog('启动 GID 抓取工作流失败', false, e.message)
+      addLog('启动画廊链接抓取工作流失败', false, e.message)
     } finally {
       loading.start = false
     }
