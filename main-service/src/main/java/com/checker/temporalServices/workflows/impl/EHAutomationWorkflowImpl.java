@@ -88,9 +88,14 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         // 旧历史不能改变命令序列，保留原 Activity 调用以便已执行的工作流可重放。
         int pagedScraperVersion = Workflow.getVersion(
                 "paginated-scraper-results", Workflow.DEFAULT_VERSION, 1);
-        List<EhGalleriesEntity> scraped = pagedScraperVersion == Workflow.DEFAULT_VERSION
-                ? scraperActivity.scrapeGalleries(searchOptions)
-                : scrapeGalleriesByPage(searchOptions);
+        int gidScraperVersion = Workflow.getVersion(
+                "direct-gid-scraper", Workflow.DEFAULT_VERSION, 1);
+        boolean hasGids = searchOptions.getGids() != null && !searchOptions.getGids().isEmpty();
+        List<EhGalleriesEntity> scraped = gidScraperVersion != Workflow.DEFAULT_VERSION && hasGids
+                ? scraperActivity.scrapeGalleriesByGids(searchOptions.getGids())
+                : (pagedScraperVersion == Workflow.DEFAULT_VERSION
+                    ? scraperActivity.scrapeGalleries(searchOptions)
+                    : scrapeGalleriesByPage(searchOptions));
         List<EhGalleriesEntity> galleries = deduplicateByGid(scraped);
         if (galleries == null || galleries.isEmpty()) {
             return;

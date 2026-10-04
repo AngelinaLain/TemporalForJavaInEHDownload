@@ -2,12 +2,13 @@ package com.checker.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Builder.Default;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.util.List;
 
 /**
  * EHentai 搜索选项（对标 JHenTai SearchConfig）
@@ -20,8 +21,12 @@ import lombok.NoArgsConstructor;
 public class SearchOptions {
     
     // 基本搜索参数
-    @NotBlank(message = "keyword 不能为空")
     private String keyword;              // 搜索关键词
+
+    /**
+     * 指定画廊 GID。非空时工作流直接抓取这些画廊，不执行关键词搜索。
+     */
+    private List<Long> gids;
 
     @Default
     private Integer filterCats = 0;           // 分类排除码 (f_cats)

@@ -193,6 +193,59 @@ public class ScraperActivityImpl implements ScraperActivity {
         return response;
     }
 
+    @Override
+    public List<EhGalleriesEntity> scrapeGalleriesByGids(List<Long> gids) {
+        List<Long> requestedGids = gids == null ? List.of() : gids.stream()
+                .filter(gid -> gid != null && gid > 0)
+                .distinct()
+                .toList();
+        if (requestedGids.isEmpty()) return List.of();
+
+        Map<Long, String> tokens = new LinkedHashMap<>();
+        for (int offset = 0; offset < requestedGids.size(); offset += METADATA_BATCH_SIZE) {
+            List<Long> batch = requestedGids.subList(offset, Math.min(offset + METADATA_BATCH_SIZE, requestedGids.size()));
+            Activity.getExecutionContext().heartbeat("正在获取 GID token: " + batch.get(0));
+            try {
+                JSONObject request = JSONUtil.createObj();
+                request.set("method", "gtoken");
+                request.set("gidlist", JSONUtil.parseArray(batch));
+                JSONArray tokenList = JSONUtil.parseObj(ehNetworkClient.postJson(Constants.EHENTAI_API_URL, request.toString()))
+                        .getJSONArray("tokenlist");
+                if (tokenList == null) continue;
+                for (int index = 0; index < tokenList.size(); index++) {
+                    JSONObject item = tokenList.getJSONObject(index);
+                    Long gid = item.getLong("gid");
+                    String token = item.getStr("token");
+                    if (gid != null && StrUtil.isNotBlank(token)) tokens.put(gid, token);
+                }
+            } catch (Exception exception) {
+                log.warn("通过 GID 获取 EH token 失败，批次 {}: {}", batch, exception.getMessage());
+            }
+        }
+
+        List<EhGalleriesEntity> galleries = new ArrayList<>();
+        for (Long gid : requestedGids) {
+            String token = tokens.get(gid);
+            if (token == null) {
+                log.warn("未找到 GID {} 的 EH token，跳过", gid);
+                continue;
+            }
+            EhGalleriesEntity gallery = new EhGalleriesEntity();
+            gallery.setGid(gid);
+            gallery.setToken(token);
+            gallery.setGalleryUrl(String.format("%sg/%d/%s/", Constants.EHENTAI_BASE_URL, gid, token));
+            gallery.setSearchQuery("gid:" + gid);
+            gallery.setCrawledAt(new Date());
+            gallery.setDownloadStatus(STATUS_PENDING);
+            galleries.add(gallery);
+        }
+        enrichGalleryMetadata(galleries);
+        galleries.removeIf(gallery -> StrUtil.isBlank(gallery.getTitle()));
+        galleries.forEach(gallery -> gallery.setFilename(gallery.getTitle().replaceAll("[\\\\/:*?\"<>|]", "_")));
+        log.info("按 GID 抓取完成：请求 {} 个，成功解析 {} 个", requestedGids.size(), galleries.size());
+        return galleries;
+    }
+
     /**
      * 在下载排队前通过 EH gdata 补全作品识别需要的元数据。
      * 元数据查询失败不会阻断普通抓取，只会跳过本次作品级去重。
@@ -233,6 +286,10 @@ public class ScraperActivityImpl implements ScraperActivity {
                         continue;
                     }
                     gallery.setOriginalTitle(StrUtil.blankToDefault(metadata.getStr("title_jpn"), null));
+                    String title = StrUtil.blankToDefault(metadata.getStr("title"), metadata.getStr("title_jpn"));
+                    if (StrUtil.isNotBlank(title)) {
+                        gallery.setTitle(title);
+                    }
                     gallery.setPageCount(parseInteger(metadata.getStr("filecount")));
                     gallery.setRating(parseDouble(metadata.getStr("rating")));
                     JSONArray tags = metadata.getJSONArray("tags");

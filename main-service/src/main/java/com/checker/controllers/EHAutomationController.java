@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -44,6 +45,14 @@ public class EHAutomationController {
      */
     @PostMapping("/start")
     public Result<Map<String, String>> startWorkflow(@Valid @RequestBody SearchOptions searchOptions) {
+        List<Long> gids = searchOptions.getGids() == null ? List.of() : searchOptions.getGids().stream()
+                .filter(gid -> gid != null && gid > 0).distinct().toList();
+        if (gids.isEmpty() && (searchOptions.getKeyword() == null || searchOptions.getKeyword().isBlank())) {
+            return Result.error(400, "请输入关键词或至少一个有效 GID");
+        }
+        if (!gids.isEmpty()) {
+            searchOptions.setGids(gids);
+        }
         String workflowId = "eh-auto-" + UUID.randomUUID();
         EHAutomationWorkflow workflow = workflowClient.newWorkflowStub(
                 EHAutomationWorkflow.class,

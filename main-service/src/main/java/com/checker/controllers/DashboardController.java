@@ -199,6 +199,7 @@ public class DashboardController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String gid,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) String tag,
             @RequestParam(defaultValue = "preferred") String dedupe,
@@ -206,6 +207,24 @@ public class DashboardController {
             @RequestParam(defaultValue = "desc") String sortOrder) {
 
         QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
+
+        if (gid != null && !gid.isBlank()) {
+            List<Long> gids;
+            try {
+                gids = Arrays.stream(gid.trim().split("[\\s,，;；]+"))
+                        .filter(value -> !value.isBlank())
+                        .map(Long::parseLong)
+                        .filter(value -> value > 0)
+                        .distinct()
+                        .toList();
+            } catch (NumberFormatException exception) {
+                return Result.error(400, "GID 必须是正整数，可用逗号、分号或空格分隔");
+            }
+            if (gids.isEmpty()) {
+                return Result.error(400, "请至少输入一个有效 GID");
+            }
+            wrapper.in("gid", gids);
+        }
 
         if (status != null && !status.isEmpty()) {
             String normalizedStatus = normalizeStatus(status);

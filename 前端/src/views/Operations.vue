@@ -9,6 +9,21 @@
         </div>
       </template>
       <el-form :model="searchForm" label-width="140px" @submit.prevent="startWorkflow">
+        <el-form-item label="抓取方式">
+          <el-radio-group v-model="crawlMode">
+            <el-radio value="search">关键词搜索</el-radio>
+            <el-radio value="gid">按 GID 抓取</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="crawlMode === 'gid'" label="GID" required>
+          <el-input
+            v-model="gidInput"
+            type="textarea"
+            :rows="3"
+            placeholder="输入单个或多个 GID，使用逗号、分号、空格或换行分隔"
+          />
+        </el-form-item>
+        <template v-else>
         <el-row :gutter="20">
           <el-col :span="12">
             <el-form-item label="关键词">
@@ -121,6 +136,7 @@
             </el-form-item>
           </el-col>
         </el-row>
+        </template>
         <el-form-item>
           <el-button type="primary" :loading="loading.start" @click="startWorkflow">
             <el-icon><VideoPlay /></el-icon> 启动工作流
@@ -259,6 +275,8 @@ const loading = reactive({
 })
 
 const logs = ref([])
+const crawlMode = ref('search')
+const gidInput = ref('')
 
 const addLog = (message, success, detail) => {
   logs.value.unshift({
@@ -381,6 +399,27 @@ const handleCollectionTagSelect = (item) => {
 }
 
 const startWorkflow = async () => {
+  if (crawlMode.value === 'gid') {
+    const gids = [...new Set(gidInput.value.split(/[\s,，;；]+/)
+      .filter(Boolean)
+      .map(value => Number(value))
+      .filter(value => Number.isSafeInteger(value) && value > 0))]
+    if (!gids.length) {
+      ElMessage.warning('请输入至少一个有效 GID')
+      return
+    }
+    loading.start = true
+    try {
+      const res = await api.post('/temporal/eh/start', { gids })
+      addLog('GID 抓取工作流已启动', true, `workflowId: ${res.data.workflowId}；GID 数量: ${gids.length}`)
+      ElMessage.success('GID 抓取工作流已启动')
+    } catch (e) {
+      addLog('启动 GID 抓取工作流失败', false, e.message)
+    } finally {
+      loading.start = false
+    }
+    return
+  }
   const keywordText = searchForm.keyword.trim()
   const mergedKeyword = [...searchTags.value, keywordText].filter(Boolean).join(' ').trim()
 
