@@ -45,13 +45,13 @@ public class EHAutomationController {
      */
     @PostMapping("/start")
     public Result<Map<String, String>> startWorkflow(@Valid @RequestBody SearchOptions searchOptions) {
-        List<Long> gids = searchOptions.getGids() == null ? List.of() : searchOptions.getGids().stream()
-                .filter(gid -> gid != null && gid > 0).distinct().toList();
-        if (gids.isEmpty() && (searchOptions.getKeyword() == null || searchOptions.getKeyword().isBlank())) {
-            return Result.error(400, "请输入关键词或至少一个有效 GID");
+        List<String> galleryUrls = searchOptions.getGalleryUrls() == null ? List.of() : searchOptions.getGalleryUrls().stream()
+                .filter(url -> url != null && !url.isBlank()).map(String::trim).distinct().toList();
+        if (galleryUrls.isEmpty() && (searchOptions.getKeyword() == null || searchOptions.getKeyword().isBlank())) {
+            return Result.error(400, "请输入关键词或至少一个包含 token 的画廊链接");
         }
-        if (!gids.isEmpty()) {
-            searchOptions.setGids(gids);
+        if (!galleryUrls.isEmpty()) {
+            searchOptions.setGalleryUrls(galleryUrls);
         }
         String workflowId = "eh-auto-" + UUID.randomUUID();
         EHAutomationWorkflow workflow = workflowClient.newWorkflowStub(

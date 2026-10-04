@@ -31,10 +31,10 @@ public interface ScraperActivity {
     GalleryScrapePage scrapeGalleryPage(SearchOptions searchOptions, String currentUrl, int pageNo);
 
     /**
-     * 通过 EH API 根据一个或多个 GID 获取画廊及下载所需 token。
+     * 根据包含 GID 与 token 的画廊链接获取画廊元数据。
      */
     @ActivityMethod
-    List<EhGalleriesEntity> scrapeGalleriesByGids(List<Long> gids);
+    List<EhGalleriesEntity> scrapeGalleriesByUrls(List<String> galleryUrls);
 
     /**
      * 访问 archiver.php 提取最终下载直链
