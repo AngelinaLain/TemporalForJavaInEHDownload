@@ -34,6 +34,40 @@
       />
     </el-card>
 
+    <el-card shadow="hover" class="job-card">
+      <template #header>
+        <div class="header-row">
+          <div>
+            <strong>AI 视觉复核</strong>
+            <p class="review-hint">输入两个候选画廊 GID。默认只运行本地向量分析，是否调用 LLM 由“AI 设置”决定。</p>
+          </div>
+          <el-button @click="$router.push('/ai-settings')">AI 设置</el-button>
+        </div>
+      </template>
+      <div class="review-form">
+        <el-input-number v-model="reviewForm.leftGid" :min="1" :controls="false" placeholder="左侧 GID" />
+        <el-input-number v-model="reviewForm.rightGid" :min="1" :controls="false" placeholder="右侧 GID" />
+        <el-button type="primary" :loading="reviewLoading" :disabled="reviewRunning" @click="startAiReview">启动 Temporal 复核</el-button>
+      </div>
+      <template v-if="reviewState.job">
+        <el-divider />
+        <div class="review-status">
+          <span>任务：{{ reviewState.job.id }}</span>
+          <el-tag :type="reviewTag.type">{{ reviewTag.label }}</el-tag>
+        </div>
+        <el-alert v-if="reviewState.job.lastError" :title="reviewState.job.lastError" type="warning" :closable="false" show-icon class="notice" />
+        <dl v-if="reviewState.result" class="job-facts review-result">
+          <div><dt>判断</dt><dd>{{ decisionLabel(reviewState.result.decision) }}</dd></div>
+          <div><dt>置信度</dt><dd>{{ percent(reviewState.result.confidence) }}</dd></div>
+          <div><dt>向量相似度</dt><dd>{{ percent(reviewState.result.embeddingSimilarity) }}</dd></div>
+          <div><dt>感知哈希</dt><dd>{{ percent(reviewState.result.perceptualHashSimilarity) }}</dd></div>
+          <div><dt>匹配页面</dt><dd>{{ reviewState.result.matchedPages }}/{{ reviewState.result.comparedPages }}</dd></div>
+          <div><dt>图片已外发</dt><dd>{{ reviewState.result.imagesTransmitted ? '是' : '否' }}</dd></div>
+        </dl>
+        <el-alert v-if="reviewState.result?.reason" :title="reviewState.result.reason" type="info" :closable="false" show-icon />
+      </template>
+    </el-card>
+
     <el-card v-if="job" shadow="hover" class="job-card">
       <template #header>
         <div class="header-row">
@@ -83,11 +117,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
 
 const loading = ref(false)
+const reviewLoading = ref(false)
 const status = reactive({ algorithmVersion: 0, fingerprintedGalleries: 0, latestJob: null, failedGalleries: [] })
+const reviewForm = reactive({ leftGid: null, rightGid: null })
+const reviewState = reactive({ job: null, result: null })
 const selectedFailures = ref([])
 const job = computed(() => status.latestJob)
 const failedGalleries = computed(() => status.failedGalleries || [])
 const jobRunning = computed(() => ['QUEUED', 'RUNNING'].includes(job.value?.status))
+const reviewRunning = computed(() => ['QUEUED', 'RUNNING'].includes(reviewState.job?.status))
 const progress = computed(() => {
   if (!job.value?.total) return jobRunning.value ? 0 : 100
   return Math.min(100, Math.round((job.value.processed || 0) * 100 / job.value.total))
@@ -105,6 +143,11 @@ const jobTag = computed(() => ({
   COMPLETED_WITH_ERRORS: { label: '完成但有失败', type: 'warning' },
   FAILED: { label: '失败', type: 'danger' }
 }[job.value?.status] || { label: job.value?.status || '-', type: 'info' }))
+const reviewTag = computed(() => ({
+  QUEUED: { label: '等待执行', type: 'info' }, RUNNING: { label: '分析中', type: 'warning' },
+  COMPLETED: { label: '已完成', type: 'success' }, COMPLETED_WITH_WARNINGS: { label: '完成（LLM 不可用）', type: 'warning' },
+  FAILED: { label: '失败', type: 'danger' }
+}[reviewState.job?.status] || { label: reviewState.job?.status || '-', type: 'info' }))
 
 let timer
 const loadStatus = async () => {
@@ -153,9 +196,32 @@ const retrySelected = async () => {
   }
 }
 
+const startAiReview = async () => {
+  if (!reviewForm.leftGid || !reviewForm.rightGid) return ElMessage.warning('请输入两个画廊 GID')
+  reviewLoading.value = true
+  try {
+    const response = await api.post('/visual-dedup/ai-review', reviewForm)
+    localStorage.setItem('visualAiReviewJobId', response.data.jobId)
+    ElMessage.success('AI 视觉复核已提交到 Temporal')
+    await loadAiReview(response.data.jobId)
+  } finally { reviewLoading.value = false }
+}
+const loadAiReview = async id => {
+  if (!id) return
+  const response = await api.get(`/visual-dedup/ai-review/${id}`)
+  Object.assign(reviewState, response.data || {})
+}
+const percent = value => value == null ? '-' : `${Math.round(Number(value) * 100)}%`
+const decisionLabel = value => ({ SAME_CONTENT: '同一内容', POSSIBLE_VARIANT: '可能为版本差异', DIFFERENT_CONTENT: '不同内容', INSUFFICIENT_EVIDENCE: '证据不足' }[value] || value)
+
 onMounted(async () => {
   await loadStatus()
-  timer = window.setInterval(() => { if (jobRunning.value) void loadStatus() }, 5000)
+  const savedReviewId = localStorage.getItem('visualAiReviewJobId')
+  if (savedReviewId) await loadAiReview(savedReviewId).catch(() => localStorage.removeItem('visualAiReviewJobId'))
+  timer = window.setInterval(() => {
+    if (jobRunning.value) void loadStatus()
+    if (reviewRunning.value && reviewState.job?.id) void loadAiReview(reviewState.job.id)
+  }, 5000)
 })
 onBeforeUnmount(() => window.clearInterval(timer))
 </script>
@@ -169,6 +235,10 @@ onBeforeUnmount(() => window.clearInterval(timer))
 .actions .el-button + .el-button { margin-left: 0; }
 .notice, .job-card, .failure-card { margin-top: 16px; }
 .failure-hint { margin-left: 12px; color: #909399; font-size: 13px; }
+.review-hint { margin: 6px 0 0; color: #909399; font-size: 13px; }
+.review-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.review-status { display: flex; justify-content: space-between; align-items: center; color: #606266; }
+.review-result { margin-bottom: 12px; }
 .job-facts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 18px 0; }
 .job-facts div { padding: 10px; border-radius: 6px; background: #f5f7fa; text-align: center; }
 .job-facts dt { color: #909399; font-size: 12px; }

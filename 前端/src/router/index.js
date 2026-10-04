@@ -42,6 +42,12 @@ const routes = [
         meta: { title: '视觉指纹' }
       },
       {
+        path: 'ai-settings',
+        name: 'AiSettings',
+        component: () => import('../views/AiSettings.vue'),
+        meta: { title: 'AI 设置' }
+      },
+      {
         path: 'archive-sync',
         name: 'ArchiveSync',
         component: () => import('../views/ArchiveSync.vue'),

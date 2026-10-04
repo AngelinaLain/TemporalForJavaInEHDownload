@@ -37,6 +37,7 @@
     <jsoup.version>1.17.2</jsoup.version>
     <smbj.version>0.12.2</smbj.version>
     <lombok.version>1.18.42</lombok.version>
+    <onnxruntime.version>1.29.0</onnxruntime.version>
   </properties>
 
   <dependencyManagement>

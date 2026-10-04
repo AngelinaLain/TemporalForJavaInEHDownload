@@ -50,6 +50,8 @@ services:
       - "8082:8082"
     env_file:
       - .env
+    volumes:
+      - ./models:/models:ro
     networks:
       - eh-net
 

@@ -94,7 +94,13 @@ curl http://127.0.0.1:8001/api/dashboard/stats \
 }
 ```
 
-只有 `keyword` 必填；其余字段可省略并采用示例中的默认值，页数上下限默认为空。成功时返回 `workflowId` 和 `runId`。
+`keyword` 与 `gids` 至少提供其一；其余字段可省略并采用示例中的默认值，页数上下限默认为空。成功时返回 `workflowId` 和 `runId`。
+
+按 GID 直接抓取时传入 `gids`，系统会先从 EH API 获取 token 和元数据，再进入正常的去重、下载与入库流程：
+
+```json
+{ "gids": [123456, 234567] }
+```
 
 ### `POST /api/temporal/eh/retry-failed`
 

@@ -9,6 +9,16 @@
                        :label="status.label" :value="status.value" />
           </el-select>
         </el-form-item>
+        <el-form-item label="GID">
+          <el-input
+            v-model="filters.gid"
+            placeholder="单个或多个 GID（逗号/空格分隔）"
+            clearable
+            style="width: 260px"
+            @keyup.enter="searchFromFilters"
+            @clear="searchFromFilters"
+          />
+        </el-form-item>
         <el-form-item label="作品版本">
           <el-select v-model="filters.dedupe" style="width: 150px" @change="searchFromFilters">
             <el-option label="只看首选版本" value="preferred" />
@@ -225,7 +235,7 @@ const tableData = ref([])
 const drawerVisible = ref(false)
 const currentRow = ref(null)
 const statusOptions = STATUS_OPTIONS
-const filters = reactive({ status: '', keyword: '', tag: '', tagInput: '', dedupe: 'preferred' })
+const filters = reactive({ status: '', gid: '', keyword: '', tag: '', tagInput: '', dedupe: 'preferred' })
 const pagination = reactive({ page: 1, size: 20, total: 0 })
 const sort = reactive({ prop: 'crawledAt', order: 'desc' })
 const tagDetailMap = reactive({})
@@ -254,6 +264,7 @@ const positiveInteger = (value, fallback, max) => {
 const applyRouteQuery = query => {
   const requestedStatus = normalizeStatusValue(typeof query.status === 'string' ? query.status : '')
   filters.status = statusOptions.some(status => status.value === requestedStatus) ? requestedStatus : ''
+  filters.gid = typeof query.gid === 'string' ? query.gid : ''
   filters.keyword = typeof query.q === 'string' ? query.q : ''
   filters.tag = typeof query.tag === 'string' ? query.tag : ''
   filters.dedupe = ['preferred', 'all', 'duplicates'].includes(query.dedupe) ? query.dedupe : 'preferred'
@@ -272,6 +283,7 @@ const buildRouteQuery = () => {
     order: sort.order
   }
   if (filters.status) query.status = filters.status
+  if (filters.gid.trim()) query.gid = filters.gid.trim()
   if (filters.keyword.trim()) query.q = filters.keyword.trim()
   if (filters.tag) query.tag = filters.tag
   if (filters.dedupe !== 'preferred') query.dedupe = filters.dedupe
@@ -312,6 +324,7 @@ const loadData = async ({ updateUrl = true } = {}) => {
     sortOrder: sort.order
   }
   if (filters.status) params.status = filters.status
+  if (filters.gid.trim()) params.gid = filters.gid.trim()
   if (filters.keyword.trim()) params.keyword = filters.keyword.trim()
   if (filters.tag) params.tag = filters.tag
   params.dedupe = filters.dedupe
@@ -395,6 +408,7 @@ const clearTagFilter = () => {
 
 const resetFilters = () => {
   filters.status = ''
+  filters.gid = ''
   filters.keyword = ''
   filters.tag = ''
   filters.tagInput = ''

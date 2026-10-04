@@ -9,6 +9,10 @@ logging:
 spring:
   config:
     import: "optional:file:.env[.properties],optional:file:../.env[.properties]"
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
   application:
     name: eh-ai-service
   cloud:
@@ -45,3 +49,14 @@ management:
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}
+
+ai:
+  internal-token: ${AI_INTERNAL_TOKEN:}
+  embedding:
+    enabled: ${AI_EMBEDDING_ENABLED:false}
+    model-path: ${AI_EMBEDDING_MODEL_PATH:/models/dinov2-small-ONNX_int8.onnx}
+    model-name: ${AI_EMBEDDING_MODEL_NAME:dinov2-small-int8}
+    model-version: ${AI_EMBEDDING_MODEL_VERSION:dinov2-small-int8-v1}
+    input-size: ${AI_EMBEDDING_INPUT_SIZE:224}
+    max-image-pixels: ${AI_EMBEDDING_MAX_IMAGE_PIXELS:40000000}
+    intra-op-threads: ${AI_EMBEDDING_THREADS:0}
