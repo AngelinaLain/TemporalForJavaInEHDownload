@@ -7,8 +7,8 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 
 /**
- * Limits repeated failed logins within a single application instance.
- * A distributed deployment should replace this with a shared Redis-backed limiter.
+ * 限制在单个应用程序实例中重复失败的登录。
+ * 分布式部署应该用一个共享的redis支持的限制器来取代它。
  */
 @Component
 public class LoginAttemptService {

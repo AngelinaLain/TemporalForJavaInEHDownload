@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.Result;
 import com.checker.dto.GalleryCollectionCandidate;
 import com.checker.dto.GalleryCollectionItemRequest;
@@ -25,6 +26,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/collections")
+@Tag(name = "图库集合", description = "集合的维护、图库归类与推荐")
 @PreAuthorize("hasRole('ADMIN')")
 public class GalleryCollectionController {
     private final GalleryCollectionService service;

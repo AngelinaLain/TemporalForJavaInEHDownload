@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
@@ -34,6 +35,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/komga-import-reviews")
+@Tag(name = "Komga 导入审核", description = "Komga 导入失败记录查询与重试")
 @PreAuthorize("hasRole('ADMIN')")
 public class KomgaImportReviewController {
     private final EhGalleriesMapper galleriesMapper;

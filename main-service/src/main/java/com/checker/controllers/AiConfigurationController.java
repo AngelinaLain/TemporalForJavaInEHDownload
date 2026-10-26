@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.Result;
 import com.checker.dto.AiProviderRequest;
 import com.checker.dto.AiProviderView;
@@ -23,6 +24,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/ai/config")
+@Tag(name = "AI 配置", description = "AI 服务商、模型与使用场景配置")
 @PreAuthorize("hasRole('ADMIN')")
 public class AiConfigurationController {
     private final AiConfigurationService configurationService;

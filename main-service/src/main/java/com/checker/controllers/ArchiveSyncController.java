@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -35,6 +36,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/archive-sync")
+@Tag(name = "归档同步", description = "归档扫描、封面匹配、审核与重新下载")
 @PreAuthorize("hasRole('ADMIN')")
 public class ArchiveSyncController {
     private final ArchiveSyncService syncService;

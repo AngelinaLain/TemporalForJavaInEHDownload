@@ -12,6 +12,7 @@
 - `POST /api/auth/login` 无需认证；主服务其他业务端点均需管理员 JWT。
 - 请求头：`Authorization: Bearer <jwt-token>`
 - JSON 请求应携带：`Content-Type: application/json`
+- 交互式文档：`http://127.0.0.1:8001/swagger-ui.html`，OpenAPI JSON 为 `/v3/api-docs`。页面已定义 JWT Bearer 认证，点击 Authorize 填入 Token 即可直接调用。
 
 ### 1.2 主服务响应
 
@@ -116,7 +117,7 @@ curl http://127.0.0.1:8001/api/dashboard/stats \
 
 ### `POST /api/temporal/eh/collections/build-by-tags`
 
-按标签创建或更新 Komga 合集。该端点是旧的“按标签直接构建”能力；自定义合集管理请使用第 9 节接口。
+按标签创建或更新 Komga 合集。该端点是旧的“按标签直接构建”能力；自定义合集管理请使用第 10 节接口。
 
 ```json
 {
@@ -175,7 +176,7 @@ curl http://127.0.0.1:8001/api/dashboard/stats \
 
 | 方法 | 路径 | 参数/说明 |
 | --- | --- | --- |
-| GET | `/api/dashboard/suggestions` | `q` 必填；`limit=10`，最大 30；`type=all|title|tag` |
+| GET | `/api/dashboard/suggestions` | `q` 必填；`limit=10`，最大 30；`type=all\|title\|tag` |
 | GET | `/api/dashboard/tag-translations` | 返回完整的英文标签到中文名称映射 |
 | POST | `/api/dashboard/tag-translations/refresh` | 刷新标签翻译缓存，无请求体 |
 | GET | `/api/dashboard/tag-detail` | `tag` 必填；返回 `tag`、`name`、`intro` |
@@ -204,6 +205,12 @@ Query：`page=1`、`size=20`、`decision=PENDING`。`decision` 可使用 `PENDIN
 
 也可提交 `{"decision":"VARIANT"}`，表示相关但应保留为独立版本。`MATCH` 时 `preferredGid` 必须是审核记录左右两侧之一。响应包含 `reviewId`、`decision`、`dispatchGids`，以及实际启动的 `workflows`。
 
+### `POST /api/dedupe-reviews/{id}/ai-review`
+
+对该审核记录的两个候选版本发起 AI 视觉复核，无需请求体。相同候选对已有 `QUEUED` 或 `RUNNING` 的任务时会复用该任务，避免重复提交。响应包含 `jobId` 和 `workflowId`，后续进度用 `GET /api/visual-dedup/ai-review/{jobId}` 查询。审核记录不存在时返回业务码 `400`，Temporal 工作流启动失败时返回 `503`。
+
+该结果仅作为人工审核证据，**不会自动提交 MATCH / DIFFERENT / VARIANT 结论**。
+
 ## 6. Komga 入库复核
 
 ### `GET /api/komga-import-reviews`
@@ -223,10 +230,127 @@ Query：`page=1`、`size=20`、`status=KOMGA_IMPORT_FAILED`。`status` 支持 `K
 | GET | `/api/visual-dedup/status` | 返回 `algorithmVersion`、`fingerprintedGalleries`、`latestJob`、`failedGalleries` |
 | POST | `/api/visual-dedup/refresh` | 可选请求体 `{"force":false}`；启动历史指纹刷新并返回任务 |
 | POST | `/api/visual-dedup/refresh/retry` | 请求体 `{"gids":[123,456]}`；重试指定失败项并返回任务 |
+| POST | `/api/visual-dedup/ai-review` | 请求体 `{"leftGid":123,"rightGid":456}`；发起 AI 视觉复核，返回 `jobId` 与 `workflowId` |
+| GET | `/api/visual-dedup/ai-review/{jobId}` | 返回 `{job, result}`；任务不存在时返回业务码 `404` |
 
 已有刷新任务运行时返回业务码 `409`；重试列表非法时返回 `400`。
 
-## 8. 群晖归档同步
+### AI 视觉复核任务
+
+`POST /api/visual-dedup/ai-review` 与去重审核页的入口等价：两个 GID 必须不同、均为正数且存在于数据库。相同候选对已有 `QUEUED` 或 `RUNNING` 任务时复用该任务；工作流启动失败会返回 `503` 并把任务标记为 `FAILED`。
+
+任务执行要求两侧画廊都已生成当前算法版本的页面视觉指纹，并依赖 `ai-service` 的本地向量模型；任一条件不满足时任务以 `FAILED` 结束，原因见 `lastError`。
+
+任务状态取值：
+
+| 状态 | 含义 |
+| --- | --- |
+| `QUEUED` | 已创建，等待 Activity 执行 |
+| `RUNNING` | 正在计算向量与比对采样页 |
+| `COMPLETED` | 完成，结果已写入 |
+| `COMPLETED_WITH_WARNINGS` | 本地向量判断完成，但 LLM 复核失败，`lastError` 记录原因 |
+| `FAILED` | 任务失败，`lastError` 记录原因 |
+
+`GET /api/visual-dedup/ai-review/{jobId}` 的 `data` 包含两个字段：`job` 是任务记录（`id`、`workflowId`、`leftGid`、`rightGid`、`status`、`analysisMode`、阈值、`lastError`、各时间戳），`result` 是结果记录，未完成时为 `null`。`result` 字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `decision` | `SAME_CONTENT`、`POSSIBLE_VARIANT`、`DIFFERENT_CONTENT` 或 `INSUFFICIENT_EVIDENCE` |
+| `confidence` | `0–1` 置信度；`DIFFERENT_CONTENT` 时取 `1 −` 相似度加权值，表示“不同”的可信度 |
+| `embeddingSimilarity` | 采样页向量平均余弦相似度 |
+| `perceptualHashSimilarity` | 采样页感知哈希相似度 |
+| `matchedPages` / `comparedPages` | 达到模糊下限的页数与参与比对的页数 |
+| `pageOrderConsistency` | 页序一致性 |
+| `reason` | 中文判断原因，LLM 复核成功时替换为模型给出的原因 |
+| `requiresHumanReview` | 本地判断固定为 `true`；LLM 复核模式沿用模型返回值，但仍需管理员处置 |
+| `llmUsed` / `imagesTransmitted` | 是否调用 LLM、是否实际发送了图片 |
+
+## 8. AI 配置
+
+端点前缀 `/api/ai/config`，全部要求管理员 JWT。配置保存在数据库（迁移 `V20`），保存后立即生效，不需要重启服务。
+
+### 供应商
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/ai/config/providers` | 返回全部供应商，按名称排序 |
+| POST | `/api/ai/config/providers` | 新建供应商 |
+| PUT | `/api/ai/config/providers/{id}` | 更新供应商 |
+| DELETE | `/api/ai/config/providers/{id}` | 删除供应商；不存在时返回业务码 `404` |
+| POST | `/api/ai/config/providers/{id}/models` | 用已保存的凭据探测可用模型列表 |
+
+创建/更新请求体：
+
+```json
+{
+  "name": "本地 Ollama",
+  "scope": "LOCAL",
+  "baseUrl": "http://ollama:11434",
+  "apiKey": "sk-...",
+  "defaultModel": "qwen2.5-vl",
+  "allowTextMetadata": true,
+  "allowVisualInput": false,
+  "requestTimeoutSeconds": 120,
+  "maxConcurrency": 2,
+  "enabled": true
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `name` | 是 | 全局唯一，重名返回业务码 `400` |
+| `scope` | 是 | `LOCAL` 或 `REMOTE` |
+| `baseUrl` | 是 | 必须是不带 userinfo 的 HTTP/HTTPS 地址；末尾 `/` 会被去掉 |
+| `apiKey` | 否 | 留空表示保持现有密钥；以 AES-GCM 加密后入库，任何接口都不回显明文 |
+| `defaultModel` | 否 | 默认模型名 |
+| `allowTextMetadata` | 否 | 是否允许把标题/标签发送给该供应商，默认 `true` |
+| `allowVisualInput` | 否 | 是否允许发送图片，默认 `false`；`VISION_LLM` 模式必需 |
+| `requestTimeoutSeconds` | 否 | `5–600`，默认 `120` |
+| `maxConcurrency` | 否 | `1–32`，默认 `2` |
+| `enabled` | 否 | 默认 `true`；禁用后不能用于新任务 |
+
+响应中的供应商对象包含 `id`、`name`、`scope`、`protocol`（固定 `OPENAI_COMPATIBLE`）、`baseUrl`、`hasApiKey`、`defaultModel`、`allowTextMetadata`、`allowVisualInput`、`requestTimeoutSeconds`、`maxConcurrency`、`enabled`。
+
+`POST /providers/{id}/models` 成功时返回 `{connected: true, models: [...]}`；供应商不存在或连不上模型服务时返回业务码 `503`。
+
+### 用例
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/ai/config/use-cases` | 返回 `SUMMARY`、`TAG_TRANSLATION`、`VISUAL_DUPLICATE_REVIEW` 三个用例的当前配置 |
+| PUT | `/api/ai/config/use-cases/{useCase}` | 更新用例配置 |
+| GET | `/api/ai/config/use-cases/{useCase}/default-prompt` | 返回该用例的内置默认提示词 |
+
+更新请求体：
+
+```json
+{
+  "providerId": 1,
+  "model": "qwen2.5-vl",
+  "analysisMode": "EMBEDDING_ONLY",
+  "allowImageTransmission": false,
+  "includeMetadata": false,
+  "samplePageCount": 4,
+  "ambiguousMinSimilarity": 0.86,
+  "highSimilarity": 0.94,
+  "prompt": "可选的提示词正文"
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `analysisMode` | 必填，`EMBEDDING_ONLY`、`EMBEDDING_TEXT_LLM` 或 `VISION_LLM` |
+| `allowImageTransmission` | 只有 `VISION_LLM` 可设为 `true`，且所选供应商必须允许视觉输入 |
+| `includeMetadata` | 是否把标题和标签一并送入 LLM |
+| `samplePageCount` | `1–8`，`VISION_LLM` 发送的抽样页上限 |
+| `ambiguousMinSimilarity` / `highSimilarity` | 取值 `0–1`，模糊下限必须小于高相似阈值 |
+| `prompt` | 非空时生成新的提示词版本，历史版本保留 |
+
+响应在请求字段之外还包含 `promptVersionId`、`promptVersion`（版本号）和 `prompt`（当前生效正文）。参数非法或阈值倒置时返回业务码 `400`。
+
+用例首次访问时自动初始化，不需要手工建表或插入数据。`SUMMARY` 与 `TAG_TRANSLATION` 影响画廊简介生成与标签翻译，`VISUAL_DUPLICATE_REVIEW` 供第 7 节的 AI 视觉复核使用。
+
+## 9. 群晖归档同步
 
 ### 状态与扫描
 
@@ -251,7 +375,7 @@ Query：`page=1`、`size=20`、`status=ACTIVE`。`ACTIVE` 包含 `PENDING`、`SY
 | POST | `/api/archive-sync/{gid}/synchronize` | `{"filename":"实际文件.cbz"}`；确认文件并同步数据库/归档状态 |
 | POST | `/api/archive-sync/{gid}/redownload` | 认领记录并启动单画廊重新下载；返回工作流标识 |
 
-## 9. 自定义画廊合集
+## 10. 自定义画廊合集
 
 ### 合集 CRUD
 
@@ -278,7 +402,7 @@ Query：`page=1`、`size=20`、`status=ACTIVE`。`ACTIVE` 包含 `PENDING`、`SY
 | POST | `/api/collections/{id}/items` | `{"gids":[123,456],"source":"MANUAL"}` |
 | DELETE | `/api/collections/{id}/items/{gid}` | 移除单个成员 |
 | GET | `/api/collections/{id}/suggestions` | `limit=30`，返回标题、封面、元数据综合匹配建议 |
-| GET | `/api/collections/gallery-search` | `keyword` 可选，`scope=unassigned|all`，`limit=30` |
+| GET | `/api/collections/gallery-search` | `keyword` 可选，`scope=unassigned\|all`，`limit=30` |
 
 成员/候选字段包括 `gid`、`title`、`originalTitle`、`galleryUrl`、`pageCount`、`rating`、合集信息，以及建议场景下的 `score`、`titleSimilarity`、`coverSimilarity`、`metadataSimilarity`、`reason`。
 
@@ -291,7 +415,7 @@ Query：`page=1`、`size=20`、`status=ACTIVE`。`ACTIVE` 包含 `PENDING`、`SY
 
 同步任务已运行时返回业务码 `409`。
 
-## 10. Temporal 监控
+## 11. Temporal 监控
 
 ### `GET /api/temporal/monitor/workflows`
 
@@ -305,9 +429,17 @@ Query：`page=1`、`size=20`、`status=ACTIVE`。`ACTIVE` 包含 `PENDING`、`SY
 
 可选 Query：`runId`、`reason`。默认原因为“用户在监控页面手动终止”。该操作不可撤销。
 
-## 11. AI 服务内部接口
+## 12. AI 服务内部接口
 
-AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP 状态和响应体。当前未在管理前端直接调用。
+AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP 状态和响应体。管理前端不直接调用这些端点，均由 `main-service` 转发。
+
+`/api/ai/dynamic/**` 与 `/api/ai/embedding/**` 需要内部令牌请求头：
+
+```text
+X-AI-Internal-Token: <AI_INTERNAL_TOKEN>
+```
+
+`AI_INTERNAL_TOKEN` 少于 16 个字符时这两个前缀直接返回 HTTP `503`；令牌缺失或错误返回 `401`。`/api/ai/generate-summary` 与 `/api/ai/batch-translate-tags` 目前不校验该请求头。
 
 ### `POST /api/ai/generate-summary`
 
@@ -325,7 +457,47 @@ AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP �
 
 成功响应为输入标签到中文翻译的 JSON 对象；空列表返回 `{}`。AI 节点不可用时返回 HTTP `503`，内部错误返回 `500`。
 
-## 12. Actuator
+### `POST /api/ai/dynamic/models`
+
+向任意 OpenAI 兼容端点探测模型列表：
+
+```json
+{ "baseUrl": "http://ollama:11434", "apiKey": "sk-...", "timeoutSeconds": 30 }
+```
+
+成功返回 `{"models":["qwen2.5-vl"]}`；参数非法返回 `400`，连接失败返回 `503`。
+
+### `POST /api/ai/dynamic/chat`
+
+```json
+{
+  "baseUrl": "http://ollama:11434",
+  "apiKey": "sk-...",
+  "model": "qwen2.5-vl",
+  "prompt": "请依据证据判断……",
+  "images": [{ "mimeType": "image/jpeg", "base64": "..." }],
+  "temperature": 0.2,
+  "timeoutSeconds": 120
+}
+```
+
+`images` 可省略。成功返回 `{"content":"模型输出文本"}`；参数非法返回 `400`，模型调用失败返回 `503`。
+
+### `GET /api/ai/embedding/status`
+
+返回 `enabled`、`available`、`model`、`modelVersion`、`inputSize`、`modelPath`。只有 `available` 为 `true` 时视觉复核才能执行，该字段同时要求功能开启且模型文件存在。
+
+### `POST /api/ai/embedding`
+
+`multipart/form-data`，字段名 `image`，单文件上限 20 MB。成功返回：
+
+```json
+{ "model": "dinov2-small-int8", "modelVersion": "dinov2-small-int8-v1", "dimensions": 384, "values": [] }
+```
+
+`values` 为已做 L2 归一化的浮点向量。图片为空、无法解码或超过像素上限返回 `400`；功能未启用或模型缺失返回 `503`。
+
+## 13. Actuator
 
 | 路径 | 认证 | 说明 |
 | --- | --- | --- |
@@ -334,7 +506,9 @@ AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP �
 | `/actuator/prometheus` | 无 | Prometheus 指标 |
 | `/actuator/**` 其他端点 | 管理员 JWT | Spring Boot 运维端点 |
 
-## 13. 完整端点索引
+Redis 探测也计入健康检查：Redis 不可达时 `/actuator/health` 会变为 `DOWN`。确认不依赖 Redis（已降级为进程内实现）时，可设置 `MANAGEMENT_HEALTH_REDIS_ENABLED=false` 关闭该项。
+
+## 14. 完整端点索引
 
 | 分组 | 方法 | 路径 |
 | --- | --- | --- |
@@ -361,11 +535,14 @@ AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP �
 | Dashboard | GET | `/api/dashboard/tag-detail` |
 | 去重审核 | GET | `/api/dedupe-reviews` |
 | 去重审核 | POST | `/api/dedupe-reviews/{id}/resolve` |
+| 去重审核 | POST | `/api/dedupe-reviews/{id}/ai-review` |
 | Komga 复核 | GET | `/api/komga-import-reviews` |
 | Komga 复核 | POST | `/api/komga-import-reviews/{gid}/retry` |
 | 视觉去重 | GET | `/api/visual-dedup/status` |
 | 视觉去重 | POST | `/api/visual-dedup/refresh` |
 | 视觉去重 | POST | `/api/visual-dedup/refresh/retry` |
+| 视觉去重 | POST | `/api/visual-dedup/ai-review` |
+| 视觉去重 | GET | `/api/visual-dedup/ai-review/{jobId}` |
 | 归档同步 | GET | `/api/archive-sync/status` |
 | 归档同步 | POST | `/api/archive-sync/scan` |
 | 归档同步 | POST | `/api/archive-sync/cover-match` |
@@ -388,3 +565,15 @@ AI 服务端点不使用主服务的 `Result` 包装，而是直接返回 HTTP �
 | Temporal | POST | `/api/temporal/monitor/workflows/{workflowId}/terminate` |
 | AI | POST | `/api/ai/generate-summary` |
 | AI | POST | `/api/ai/batch-translate-tags` |
+| AI | POST | `/api/ai/dynamic/models` |
+| AI | POST | `/api/ai/dynamic/chat` |
+| AI | GET | `/api/ai/embedding/status` |
+| AI | POST | `/api/ai/embedding` |
+| AI 配置 | GET | `/api/ai/config/providers` |
+| AI 配置 | POST | `/api/ai/config/providers` |
+| AI 配置 | PUT | `/api/ai/config/providers/{id}` |
+| AI 配置 | DELETE | `/api/ai/config/providers/{id}` |
+| AI 配置 | POST | `/api/ai/config/providers/{id}/models` |
+| AI 配置 | GET | `/api/ai/config/use-cases` |
+| AI 配置 | PUT | `/api/ai/config/use-cases/{useCase}` |
+| AI 配置 | GET | `/api/ai/config/use-cases/{useCase}/default-prompt` |

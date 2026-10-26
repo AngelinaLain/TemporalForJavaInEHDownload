@@ -33,6 +33,10 @@ spring:
     virtual:
       # 仅 Java 21+ 可开启（Spring Boot 3.2 特性），Java 17 下由 VirtualThreadConfig 自动回退
       enabled: ${VIRTUAL_THREADS_ENABLED:false}
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    lang: zh-cn
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
   type-aliases-package: com.checker.entity

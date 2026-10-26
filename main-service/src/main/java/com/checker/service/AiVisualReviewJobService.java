@@ -5,6 +5,11 @@ import com.checker.entity.AiProviderConfigEntity;
 import com.checker.entity.AiUseCaseConfigEntity;
 import com.checker.entity.AiVisualReviewJobEntity;
 import com.checker.entity.AiVisualReviewResultEntity;
+import com.checker.common.Constants;
+import com.checker.temporalServices.workflows.VisualReviewWorkflow;
+import io.temporal.api.common.v1.WorkflowExecution;
+import io.temporal.client.WorkflowClient;
+import io.temporal.client.WorkflowOptions;
 import com.checker.mapper.AiVisualReviewJobMapper;
 import com.checker.mapper.AiVisualReviewResultMapper;
 import com.checker.mapper.EhGalleriesMapper;
@@ -22,15 +27,18 @@ public class AiVisualReviewJobService {
     private final AiVisualReviewResultMapper resultMapper;
     private final EhGalleriesMapper galleriesMapper;
     private final AiConfigurationService configurationService;
+    private final WorkflowClient workflowClient;
 
     public AiVisualReviewJobService(AiVisualReviewJobMapper jobMapper,
                                     AiVisualReviewResultMapper resultMapper,
                                     EhGalleriesMapper galleriesMapper,
-                                    AiConfigurationService configurationService) {
+                                    AiConfigurationService configurationService,
+                                    WorkflowClient workflowClient) {
         this.jobMapper = jobMapper;
         this.resultMapper = resultMapper;
         this.galleriesMapper = galleriesMapper;
         this.configurationService = configurationService;
+        this.workflowClient = workflowClient;
     }
 
     @Transactional
@@ -74,6 +82,34 @@ public class AiVisualReviewJobService {
         return job;
     }
 
+    /** Reuse an unfinished pair review so refreshing an audit case never sends duplicate requests. */
+    @Transactional
+    public AiVisualReviewJobEntity createOrReuse(long firstGid, long secondGid) {
+        long left = Math.min(firstGid, secondGid);
+        long right = Math.max(firstGid, secondGid);
+        AiVisualReviewJobEntity active = jobMapper.selectOne(new QueryWrapper<AiVisualReviewJobEntity>()
+                .eq("left_gid", left).eq("right_gid", right)
+                .in("status", "QUEUED", "RUNNING")
+                .orderByDesc("created_at").last("LIMIT 1"));
+        return active == null ? create(left, right) : active;
+    }
+
+    public AiVisualReviewJobEntity launch(long leftGid, long rightGid) {
+        AiVisualReviewJobEntity job = createOrReuse(leftGid, rightGid);
+        if (job.getWorkflowId() != null && !job.getWorkflowId().isBlank()) return job;
+        try {
+            String workflowId = "visual-review-" + job.getId();
+            VisualReviewWorkflow workflow = workflowClient.newWorkflowStub(VisualReviewWorkflow.class,
+                    WorkflowOptions.newBuilder().setTaskQueue(Constants.TASK_QUEUE).setWorkflowId(workflowId).build());
+            WorkflowExecution execution = WorkflowClient.start(workflow::execute, job.getId());
+            attachWorkflow(job.getId(), execution.getWorkflowId());
+            job.setWorkflowId(execution.getWorkflowId());
+            return job;
+        } catch (RuntimeException exception) {
+            markLaunchFailed(job.getId(), exception);
+            throw exception;
+        }
+    }
     public void attachWorkflow(String jobId, String workflowId) {
         AiVisualReviewJobEntity job = require(jobId);
         job.setWorkflowId(workflowId);

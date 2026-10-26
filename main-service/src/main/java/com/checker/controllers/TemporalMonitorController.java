@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.Result;
 import io.temporal.api.common.v1.WorkflowExecution;
 import io.temporal.api.enums.v1.WorkflowExecutionStatus;
@@ -29,6 +30,7 @@ import java.util.Optional;
  */
 @RestController
 @RequestMapping("/api/temporal/monitor")
+@Tag(name = "工作流监控", description = "Temporal 工作流状态、历史与终止操作")
 @PreAuthorize("hasRole('ADMIN')")
 public class TemporalMonitorController {
 

@@ -14,6 +14,7 @@ GalleryImport 是一套基于 Temporal 的 EHentai 画廊自动化导入与归�
 - 支持自定义画廊合集，并把合集同步为 Komga Series。
 - 支持扫描既有群晖归档，通过文件名和封面匹配数据库记录，人工确认后同步或重新下载。
 - 提供画廊管理、重复项审核、Komga 复核、归档同步、操作入口、监控大盘和 Temporal 工作流管理页面。
+- 支持在「AI 设置」页配置多个 OpenAI 兼容供应商、分析模式与提示词版本；AI 视觉复核结果只作为人工审核证据，不会自动提交结论。
 
 ## 当前处理链路
 
@@ -33,7 +34,7 @@ Temporal 工作流使用版本标记兼容已存在的历史记录，升级后�
 | --- | ---: | --- |
 | `main-service` | `8001` | REST API、Temporal 编排与 Activity、数据库迁移、下载/归档/Komga 集成 |
 | `scraper-worker` | `8081` | EHentai 搜索、详情抓取与下载地址解析 |
-| `ai-service` | `8082` | 简介生成和标签批量翻译 |
+| `ai-service` | `8082` | 简介生成、标签翻译与本地视觉向量（ONNX），并提供动态模型调用代理 |
 | `前端` | `8002` | Vue 3 管理后台；Nginx 将 `/api` 反向代理到主服务 |
 | MySQL / Temporal / Nacos | 外部提供 | 持久化、可靠工作流与服务配置/发现 |
 | Redis | `6379` | JWT 黑名单与缓存；不可用时部分能力降级为进程内实现 |
@@ -109,6 +110,50 @@ Docker Compose 默认把 `/data/download-cache` 挂载到命名卷 `download-cac
 
 审核结论保存到 `eh_dedupe_reviews`，后续抓取、重启和重新聚类都会复用，不会被下一次自动评分覆盖。候选桶和审核记录使用数据库锁，避免审核与下载认领并发冲突。
 
+## AI 配置与视觉复核
+
+### AI 供应商与用例
+
+登录后进入 `/ai-settings` 管理 AI 配置。配置保存在数据库（迁移 `V20`），保存后立即生效，不需要重启服务：
+
+- **供应商**：任意 OpenAI 兼容端点（OpenAI、Ollama、vLLM 等），范围为 `LOCAL` 或 `REMOTE`，并分别控制是否允许文本元数据、是否允许视觉输入、请求超时和并发上限。API Key 使用 `AI_CONFIG_MASTER_KEY` 做 AES-GCM 加密后入库，接口只返回 `hasApiKey`。
+- **用例**：内置 `SUMMARY`（画廊摘要）、`TAG_TRANSLATION`（标签翻译）和 `VISUAL_DUPLICATE_REVIEW`（视觉重复复核）。每个用例可绑定供应商、模型、分析模式和提示词；保存新提示词会自动生成新版本，历史版本不会被覆盖。
+
+`VISUAL_DUPLICATE_REVIEW` 支持三种分析模式：
+
+| 分析模式 | 行为 |
+| --- | --- |
+| `EMBEDDING_ONLY` | 只比较本地 DINOv2 向量与感知哈希，不调用 LLM（默认） |
+| `EMBEDDING_TEXT_LLM` | 本地向量判为“可能是变体”时，把数值证据和标题/标签交给文本 LLM 复核 |
+| `VISION_LLM` | 在上述基础上再发送抽样页图片，需要供应商开启“允许视觉输入” |
+
+### 视觉复核流程
+
+1. 在「去重审核」页点击「AI 视觉复核」，或在「视觉去重」页手动指定两个 GID 发起。
+2. 系统读取两侧已生成的页面感知哈希；再从归档中取出对应抽样页，缺向量时调用 `ai-service` 的 ONNX 模型生成并写入 `eh_gallery_page_embeddings`。
+3. 按哈希距离配对采样页，计算向量余弦相似度、哈希相似度、匹配页比例和页序一致性，加权得出 0–1 的置信度。
+4. 同一候选对已有 `QUEUED` 或 `RUNNING` 任务时直接复用，不会重复提交。
+5. 任务状态与结果可在「视觉去重」页查看，也可调用 `GET /api/visual-dedup/ai-review/{jobId}`。
+
+判定阈值取自用例配置的 `ambiguousMinSimilarity`（默认 `0.86`）和 `highSimilarity`（默认 `0.94`）：
+
+| 结论 | 条件 |
+| --- | --- |
+| `SAME_CONTENT` | 向量相似度达到高阈值且采样页覆盖率 ≥ 60% |
+| `POSSIBLE_VARIANT` | 向量相似度达到模糊下限，或哈希相似度 ≥ 0.82 且覆盖率 ≥ 35% |
+| `DIFFERENT_CONTENT` | 未达到上述任何条件 |
+| `INSUFFICIENT_EVIDENCE` | 没有可对齐的采样页 |
+
+任务状态取值为 `QUEUED`、`RUNNING`、`COMPLETED`、`COMPLETED_WITH_WARNINGS`（本地判断成功但 LLM 复核失败）和 `FAILED`；失败原因写入 `last_error`。
+
+### 限制与前置条件
+
+- AI 结论只是审核证据：系统不会据此自动写入 `MATCH`、`DIFFERENT` 或 `VARIANT` 结论，本地向量判断的 `requiresHumanReview` 固定为 `true`。
+- 复核要求两侧画廊已生成当前算法版本的页面视觉指纹（抓取阶段会生成）；任一缺失时任务直接失败，需要先在「视觉去重」页补算。
+- 复核依赖 `ai-service` 的本地向量模型：需要设置 `AI_EMBEDDING_ENABLED=true` 并让模型文件可读（Compose 已把 `./models` 只读挂载到 `/models`），否则任务会直接失败。
+- `main-service` 调用 `ai-service` 的内部接口需要 `AI_INTERNAL_TOKEN`（至少 16 个字符），未配置时 ai-service 对这些接口返回 `503`。
+- 修改 `AI_EMBEDDING_MODEL_VERSION`、更换 ONNX 权重或改动预处理方式后，旧向量视为失效并自动重算。
+
 ## Komga 扫描说明
 
 文件上传后先标记为 `WAITING_KOMGA`，系统再触发并轮询 Komga。只有在目标 Library、`N8N_Update` 系列和数据库文件名（`[gid] 标题.cbz`）唯一匹配并取得 BookID，且幂等元数据更新成功后，才标记为 `IMPORTED`。多个精确候选、扫描接口失败或等待超时会标记为 `KOMGA_IMPORT_FAILED`，不会提前显示为已入库。
@@ -137,6 +182,7 @@ GalleryImport/
 ├── scraper-worker/   # EHentai 搜索与画廊抓取
 ├── ai-service/       # AI 简介/翻译服务
 ├── 前端/              # Vue 3 管理界面
+├── models/           # DINOv2 ONNX 视觉模型（体积较大，已被 .gitignore 排除）
 ├── deploy/           # Prometheus、Grafana、Loki、Promtail 配置
 ├── Dockerfile
 └── docker-compose.yml
@@ -151,6 +197,8 @@ GalleryImport/
 | 数据 | MySQL、Flyway、Redis |
 | 网络与存储 | OkHttp、SMBJ、SFTP |
 | 前端 | Vue 3、Vite 5、Element Plus、Pinia、ECharts |
+| AI | Spring AI（OpenAI 兼容）、ONNX Runtime + DINOv2 本地向量 |
+| 接口文档 | springdoc-openapi 2.5（Swagger UI） |
 | 可观测性 | Actuator、Prometheus、Grafana、Loki、Promtail、Zipkin |
 | 基础设施 | Nacos、Docker Compose |
 
@@ -272,6 +320,7 @@ npm run build
 | V17 | 增加归档封面匹配结果与状态 |
 | V18 | 记录实际归档路径与 Series 同步签名 |
 | V19 | 记录 Komga Series 清理路径和文件名 |
+| V20 | 增加 AI 供应商、提示词版本、用例配置、页面向量与视觉复核任务表 |
 
 迁移文件位于 `main-service/src/main/resources/db/migration/`。
 
@@ -284,6 +333,7 @@ npm run build
 - `/collections`：创建合集、维护成员、查看匹配建议并同步 Komga Series。
 - `/dedupe-reviews`：重复候选人工审核。
 - `/visual-dedup`：视觉指纹覆盖率、历史刷新状态与失败重试。
+- `/ai-settings`：AI 供应商、模型、分析模式与提示词配置。
 - `/archive-sync`：群晖存量归档扫描、封面匹配、同步与重新下载。
 - `/komga-import-reviews`：Komga 入库失败查看与仅 Komga 补偿。
 - `/operations`：抓取、重试等操作入口。
@@ -300,8 +350,9 @@ npm run build
 - 人工处置：去重审核、Komga 入库复核、视觉刷新失败重试、归档同步审核。
 - 合集：合集 CRUD、成员维护、智能建议、Komga Series 同步。
 - 运维：Temporal 工作流树、事件历史与终止操作。
+- AI 配置：供应商与模型探测、用例分析模式、阈值与提示词版本。
 
-完整的请求参数、请求体、响应字段、错误码和全部端点索引参见 [API_文档.md](./API_文档.md)。Spring Boot 还公开 `/actuator/health`、`/actuator/info` 和 `/actuator/prometheus`；其他 Actuator 端点需要管理员 JWT。
+完整的请求参数、请求体、响应字段、错误码和全部端点索引参见 [API_文档.md](./API_文档.md)。运行时可访问 `http://<host>:8001/swagger-ui.html` 查看由 springdoc 生成的交互式文档（JSON 为 `/v3/api-docs`），页面已内置 JWT Bearer 认证，填入 Token 即可直接调试。Spring Boot 还公开 `/actuator/health`、`/actuator/info` 和 `/actuator/prometheus`；其他 Actuator 端点需要管理员 JWT。
 
 ## 邮件通知
 
@@ -313,6 +364,7 @@ npm run build
 - 失败任务恢复前先保留 `download-cache`，否则会失去断点续传数据。
 - Komga 长时间未命中时，依次检查群晖目标路径、Komga Library ID、文件是否已原子发布以及 Komga 扫描队列。
 - 生产环境建议启用 Redis，以共享 JWT 黑名单和 AI 翻译缓存。
+- 妥善备份 `AI_CONFIG_MASTER_KEY`：丢失或更换后，数据库中已保存的供应商 API Key 将无法解密，只能重新录入。
 - 默认关闭 Zipkin 采样；启动 Zipkin 后再设置 `TRACING_SAMPLE_RATE`。
 
 ## 安全说明

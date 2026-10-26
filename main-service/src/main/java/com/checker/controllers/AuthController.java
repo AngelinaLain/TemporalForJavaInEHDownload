@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.Result;
 import com.checker.config.JwtTokenProvider;
 import com.checker.config.SecurityProperties;
@@ -21,6 +22,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
+@Tag(name = "认证", description = "登录、登出与访问令牌管理")
 public class AuthController {
 
     private final JwtTokenProvider jwtTokenProvider;

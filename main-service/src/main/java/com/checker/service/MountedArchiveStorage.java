@@ -18,7 +18,7 @@ import java.util.Optional;
 import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 
-/** Direct filesystem access to a Komga library bind-mounted into the process/container. */
+/** 直接访问绑定到进程/容器中的Komga库。 */
 @Slf4j
 @Component
 public class MountedArchiveStorage {

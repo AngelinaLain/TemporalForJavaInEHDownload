@@ -143,6 +143,10 @@
             <el-icon><VideoPlay /></el-icon> 启动工作流
           </el-button>
         </el-form-item>
+        <el-alert
+          title="抓取阶段会先生成预览视觉指纹；进入灰区的候选将显示在“去重审核”，可直接发起 AI 视觉复核辅助判断。"
+          type="info" :closable="false" show-icon
+        />
       </el-form>
     </el-card>
 

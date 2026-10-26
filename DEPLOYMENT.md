@@ -91,7 +91,10 @@ nano .env
 | KOMGA_URL、KOMGA_API_KEY、KOMGA_LIBRARY_ID | Komga 连接信息 |
 | SYNOLOGY_* 或 SMB_* | 群晖上传参数 |
 | NOTIFICATION_ADMIN_EMAIL、GRAPH_* | 汇总邮件参数，不启用邮件时可留空 |
-| AI_BASE_URL、AI_API_KEY、AI_MODEL | AI 服务参数，不启用 AI 时按项目要求配置 |
+| AI_BASE_URL、AI_API_KEY、AI_MODEL | ai-service 调用 OpenAI 兼容服务的兜底配置 |
+| AI_CONFIG_MASTER_KEY | 加密数据库内供应商 API Key，至少 16 个字符，勿与 JWT_SECRET 复用 |
+| AI_INTERNAL_TOKEN | main-service 调用 ai-service 内部接口的令牌，至少 16 个字符 |
+| AI_EMBEDDING_* | 本地视觉向量模型，启用 AI 视觉复核时才需要 |
 
 Compose 内的服务不能用 localhost 访问宿主机服务。若 MySQL、Nacos、Temporal 或 Komga 在 10.10.10.175 上运行，应填写 10.10.10.175；如果 Redis 使用 Compose 自带容器，建议设置：
 
@@ -142,6 +145,25 @@ docker compose exec backend sh -c 'test -r /data/komga-library && test -w /data/
 
 容器内固定使用 `/data/komga-library`。路径可读写时应用自动优先使用本地文件系统；没有使用该覆盖文件或挂载不可用时，继续回退到 SMB/SFTP。Komga 与后端必须挂载同一个实际目录。
 
+### AI 视觉复核（可选）
+
+`ai-service` 默认不加载模型文件。启用 AI 视觉复核需要两步：
+
+1. 确认仓库 `models/` 目录存在视觉模型（默认 `dinov2-small-ONNX_int8.onnx`）。Compose 已把 `./models` 只读挂载到容器内 `/models`。
+2. 在 `.env` 中补充：
+
+~~~dotenv
+AI_EMBEDDING_ENABLED=true
+AI_EMBEDDING_MODEL_PATH=/models/dinov2-small-ONNX_int8.onnx
+AI_EMBEDDING_MODEL_VERSION=dinov2-small-int8-v1
+AI_CONFIG_MASTER_KEY=<至少 16 个字符的随机字符串>
+AI_INTERNAL_TOKEN=<至少 16 个字符的随机字符串>
+~~~
+
+`AI_INTERNAL_TOKEN` 少于 16 个字符时，ai-service 会对向量与动态模型接口直接返回 503，视觉复核任务必然失败。更换 ONNX 权重或预处理方式后必须同时修改 `AI_EMBEDDING_MODEL_VERSION`，旧向量会自动失效并重算。
+
+部署后可在“AI 设置”页添加 OpenAI 兼容供应商（例如本地 Ollama 填 `http://ollama:11434`；容器内不能用 localhost 访问宿主机服务），并为“视觉重复复核”选择分析模式。默认的 `EMBEDDING_ONLY` 只做本地向量与感知哈希比对，不需要 LLM。AI 结论仅作为人工审核证据，不会自动提交去重结论。
+
 ## 4. 首次启动和升级
 
 先构建镜像，再启动容器：
@@ -163,7 +185,7 @@ docker compose build --pull
 docker compose up -d --remove-orphans
 ~~~
 
-应用启动时会自动执行 Flyway 数据库迁移，包括当前的 V9__add_komga_confirmation_tracking.sql。不要手工重复执行迁移 SQL。
+应用启动时会自动执行 Flyway 数据库迁移，当前已推进到 V20__add_ai_visual_review.sql。不要手工重复执行迁移 SQL。
 
 查看启动状态：
 
@@ -193,8 +215,10 @@ http://10.10.10.175:8002
 1. /dashboard 能读取数据库统计。
 2. /galleries 能显示画廊和下载进度。
 3. /komga-import-reviews 能打开 Komga 入库复核页面。
-4. 发起一个小画廊测试，确认本地下载、ComicInfo.xml 注入、群晖上传和 Komga 扫描链路正常。
-5. 检查 eh-backend 日志中 Flyway、Temporal Worker 和 Nacos 注册均无错误。
+4. /ai-settings 能加载供应商与用例列表（新增 AI 配置时重点检查）。
+5. 发起一个小画廊测试，确认本地下载、ComicInfo.xml 注入、群晖上传和 Komga 扫描链路正常。
+6. 检查 eh-backend 日志中 Flyway、Temporal Worker 和 Nacos 注册均无错误。
+7. 需要接口调试时访问 http://10.10.10.175:8001/swagger-ui.html。
 
 Komga 扫描是异步的，确认命中可能需要数分钟。默认每 15 秒轮询一次，最多 40 次；失败记录可在“Komga 入库复核”页面执行“仅重试 Komga”，不会重新下载文件。
 
@@ -240,7 +264,8 @@ docker run --rm \
 同时备份：
 
 - /opt/GalleryImport/.env（使用受限权限保存，不要上传公共位置）。
-- MySQL 数据库，尤其是 eh_galleries、eh_dedupe_reviews 和迁移历史表。
+- MySQL 数据库，尤其是 eh_galleries、eh_dedupe_reviews、AI 配置相关表（ai_provider_configs、ai_use_case_configs、ai_prompt_versions）和迁移历史表。
+- .env 中的 AI_CONFIG_MASTER_KEY：它丢失后数据库里的供应商 API Key 无法解密，只能重新录入。
 - Redis 数据（如果需要保留登录黑名单或 AI 缓存）。
 
 ## 8. 常用运维命令

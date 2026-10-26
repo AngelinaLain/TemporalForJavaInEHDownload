@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.PerceptualHash;
 import com.checker.common.Result;
 import com.checker.entity.VisualRefreshJobEntity;
@@ -24,6 +25,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/visual-dedup")
+@Tag(name = "视觉去重", description = "视觉指纹刷新与 AI 去重审核")
 @PreAuthorize("hasRole('ADMIN')")
 public class VisualDeduplicationController {
     private final VisualHistoryRefreshService refreshService;
@@ -75,14 +77,8 @@ public class VisualDeduplicationController {
         AiVisualReviewJobEntity job = null;
         try {
             if (request == null) return Result.error(400, "请求不能为空");
-            job = reviewJobService.create(request.leftGid(), request.rightGid());
-            String workflowId = "visual-review-" + job.getId();
-            VisualReviewWorkflow workflow = workflowClient.newWorkflowStub(VisualReviewWorkflow.class,
-                    WorkflowOptions.newBuilder().setTaskQueue(Constants.TASK_QUEUE)
-                            .setWorkflowId(workflowId).build());
-            WorkflowExecution execution = WorkflowClient.start(workflow::execute, job.getId());
-            reviewJobService.attachWorkflow(job.getId(), execution.getWorkflowId());
-            return Result.success(Map.of("jobId", job.getId(), "workflowId", execution.getWorkflowId()));
+            job = reviewJobService.launch(request.leftGid(), request.rightGid());
+            return Result.success(Map.of("jobId", job.getId(), "workflowId", job.getWorkflowId()));
         } catch (IllegalArgumentException | IllegalStateException exception) {
             if (job != null && job.getWorkflowId() == null) reviewJobService.markLaunchFailed(job.getId(), exception);
             return Result.error(400, exception.getMessage());

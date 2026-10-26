@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.checker.common.Constants;
 import com.checker.common.Result;
 import com.checker.dto.KomgaCollectionRequest;
@@ -31,6 +32,7 @@ import java.util.UUID;
  */
 @RestController
 @RequestMapping("/api/temporal/eh")
+@Tag(name = "EH 自动化", description = "EHentai 抓取、工作流与批处理任务")
 @PreAuthorize("hasRole('ADMIN')")
 public class EHAutomationController {
 

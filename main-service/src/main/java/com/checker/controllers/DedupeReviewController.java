@@ -1,5 +1,6 @@
 package com.checker.controllers;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
@@ -12,6 +13,8 @@ import com.checker.entity.DedupeReviewEntity;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.DedupeReviewService;
+import com.checker.service.AiVisualReviewJobService;
+import com.checker.entity.AiVisualReviewJobEntity;
 import com.checker.temporalServices.activities.impl.DatabaseActivityImpl;
 import com.checker.temporalServices.workflows.SingleGalleryDownloadWorkflow;
 import io.temporal.api.common.v1.WorkflowExecution;
@@ -36,6 +39,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/dedupe-reviews")
+@Tag(name = "去重审核", description = "重复图库候选项审核与 AI 辅助判定")
 @PreAuthorize("hasRole('ADMIN')")
 public class DedupeReviewController {
     private final DedupeReviewService reviewService;
@@ -43,17 +47,20 @@ public class DedupeReviewController {
     private final DatabaseActivityImpl databaseActivity;
     private final WorkflowClient workflowClient;
     private final EhWorkflowConfig workflowConfig;
+    private final AiVisualReviewJobService visualReviewJobService;
 
     public DedupeReviewController(DedupeReviewService reviewService,
                                   EhGalleriesMapper galleriesMapper,
                                   DatabaseActivityImpl databaseActivity,
                                   WorkflowClient workflowClient,
-                                  EhWorkflowConfig workflowConfig) {
+                                  EhWorkflowConfig workflowConfig,
+                                  AiVisualReviewJobService visualReviewJobService) {
         this.reviewService = reviewService;
         this.galleriesMapper = galleriesMapper;
         this.databaseActivity = databaseActivity;
         this.workflowClient = workflowClient;
         this.workflowConfig = workflowConfig;
+        this.visualReviewJobService = visualReviewJobService;
     }
 
     @GetMapping
@@ -82,6 +89,19 @@ public class DedupeReviewController {
         return Result.success(payload);
     }
 
+    /** AI output is evidence only; an administrator must still resolve the audit case. */
+    @PostMapping("/{id}/ai-review")
+    public Result<Map<String, Object>> startAiReview(@PathVariable Long id) {
+        try {
+            DedupeReviewEntity review = reviewService.require(id);
+            AiVisualReviewJobEntity job = visualReviewJobService.launch(review.getLeftGid(), review.getRightGid());
+            return Result.success(Map.of("jobId", job.getId(), "workflowId", job.getWorkflowId()));
+        } catch (IllegalArgumentException | IllegalStateException exception) {
+            return Result.error(400, exception.getMessage());
+        } catch (RuntimeException exception) {
+            return Result.error(503, "Temporal 工作流启动失败: " + exception.getMessage());
+        }
+    }
     @PostMapping("/{id}/resolve")
     public Result<Map<String, Object>> resolve(@PathVariable Long id,
                                                @RequestBody ResolveDedupeReviewRequest request,

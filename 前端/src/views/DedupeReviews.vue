@@ -23,7 +23,7 @@
     <el-skeleton v-if="firstLoad" :rows="10" animated class="review-skeleton" />
     <el-empty v-else-if="!records.length" description="当前没有需要处理的去重审核" />
 
-    <el-card v-for="item in records" :key="item.id" shadow="hover" class="review-card" v-loading="resolvingId === item.id">
+    <el-card v-for="item in records" :key="item.id" shadow="hover" class="review-card" v-loading="resolvingId === item.id || aiReviewId === item.id">
       <template #header>
         <div class="case-header">
           <div class="case-title">
@@ -91,6 +91,9 @@
       </div>
 
       <div v-if="item.decision === 'PENDING'" class="case-actions">
+        <el-button type="primary" plain :loading="aiReviewId === item.id" @click="startAiReview(item)">
+          AI 视觉复核
+        </el-button>
         <el-button type="primary" @click="confirmRecommended(item)">确认系统推荐</el-button>
         <el-button @click="resolveReview(item, 'MATCH', item.left?.gid, `选择 GID ${item.left?.gid}`)">
           选择左侧
@@ -135,6 +138,7 @@ const records = ref([])
 const loading = ref(false)
 const firstLoad = ref(true)
 const resolvingId = ref(null)
+const aiReviewId = ref(null)
 const pendingCount = ref(0)
 const filters = reactive({ decision: 'PENDING' })
 const pagination = reactive({ page: 1, size: 10, total: 0 })
@@ -197,6 +201,16 @@ const resolveReview = async (item, decision, preferredGid, actionLabel) => {
   }
 }
 
+const startAiReview = async item => {
+  aiReviewId.value = item.id
+  try {
+    const res = await api.post(`/dedupe-reviews/${item.id}/ai-review`)
+    localStorage.setItem('visualAiReviewJobId', res.data.jobId)
+    ElMessage.success('AI 视觉复核已提交；可在“视觉去重”查看进度和结果')
+  } finally {
+    aiReviewId.value = null
+  }
+}
 const decisionMeta = decision => ({
   PENDING: { label: '待审核', type: 'warning' },
   MATCH: { label: '同一作品', type: 'success' },

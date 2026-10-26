@@ -56,6 +56,12 @@ public class DedupeReviewService {
         return reviewMapper.selectCount(query);
     }
 
+    public DedupeReviewEntity require(Long id) {
+        if (id == null) throw new IllegalArgumentException("审核记录不存在");
+        DedupeReviewEntity review = reviewMapper.selectById(id);
+        if (review == null) throw new IllegalArgumentException("审核记录不存在");
+        return review;
+    }
     public List<DedupeReviewEntity> findByCandidateKey(String candidateKey) {
         if (candidateKey == null || candidateKey.isBlank()) return List.of();
         QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();

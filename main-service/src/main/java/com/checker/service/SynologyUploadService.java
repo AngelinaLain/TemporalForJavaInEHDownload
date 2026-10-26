@@ -28,7 +28,7 @@ public interface SynologyUploadService {
         upload(localFile, "", targetFilename, progress);
     }
 
-    /** Upload into a series subdirectory relative to the configured destination. */
+    /** 上载到相对于配置的目标的系列子目录中。 */
     void upload(Path localFile, String relativeDirectory, String targetFilename,
                 LongConsumer progress) throws Exception;
 }

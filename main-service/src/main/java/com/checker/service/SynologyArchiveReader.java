@@ -30,7 +30,7 @@ import java.util.Vector;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Opens an existing Komga archive from the same SMB/SFTP destination used by uploads. */
+/** 从上传使用的相同SMB/SFTP目的地打开现有的Komga存档文件。 */
 @Service
 public class SynologyArchiveReader {
     private static final Pattern GID_PREFIX = Pattern.compile("^\\[(\\d+)](?:\\s|$)");
@@ -70,7 +70,7 @@ public class SynologyArchiveReader {
         }
     }
 
-    /** Cleanup must never fall back to deleting a different file by GID. */
+    /** 清理绝不能退回到按GID删除不同的文件。 */
     public void deleteExact(String directory, String filename) throws Exception {
         try (ArchiveSession session = openSession()) {
             session.deleteExact(directory, filename);
@@ -94,8 +94,8 @@ public class SynologyArchiveReader {
     }
 
     /**
-     * Opens a task-scoped reader. Connections are reused across sequential archive reads and
-     * transparently recreated after transport failures, avoiding thousands of SSH handshakes.
+    * 打开一个任务作用域的阅读器。连接在顺序的存档读取和
+    * 在传输失败后透明地重新创建，避免了数千次SSH握手。
      */
     public ArchiveSession openSession() {
         return new ReusableArchiveSession();

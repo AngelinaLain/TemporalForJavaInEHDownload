@@ -68,6 +68,7 @@ public final class PerceptualHash {
         }
     }
 
+
     private static DecodedImage readBounded(InputStream input) throws IOException {
         try (ImageInputStream imageInput = ImageIO.createImageInputStream(input)) {
             if (imageInput == null) return null;
