@@ -52,6 +52,58 @@ public class DashboardController {
         stats.put("totalSizeGb", Math.round(toDouble(overview.get("total_size_mb")) / 1024 * 100.0) / 100.0);
         return Result.success(stats);
     }
+
+    /**
+     * 面板分析数据。所有聚合都在数据库中完成，并可按抓取时间和下载状态收窄范围。
+     */
+    @GetMapping("/analytics")
+    public Result<Map<String, Object>> getAnalytics(
+            @RequestParam(defaultValue = "30") int days,
+            @RequestParam(required = false) String status) {
+        int safeDays = Math.min(Math.max(days, 0), 3650);
+        String normalizedStatus = status == null || status.isBlank() ? null : normalizeStatus(status);
+        if (status != null && !status.isBlank() && normalizedStatus == null) {
+            return Result.error(400, "不支持的下载状态");
+        }
+
+        List<Object> params = new ArrayList<>();
+        List<String> filters = new ArrayList<>();
+        if (safeDays > 0) {
+            filters.add("crawled_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)");
+            params.add(safeDays);
+        }
+        if (normalizedStatus != null) {
+            filters.add("download_status IN (?, ?)");
+            params.add(normalizedStatus);
+            params.add(statusLabel(normalizedStatus));
+        }
+        String where = filters.isEmpty() ? "" : " WHERE " + String.join(" AND ", filters);
+        Object[] values = params.toArray();
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        result.put("overview", jdbcTemplate.queryForMap("SELECT COUNT(*) total, " +
+                "COALESCE(SUM(file_size_mb), 0) size_mb, COALESCE(AVG(rating), 0) avg_rating, " +
+                "COALESCE(AVG(page_count), 0) avg_pages, " +
+                "COALESCE(SUM(CASE WHEN duplicate_of_gid IS NOT NULL THEN 1 ELSE 0 END), 0) duplicates " +
+                "FROM eh_galleries" + where, values));
+        result.put("status", jdbcTemplate.queryForList("SELECT CASE download_status " +
+                "WHEN '未下载' THEN 'PENDING' WHEN '下载中' THEN 'DOWNLOADING' WHEN '已下载' THEN 'DOWNLOADED' " +
+                "WHEN '已入库' THEN 'IMPORTED' WHEN '下载失败' THEN 'DOWNLOAD_FAILED' ELSE download_status END name, COUNT(*) value " +
+                "FROM eh_galleries" + where + " GROUP BY name ORDER BY value DESC", values));
+        result.put("timeline", jdbcTemplate.queryForList("SELECT DATE(crawled_at) date, COUNT(*) value FROM eh_galleries" + where +
+                (where.isEmpty() ? " WHERE " : " AND ") + "crawled_at IS NOT NULL GROUP BY DATE(crawled_at) ORDER BY date", values));
+        result.put("rating", jdbcTemplate.queryForList("SELECT CASE " +
+                "WHEN rating IS NULL OR rating = 0 THEN '未评分' WHEN rating < 3 THEN '0–3' WHEN rating < 4 THEN '3–4' " +
+                "WHEN rating < 4.5 THEN '4–4.5' ELSE '4.5–5' END name, COUNT(*) value FROM eh_galleries" + where + " GROUP BY name", values));
+        result.put("pages", jdbcTemplate.queryForList("SELECT CASE " +
+                "WHEN page_count IS NULL OR page_count = 0 THEN '未知' WHEN page_count < 20 THEN '<20页' WHEN page_count < 50 THEN '20–49页' " +
+                "WHEN page_count < 100 THEN '50–99页' ELSE '100页+' END name, COUNT(*) value FROM eh_galleries" + where + " GROUP BY name", values));
+        result.put("dedupe", jdbcTemplate.queryForList("SELECT CASE WHEN duplicate_of_gid IS NULL THEN '首选版本' ELSE '重复版本' END name, COUNT(*) value " +
+                "FROM eh_galleries" + where + " GROUP BY name", values));
+        result.put("queries", jdbcTemplate.queryForList("SELECT COALESCE(NULLIF(search_query, ''), '未记录') name, COUNT(*) value FROM eh_galleries" + where +
+                " GROUP BY name ORDER BY value DESC LIMIT 8", values));
+        return Result.success(result);
+    }
     /**
      * 下载状态分布（饼图）
      */
