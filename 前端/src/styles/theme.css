@@ -1,0 +1,104 @@
+:root {
+  --app-font-scale: 1;
+  --app-accent: #4169e1;
+  --app-accent-soft: #eff4ff;
+  --app-text: #25354b;
+  --app-text-secondary: #60718c;
+  --app-text-muted: #8796ad;
+  --app-border: #e0e7f1;
+  --app-background: #f2f5fa;
+  --app-surface: #fff;
+  --app-surface-muted: #f7f9fc;
+  --app-radius: 12px;
+  --app-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --el-color-primary: #4169e1;
+  --el-color-primary-light-3: #7a96eb;
+  --el-color-primary-light-5: #a0b4f0;
+  --el-color-primary-light-7: #c6d2f6;
+  --el-color-primary-light-8: #d9e2f9;
+  --el-color-primary-light-9: #eff4ff;
+  --el-color-primary-dark-2: #3557bf;
+  --el-text-color-primary: var(--app-text);
+  --el-text-color-regular: #60718c;
+  --el-text-color-secondary: #8796ad;
+  --el-text-color-placeholder: #a6b2c3;
+  --el-border-color: var(--app-border);
+  --el-border-color-light: #e9eef5;
+  --el-border-color-lighter: #eef2f8;
+  --el-fill-color-light: #f7f9fc;
+  --el-fill-color-lighter: #fafbfd;
+  --el-fill-color-blank: #fff;
+  --el-bg-color-page: var(--app-background);
+  --el-border-radius-base: 7px;
+  --el-border-radius-small: 5px;
+  --el-font-family: var(--app-font-family);
+  --el-font-size-extra-small: calc(10px * var(--app-font-scale));
+  --el-font-size-small: calc(12px * var(--app-font-scale));
+  --el-font-size-base: calc(13px * var(--app-font-scale));
+  --el-font-size-medium: calc(14px * var(--app-font-scale));
+  --el-font-size-large: calc(17px * var(--app-font-scale));
+  --el-font-size-extra-large: calc(21px * var(--app-font-scale));
+  --el-component-size: max(34px, calc(32px * var(--app-font-scale)));
+  --el-component-size-small: max(26px, calc(25px * var(--app-font-scale)));
+  --el-component-size-large: max(40px, calc(37px * var(--app-font-scale)));
+  --el-box-shadow-light: 0 4px 18px #263b5c0b;
+  --el-box-shadow: 0 10px 30px #263b5c15;
+}
+
+html, body, #app { width: 100%; min-height: 100%; margin: 0; }
+body { background: var(--app-background); color: var(--app-text); font-family: var(--app-font-family); font-size: var(--el-font-size-base); line-height: 1.6; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font-family: inherit; }
+a { color: var(--app-accent); text-underline-offset: 3px; }
+button:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 3px solid #afc6fb; outline-offset: 3px; }
+::selection { color: #2c4c9a; background: #dce7ff; }
+* { scrollbar-color: #c6d1e0 transparent; scrollbar-width: thin; }
+
+.el-card { --el-card-border-color: var(--app-border); --el-card-border-radius: var(--app-radius); box-shadow: none; color: var(--app-text); }
+.el-card.is-hover-shadow:hover { box-shadow: 0 5px 20px #263b5c0d; }
+.el-card__header { padding: 17px 20px; border-bottom-color: #edf1f7; font-size: var(--el-font-size-base); font-weight: 600; }
+.el-card__body { padding: 20px; }
+.el-button { font-weight: 500; }
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain) { box-shadow: 0 2px 6px #4169e117; }
+.el-form-item__label { font-size: var(--el-font-size-small); color: #72819a; }
+.el-form-item { margin-bottom: 19px; }
+.el-input, .el-select { --el-input-text-color: #516581; }
+.el-input__wrapper, .el-textarea__inner, .el-select__wrapper { box-shadow: 0 0 0 1px #dce4ef inset; background: #fff; }
+.el-input__wrapper:hover, .el-select__wrapper:hover { box-shadow: 0 0 0 1px #c4d1e6 inset; }
+.el-table { --el-table-header-bg-color: #fafbfd; --el-table-row-hover-bg-color: #f7faff; --el-table-border-color: #edf1f7; --el-table-text-color: #60718c; --el-table-header-text-color: #8c9bb1; --el-table-tr-bg-color: #fff; font-size: var(--el-font-size-small); }
+.el-table th.el-table__cell { font-weight: 500; font-size: var(--el-font-size-small); padding: 12px 0; }
+.el-table td.el-table__cell { padding: 13px 0; }
+.el-table .cell { line-height: 1.6; }
+.el-tag { --el-tag-font-size: var(--el-font-size-extra-small); border-radius: 4px; height: auto; min-height: 22px; line-height: 1.65; padding-top: 2px; padding-bottom: 2px; }
+.el-pagination { --el-pagination-font-size: var(--el-font-size-small); --el-pagination-button-color: #8091ac; }
+.el-pagination .el-select__wrapper { font-size: var(--el-font-size-small); }
+.el-dialog { --el-dialog-border-radius: 12px; max-width: calc(100vw - 24px); }
+.el-dialog__title, .el-drawer__title { font-size: var(--el-font-size-medium); color: var(--app-text); font-weight: 600; }
+.el-dialog__header, .el-drawer__header { color: var(--app-text); }
+.el-drawer { --el-drawer-padding-primary: 22px; font-size: var(--el-font-size-base); }
+.el-drawer__header { padding-bottom: 18px; margin-bottom: 0; border-bottom: 1px solid #edf1f7; }
+.el-drawer__body { padding-top: 22px; }
+.el-alert { --el-alert-title-font-size: var(--el-font-size-small); --el-alert-description-font-size: var(--el-font-size-small); border-radius: 8px; }
+.el-descriptions { --el-descriptions-item-bordered-label-background: #fafbfd; }
+.el-descriptions__label.el-descriptions__cell.is-bordered-label { color: #8293ab; font-weight: 500; }
+.el-empty__description p { color: #94a2b8; font-size: var(--el-font-size-small); }
+.el-tabs__item { font-size: var(--el-font-size-base); }
+.el-dropdown-menu__item { font-size: var(--el-font-size-small); min-height: 30px; }
+.el-message { max-width: calc(100vw - 30px); border-radius: 8px; }
+.el-message__content { font-size: var(--el-font-size-small); line-height: 1.6; }
+.system-preferences .el-drawer__body { padding: 20px 22px; }
+
+/* Shared defaults also cover the older management pages without changing their behavior. */
+.main-content > div { color: var(--app-text); }
+.main-content .el-row + .el-row { margin-top: 16px; }
+.main-content h2, .main-content h3, .main-content h4 { color: var(--app-text); }
+.main-content .pagination-wrapper { margin-top: 20px; }
+
+@media (max-width: 640px) {
+  .el-card__body { padding: 15px; }
+  .el-card__header { padding: 14px 15px; }
+  .el-form--inline .el-form-item { margin-right: 12px; }
+  .el-drawer { --el-drawer-padding-primary: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .el-overlay, .el-dialog, .el-drawer { transition-duration: .01ms !important; }
+}
