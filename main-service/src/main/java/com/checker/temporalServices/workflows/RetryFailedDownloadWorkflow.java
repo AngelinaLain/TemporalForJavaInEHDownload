@@ -4,7 +4,7 @@ import io.temporal.workflow.WorkflowInterface;
 import io.temporal.workflow.WorkflowMethod;
 
 /**
- * 重试失败下载工作流接口：对数据库中所有“下载失败”状态的画廊重新执行下载流程
+ * 定义失败记录的批量恢复流程，区分重新下载与仅补偿入库。
  */
 @WorkflowInterface
 public interface RetryFailedDownloadWorkflow {

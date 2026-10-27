@@ -23,6 +23,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 提供视觉指纹刷新与 AI 视觉复核的任务入口，返回进度和辅助判断结果。
+ */
 @RestController
 @RequestMapping("/api/visual-dedup")
 @Tag(name = "视觉去重", description = "视觉指纹刷新与 AI 去重审核")
@@ -40,6 +43,9 @@ public class VisualDeduplicationController {
         this.workflowClient = workflowClient;
     }
 
+    /**
+     * 返回当前指纹算法版本、已生成数量和最近任务状态。
+     */
     @GetMapping("/status")
     public Result<Map<String, Object>> status() {
         Map<String, Object> payload = new LinkedHashMap<>();
@@ -51,6 +57,9 @@ public class VisualDeduplicationController {
         return Result.success(payload);
     }
 
+    /**
+     * 启动历史画廊指纹刷新，可按请求决定是否强制重新计算。
+     */
     @PostMapping("/refresh")
     public Result<VisualRefreshJobEntity> refresh(@RequestBody(required = false) Map<String, Boolean> request) {
         try {
@@ -61,6 +70,9 @@ public class VisualDeduplicationController {
         }
     }
 
+    /**
+     * 对用户指定的画廊重新计算归档指纹，常用于重试失败项。
+     */
     @PostMapping("/refresh/retry")
     public Result<VisualRefreshJobEntity> retry(@RequestBody RetryRequest request) {
         try {
@@ -72,6 +84,9 @@ public class VisualDeduplicationController {
         }
     }
 
+    /**
+     * 为两本画廊启动视觉复核，参数不合法或服务不可用时返回可读错误。
+     */
     @PostMapping("/ai-review")
     public Result<Map<String, Object>> startAiReview(@RequestBody AiReviewRequest request) {
         AiVisualReviewJobEntity job = null;
@@ -88,6 +103,9 @@ public class VisualDeduplicationController {
         }
     }
 
+    /**
+     * 读取指定 AI 视觉复核任务及其判断结果。
+     */
     @GetMapping("/ai-review/{jobId}")
     public Result<Map<String, Object>> aiReview(@org.springframework.web.bind.annotation.PathVariable String jobId) {
         try {

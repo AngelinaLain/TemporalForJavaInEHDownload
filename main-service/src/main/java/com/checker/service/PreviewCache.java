@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.concurrent.Callable;
 import java.util.function.ToLongFunction;
 
-/** Small process-local LRU with TTL, byte budgets and per-key request coalescing. */
+/** 进程内的小型最近使用缓存：限制有效期和总大小，并合并同一键的同时加载请求。 */
 final class PreviewCache<K, V> {
     private record Entry<V>(V value, long expiresAt, long weight) {}
     private final LinkedHashMap<K, Entry<V>> entries = new LinkedHashMap<>(16, .75f, true);
@@ -23,10 +23,11 @@ final class PreviewCache<K, V> {
         for (int index = 0; index < locks.length; index++) locks[index] = new Object();
     }
 
+    /** 优先返回未过期结果；同键未命中时合并加载，避免多个图片请求同时重复读取同一份内容。 */
     V getOrLoad(K key, Callable<V> loader) throws Exception {
         V cached = get(key);
         if (cached != null) return cached;
-        // Each cache owns its own locks; loaders can safely consult downstream caches.
+        // 每个缓存使用自己的分段锁，加载时访问另一个缓存不会争用同一组锁。
         synchronized (locks[(key.hashCode() & Integer.MAX_VALUE) % locks.length]) {
             cached = get(key);
             if (cached != null) return cached;
@@ -47,8 +48,9 @@ final class PreviewCache<K, V> {
         return entry.value();
     }
 
+    /** 移除指定键，主动重新检测时用于绕过旧的成功或失败结果。 */
     void invalidate(K key) {
-        // Wait for an in-flight load before removing it, so an explicit retry cannot resurrect stale data.
+        // 等正在加载的同一键结束后再删除，避免主动重试刚清完缓存，旧请求又把旧值放回来。
         synchronized (locks[(key.hashCode() & Integer.MAX_VALUE) % locks.length]) {
             synchronized (this) {
                 Entry<V> removed = entries.remove(key);
@@ -57,6 +59,7 @@ final class PreviewCache<K, V> {
         }
     }
 
+    /** 按大小计算缓存权重，超出预算时淘汰最久未使用的条目。 */
     private synchronized void put(K key, V value) {
         long itemWeight = Math.max(1, weigh.applyAsLong(value));
         if (itemWeight > maxWeight) return;

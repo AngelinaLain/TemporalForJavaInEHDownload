@@ -8,8 +8,8 @@ import lombok.NoArgsConstructor;
 import java.io.Serializable;
 
 /**
- * 工作流运行时设置 DTO — 从 EhWorkflowConfig 读取后通过 Activity 传递给工作流，
- * 使 Temporal 工作流可获取 application.yaml 中的运行时配置。
+ * 把当前下载并发数、轮询间隔和重试次数作为配置快照传给工作流。
+ * 工作流通过数据库活动读取这份配置，避免在历史重放时直接访问会变化的外部配置。
  */
 @Data
 @Builder

@@ -10,6 +10,9 @@ import io.temporal.workflow.Workflow;
 
 import java.time.Duration;
 
+/**
+ * 为单次视觉复核配置执行超时与重试，再交给后台活动处理。
+ */
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class VisualReviewWorkflowImpl implements VisualReviewWorkflow {
     private final VisualReviewActivity activity = Workflow.newActivityStub(VisualReviewActivity.class,
@@ -25,6 +28,7 @@ public class VisualReviewWorkflowImpl implements VisualReviewWorkflow {
                     .build());
 
     @Override
+    /** 按任务 ID 调用视觉复核活动，超时与重试由本工作流的活动配置控制。 */
     public void execute(String jobId) {
         activity.execute(jobId);
     }

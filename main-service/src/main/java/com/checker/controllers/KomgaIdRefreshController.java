@@ -19,6 +19,9 @@ import java.util.List;
 import java.util.Map;
 import java.io.IOException;
 
+/**
+ * 提供数据库旧 Komga ID 的刷新入口、进度查询和停止任务接口，只有管理员可以操作。
+ */
 @RestController
 @RequestMapping("/api/komga-id-refresh")
 @Tag(name = "Komga 关联刷新", description = "按物理归档唯一匹配，更新数据库中的失效 Komga Book ID")
@@ -28,6 +31,9 @@ public class KomgaIdRefreshController {
 
     public KomgaIdRefreshController(KomgaIdRefreshService service) { this.service = service; }
 
+    /**
+     * 接收可选 GID 范围并启动后台刷新，输入无效或已有任务运行时返回明确业务错误。
+     */
     @PostMapping
     public Result<Map<String, Object>> start(@RequestBody(required = false) RefreshRequest request) {
         try { return Result.success(service.start(request == null ? null : request.gids())); }
@@ -35,9 +41,15 @@ public class KomgaIdRefreshController {
         catch (IllegalStateException conflict) { return Result.error(409, conflict.getMessage()); }
     }
 
+    /**
+     * 返回当前实例最近一次刷新任务的进度与有数量上限的结果明细。
+     */
     @GetMapping("/status")
     public Result<Map<String, Object>> status() { return Result.success(service.status()); }
 
+    /**
+     * 按页面显示的任务 ID 请求停止；任务已更换时拒绝，避免旧页面误停新任务。
+     */
     @PostMapping("/cancel")
     public Result<Map<String, Object>> cancel(@RequestBody(required = false) CancelRequest request) {
         try { return Result.success(service.cancel(request == null ? null : request.jobId())); }
@@ -47,8 +59,11 @@ public class KomgaIdRefreshController {
     public record RefreshRequest(@JsonDeserialize(contentUsing = StrictGidDeserializer.class) List<Long> gids) {}
     public record CancelRequest(String jobId) {}
 
-    /** Jackson normally coerces fractional numbers to Long, which could update a different gallery. */
+    /** 严格读取 GID 整数，防止把小数自动截断后更新了另一条画廊。 */
     public static final class StrictGidDeserializer extends JsonDeserializer<Long> {
+        /**
+         * 只接受整数形式的 GID，拒绝字符串、小数和溢出值，避免更新错误的画廊。
+         */
         @Override public Long deserialize(JsonParser parser, DeserializationContext context) throws IOException {
             if (parser.currentToken() != JsonToken.VALUE_NUMBER_INT)
                 return context.reportInputMismatch(Long.class, "GID 必须使用整数 JSON 数值");

@@ -6,7 +6,7 @@ import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 /**
- * 群晖域 Activity：负责与 Synology DownloadStation / FileStation 交互
+ * 定义群晖下载任务创建、状态等待和归档重命名操作。
  */
 @ActivityInterface
 public interface SynologyActivity {

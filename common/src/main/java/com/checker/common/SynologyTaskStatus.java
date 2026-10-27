@@ -1,10 +1,7 @@
 package com.checker.common;
 
 /**
- * 群晖 DownloadStation 任务状态枚举。
- * <p>
- * 替换原先散落在 SynologyActivityImpl、SingleGalleryDownloadWorkflowImpl 中的
- * 魔法字符串 "finished" / "error" / "downloading" 等。
+ * 表示群晖下载任务的运行状态，供轮询逻辑区分等待、下载、完成和失败。
  */
 public enum SynologyTaskStatus {
 

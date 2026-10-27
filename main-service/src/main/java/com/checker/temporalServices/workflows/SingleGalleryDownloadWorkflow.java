@@ -6,10 +6,8 @@ import io.temporal.workflow.WorkflowInterface;
 import io.temporal.workflow.WorkflowMethod;
 
 /**
- * 单本画廊下载子工作流：封装 [提取直链 → 推送群晖 → 轮询等待 → Komga 入库] 全流程。
- * <p>
- * 由主工作流通过 ChildWorkflow 方式派发，每个子工作流拥有独立的事件历史，
- * 彻底解决串行轮询导致的 Temporal 历史记录爆炸问题。
+ * 定义单个画廊的下载和入库生命周期。
+ * 独立的子流程保存自己的等待与重试历史，减少父流程的事件数量。
  */
 @WorkflowInterface
 public interface SingleGalleryDownloadWorkflow {

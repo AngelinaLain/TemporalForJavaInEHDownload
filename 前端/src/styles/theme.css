@@ -1,3 +1,4 @@
+/* 统一全局配色、字号、组件细节和窄屏默认样式。 */
 :root {
   --app-font-scale: 1;
   --app-accent: #4169e1;
@@ -87,7 +88,7 @@ button:focus-visible, a:focus-visible, [role="button"]:focus-visible { outline: 
 .el-message__content { font-size: var(--el-font-size-small); line-height: 1.6; }
 .system-preferences .el-drawer__body { padding: 20px 22px; }
 
-/* Shared defaults also cover the older management pages without changing their behavior. */
+/* 为管理页面补齐统一的间距和文字样式，不改变页面操作。 */
 .main-content > div { color: var(--app-text); }
 .main-content .el-row + .el-row { margin-top: 16px; }
 .main-content h2, .main-content h3, .main-content h4 { color: var(--app-text); }

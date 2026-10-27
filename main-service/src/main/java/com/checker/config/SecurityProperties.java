@@ -12,6 +12,9 @@ import org.springframework.validation.annotation.Validated;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 读取并校验管理员、登录令牌和允许跨域来源的安全配置，缺少必要配置时阻止带错配置启动。
+ */
 @Data
 @Component
 @Validated
@@ -24,6 +27,7 @@ public class SecurityProperties {
     private Admin admin = new Admin();
     private Cors cors = new Cors();
 
+    /** 保存登录令牌的签名密钥和有效时长，启动时校验密钥是否满足要求。 */
     @Data
     public static class Jwt {
         @NotBlank(message = "JWT_SECRET must be configured")
@@ -32,6 +36,7 @@ public class SecurityProperties {
         private long expiration = 86400000;
     }
 
+    /** 保存初始管理员账号和密码哈希，供没有数据库覆盖记录时验证登录。 */
     @Data
     public static class Admin {
         @NotBlank(message = "ADMIN_USERNAME must be configured")
@@ -41,6 +46,7 @@ public class SecurityProperties {
         private String passwordHash;
     }
 
+    /** 指定允许从哪些浏览器站点调用本系统接口。 */
     @Data
     public static class Cors {
         /** 允许跨域的来源列表，生产环境应明确列出，避免使用通配符 */

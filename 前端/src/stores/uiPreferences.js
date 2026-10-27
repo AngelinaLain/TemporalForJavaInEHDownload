@@ -1,3 +1,4 @@
+/* 保存当前浏览器的字号偏好，并通知页面图表同步调整文字大小。 */
 import { defineStore } from 'pinia'
 
 const STORAGE_KEY = 'gallery-ui-preferences-v1'
@@ -8,16 +9,19 @@ export const FONT_PRESETS = Object.freeze([
   { value: 1.3, label: '特大', description: '舒适阅读 · 130%' }
 ])
 
+// 只接受预设字号，损坏或未知的偏好回到标准大小。
 function validScale(value) {
   const scale = Number(value)
   return FONT_PRESETS.some(preset => preset.value === scale) ? scale : 1
 }
 
+// 从当前浏览器读取偏好，无法读取或解析时使用默认字号。
 function readPreferences() {
   try { return validScale(JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}').fontScale) }
   catch { return 1 }
 }
 
+// 更新全局字号变量，并通知图表和画布重绘文字。
 function applyScale(value) {
   const scale = validScale(value)
   document.documentElement.style.setProperty('--app-font-scale', String(scale))
@@ -26,7 +30,7 @@ function applyScale(value) {
   return scale
 }
 
-/** Called before mount, so returning to the app does not flash the default font size. */
+/** 页面挂载前恢复字号，避免打开页面时先显示默认字号再跳变。 */
 export function initializeUiPreferences() { return applyScale(readPreferences()) }
 
 export const useUiPreferences = defineStore('uiPreferences', {
@@ -35,7 +39,7 @@ export const useUiPreferences = defineStore('uiPreferences', {
     setFontScale(value) {
       this.fontScale = applyScale(value)
       try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ fontScale: this.fontScale })) }
-      catch { /* The current session still works when browser storage is unavailable. */ }
+      catch { /* 浏览器禁止保存偏好时，当前页面仍按所选字号显示。 */ }
     },
     restore() { this.fontScale = applyScale(readPreferences()) }
   }

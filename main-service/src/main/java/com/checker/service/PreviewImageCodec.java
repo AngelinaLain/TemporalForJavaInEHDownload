@@ -13,9 +13,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Iterator;
 
+/** 识别图片实际格式并生成受大小限制的缩略图，避免把错误页面当图片或过度占用内存。 */
 final class PreviewImageCodec {
     private PreviewImageCodec() {}
 
+    /** 检查图片文件头识别实际格式，拒绝 HTML 错误页等非图片响应。 */
     static String mime(byte[] bytes) throws IOException {
         if (bytes.length >= 3 && (bytes[0] & 255) == 255 && (bytes[1] & 255) == 216) return "image/jpeg";
         if (bytes.length >= 8 && bytes[0] == (byte) 137 && bytes[1] == 80 && bytes[2] == 78 && bytes[3] == 71) return "image/png";
@@ -29,6 +31,7 @@ final class PreviewImageCodec {
         throw new IOException("图片源未返回有效图片");
     }
 
+    /** 先检查原图尺寸并降采样解码，再生成最长边不超过 300 像素的 JPEG 缩略图。 */
     static byte[] thumbnail(byte[] input) throws IOException {
         mime(input);
         try (ImageInputStream stream = ImageIO.createImageInputStream(new ByteArrayInputStream(input))) {
@@ -38,6 +41,7 @@ final class PreviewImageCodec {
             try {
                 reader.setInput(stream);
                 int width = reader.getWidth(0), height = reader.getHeight(0);
+                // 先看尺寸再解码，并对大图降采样，避免压缩体积很小但像素极多的图片耗尽堆内存。
                 if (width <= 0 || height <= 0 || (long) width * height > 80_000_000L) throw new IOException("图片尺寸超出预览限制");
                 var params = reader.getDefaultReadParam();
                 int sample = Math.max(1, Math.max(width, height) / 600);

@@ -20,9 +20,8 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Exposes GalleryImport domain metrics alongside Spring Boot's standard
- * Micrometer metrics. Values are refreshed independently of Prometheus scrapes
- * so a temporary database failure never makes the actuator endpoint fail.
+ * 定时把画廊状态和下载进度汇总成监控指标，供 Prometheus 读取。
+ * 采集与监控请求分开执行，数据库短暂不可用时继续保留上次结果，避免监控接口一起失败。
  */
 @Component
 public class GalleryMetricsCollector {
@@ -57,11 +56,17 @@ public class GalleryMetricsCollector {
                 .register(registry);
     }
 
+    /**
+     * 服务启动后先采集一次，让监控无需等待第一个定时周期。
+     */
     @PostConstruct
     public void initialize() {
         refresh();
     }
 
+    /**
+     * 定时刷新状态数量和下载进度；采集失败只记录错误，保留已有指标。
+     */
     @Scheduled(fixedDelayString = "${management.gallery-metrics.refresh-interval-ms:15000}")
     public void refresh() {
         try {
@@ -72,6 +77,9 @@ public class GalleryMetricsCollector {
         }
     }
 
+    /**
+     * 按固定的下载状态集合更新数量，避免历史异常状态产生无限增加的监控标签。
+     */
     private void refreshStatusCounts() {
         Map<DownloadStatus, Long> counts = new EnumMap<>(DownloadStatus.class);
         for (DownloadStatus status : DownloadStatus.values()) {
@@ -83,7 +91,7 @@ public class GalleryMetricsCollector {
                 DownloadStatus status = DownloadStatus.valueOf(String.valueOf(row.get("status")).toUpperCase(Locale.ROOT));
                 counts.put(status, number(row.get("cnt")));
             } catch (IllegalArgumentException ignored) {
-                // Unknown legacy values are intentionally excluded from the bounded status label set.
+                // 历史记录中的未知状态不加入监控标签，防止标签数量随异常数据增长。
             }
         }
 
@@ -93,6 +101,9 @@ public class GalleryMetricsCollector {
         statusGauge.register(rows, true);
     }
 
+    /**
+     * 读取正在下载记录的汇总字节数和任务数，更新总体进度指标。
+     */
     private void refreshDownloadProgress() {
         Map<String, Object> progress = galleriesMapper.getDownloadProgressMetrics();
         activeDownloads.set(number(progress.get("active")));
@@ -100,6 +111,9 @@ public class GalleryMetricsCollector {
         totalBytes.set(number(progress.get("total_bytes")));
     }
 
+    /**
+     * 计算所有进行中下载的总体完成比例，没有预计体积时返回零，并将结果限制在百分之百以内。
+     */
     private double progressRatio() {
         long expected = totalBytes.get();
         if (expected <= 0) {
@@ -108,6 +122,9 @@ public class GalleryMetricsCollector {
         return Math.min(1.0, downloadedBytes.get() / (double) expected);
     }
 
+    /**
+     * 把数据库聚合值转成长整数，缺失或不是数字时按零处理。
+     */
     private static long number(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
     }

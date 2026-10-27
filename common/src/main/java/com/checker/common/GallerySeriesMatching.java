@@ -11,8 +11,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * EH 标题约定下的系列识别评分。系列与“重复版本”是两个概念：本类会去掉卷号，
- * 但保留作品主体，并把作者、原作标签和封面指纹仅作为辅助信号。
+ * 判断不同画廊是否属于同一个系列，主要比较去掉卷号后的标题，再参考作者、原作和封面。
  */
 public final class GallerySeriesMatching {
     private static final Pattern LEADING_EVENT_OR_CREDIT = Pattern.compile(
@@ -33,6 +32,9 @@ public final class GallerySeriesMatching {
     private GallerySeriesMatching() {
     }
 
+    /**
+     * 汇总系列标题、封面和相关标签的分数，并给出推荐理由；缺少封面时把主要权重交回标题。
+     */
     public static SeriesMatch score(EhGalleriesEntity left, String leftCoverHash,
                                     EhGalleriesEntity right, String rightCoverHash) {
         TitleMatch titleMatch = titleMatch(left, right);
@@ -55,7 +57,9 @@ public final class GallerySeriesMatching {
         return new SeriesMatch(score, title, cover, metadata, String.join("；", reasons), leftBase, rightBase);
     }
 
-    /** 去掉 EH 常见的活动/社团前缀、汉化标记和卷章节号，得到系列主体。 */
+    /**
+     * 去掉活动与署名前缀、汉化标记和卷章节编号，统一文字形式，提取用于系列比较的标题主体。
+     */
     public static String baseTitle(String raw) {
         if (raw == null) return "";
         String value = Normalizer.normalize(raw, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim();
@@ -67,6 +71,9 @@ public final class GallerySeriesMatching {
         return NON_WORD.matcher(value).replaceAll(" ").trim().replaceAll("\\s+", " ");
     }
 
+    /**
+     * 比较两侧原始标题与显示标题的各个候选组合，选择最接近的一组。
+     */
     private static TitleMatch titleMatch(EhGalleriesEntity left, EhGalleriesEntity right) {
         List<String> leftTitles = titleCandidates(left);
         List<String> rightTitles = titleCandidates(right);
@@ -86,7 +93,9 @@ public final class GallerySeriesMatching {
         return new TitleMatch((int) Math.round(best * 100D), bestLeft, bestRight);
     }
 
-    /** 同时保留完整标题与 EH 常见“主标题 - 副标题”中的系列主干。 */
+    /**
+     * 从原始标题和显示标题中提取完整主体及系列主干，兼容主标题与副标题写法。
+     */
     private static List<String> titleCandidates(EhGalleriesEntity gallery) {
         if (gallery == null) return List.of();
         Set<String> result = new HashSet<>();
@@ -95,6 +104,9 @@ public final class GallerySeriesMatching {
         return result.stream().toList();
     }
 
+    /**
+     * 清理一个标题，并把有效的完整主体和分隔符前的主干加入候选集合。
+     */
     private static void addTitleCandidates(Set<String> result, String raw) {
         if (raw == null || raw.isBlank()) return;
         String normalized = Normalizer.normalize(raw, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT).trim();
@@ -111,6 +123,9 @@ public final class GallerySeriesMatching {
         }
     }
 
+    /**
+     * 排除过短、没有识别价值的系列主干，按中文与西文设置不同的最小长度。
+     */
     private static boolean isMeaningfulStem(String value) {
         if (value == null || value.isBlank()) return false;
         int codePoints = value.codePointCount(0, value.length());
@@ -121,6 +136,9 @@ public final class GallerySeriesMatching {
         return containsCjk ? codePoints >= 2 : codePoints >= 4;
     }
 
+    /**
+     * 综合标题短片段重合度与包含关系计算相似度，兼容同一系列不同副标题。
+     */
     static double similarity(String left, String right) {
         if (left.isBlank() || right.isBlank()) return 0D;
         if (left.equals(right)) return 1D;
@@ -134,6 +152,9 @@ public final class GallerySeriesMatching {
         return Math.max(dice, containment);
     }
 
+    /**
+     * 把标题拆成相邻文字片段，供标题重合度比较使用。
+     */
     private static Set<String> ngrams(String value) {
         Set<String> result = new HashSet<>();
         if (value.length() <= 2) {
@@ -144,6 +165,9 @@ public final class GallerySeriesMatching {
         return result;
     }
 
+    /**
+     * 把封面哈希距离换成相似度；任一封面指纹缺失时返回无结果。
+     */
     private static Integer coverSimilarity(String left, String right) {
         if (left == null || right == null || left.isBlank() || right.isBlank()) return null;
         try {
@@ -154,6 +178,9 @@ public final class GallerySeriesMatching {
         }
     }
 
+    /**
+     * 比较作者、社团、原作和角色等辅助标签，补充系列标题判断。
+     */
     private static int tagSimilarity(EhGalleriesEntity left, EhGalleriesEntity right) {
         Set<String> a = supportingTags(left);
         Set<String> b = supportingTags(right);
@@ -163,6 +190,9 @@ public final class GallerySeriesMatching {
         return (int) Math.round(intersection * 100D / (a.size() + b.size() - intersection));
     }
 
+    /**
+     * 提取可帮助识别系列的标签，并补充标题中的作者署名。
+     */
     private static Set<String> supportingTags(EhGalleriesEntity gallery) {
         if (gallery == null) return Set.of();
         Set<String> result = new HashSet<>();
@@ -179,6 +209,9 @@ public final class GallerySeriesMatching {
         return result;
     }
 
+    /**
+     * 从标题开头的署名块提取辅助身份，排除展会编号等不代表作者的前缀。
+     */
     private static void addLeadingCredit(Set<String> result, String raw) {
         if (raw == null) return;
         java.util.regex.Matcher matcher = LEADING_CREDIT.matcher(

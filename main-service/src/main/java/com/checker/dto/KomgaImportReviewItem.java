@@ -6,7 +6,7 @@ import lombok.Value;
 import java.util.Date;
 
 /**
- * Komga 入库复核列表项，不暴露画廊 token 等敏感字段。
+ * 返回 Komga 入库复核列表所需的状态、关联和确认记录，不携带画廊访问凭据。
  */
 @Value
 @Builder

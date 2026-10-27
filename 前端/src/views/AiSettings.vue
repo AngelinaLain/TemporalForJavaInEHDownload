@@ -112,6 +112,7 @@
 </template>
 
 <script setup>
+// 管理模型供应商、用例和提示词，让图片传输权限与所选分析方式保持一致。
 import PageHeading from '../components/PageHeading.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -128,6 +129,7 @@ const emptyProvider = () => ({ id: null, name: '', scope: 'LOCAL', baseUrl: '', 
 const providerForm = reactive(emptyProvider())
 const enabledProviders = computed(() => providers.value.filter(item => item.enabled))
 
+// 同时读取供应商与用例配置，让模型选择和权限展示使用同一批数据。
 const load = async () => {
   loading.value = true
   try {
@@ -136,17 +138,21 @@ const load = async () => {
     useCases.value = useCaseResponse.data || []
   } finally { loading.value = false }
 }
+// 打开新增或编辑表单，但不将已有密钥回填到浏览器输入框。
 const openProvider = row => { Object.assign(providerForm, emptyProvider(), row || {}, { apiKey: '' }); providerDialog.value = true }
+// 只提交可编辑配置，去掉页面辅助字段后保存并重新载入。
 const saveProvider = async () => {
   const payload = { ...providerForm }; delete payload.id; delete payload.hasApiKey; delete payload.protocol
   if (providerForm.id) await api.put(`/ai/config/providers/${providerForm.id}`, payload)
   else await api.post('/ai/config/providers', payload)
   providerDialog.value = false; ElMessage.success('供应商配置已保存'); await load()
 }
+// 确认后删除供应商，并重新加载受影响的用例关联。
 const removeProvider = async row => {
   await ElMessageBox.confirm(`删除供应商“${row.name}”？关联用例将取消选择该供应商。`, '确认删除', { type: 'warning' })
   await api.delete(`/ai/config/providers/${row.id}`); ElMessage.success('已删除'); await load()
 }
+// 通过服务端测试供应商连接并读取可用模型，不把密钥放到浏览器请求地址中。
 const loadModels = async id => {
   if (!id) return
   testingId.value = id
@@ -158,9 +164,13 @@ const loadModels = async id => {
 }
 const testProvider = row => loadModels(row.id)
 const selectedProvider = item => providers.value.find(provider => provider.id === item.providerId)
+// 切换供应商时使用其默认模型，并收紧不再允许的图片传输权限。
 const providerChanged = item => { item.model = selectedProvider(item)?.defaultModel || ''; item.allowImageTransmission = item.allowImageTransmission && !!selectedProvider(item)?.allowVisualInput }
+// 离开视觉模型模式时关闭图片发送，避免分析方式与隐私设置不一致。
 const modeChanged = item => { if (item.analysisMode !== 'VISION_LLM') item.allowImageTransmission = false }
+// 读取该用例的默认提示词供用户继续编辑。
 const restorePrompt = async item => { const response = await api.get(`/ai/config/use-cases/${item.useCase}/default-prompt`); item.prompt = response.data?.prompt || '' }
+// 保存单个用例的模型、分析方式和提示词，再读取最新配置。
 const saveUseCase = async item => { await api.put(`/ai/config/use-cases/${item.useCase}`, item); ElMessage.success('用例配置已保存'); await load() }
 const useCaseLabel = value => ({ SUMMARY: '画廊摘要', TAG_TRANSLATION: '标签翻译', VISUAL_DUPLICATE_REVIEW: '视觉重复复核' }[value] || value)
 onMounted(load)

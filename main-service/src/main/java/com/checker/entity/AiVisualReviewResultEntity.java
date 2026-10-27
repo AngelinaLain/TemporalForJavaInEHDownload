@@ -8,6 +8,9 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.util.Date;
 
+/**
+ * 保存 AI 视觉复核的判断、相似度和理由，作为人工去重审核的参考证据。
+ */
 @Data
 @TableName("ai_visual_review_results")
 public class AiVisualReviewResultEntity {

@@ -257,6 +257,7 @@
 </template>
 
 <script setup>
+// 集中配置采集、下载和维护任务，整理用户输入并展示操作日志。
 import PageHeading from '../components/PageHeading.vue'
 import { ref, reactive, nextTick, markRaw } from 'vue'
 import {
@@ -323,6 +324,7 @@ const galleryCategories = [
 
 const selectedGalleryCats = ref(galleryCategories.map(cat => cat.code))
 
+// 将勾选的内容分类转换成源站使用的排除位掩码。
 const calcFilterCats = () => {
   const selectedSet = new Set(selectedGalleryCats.value)
   return galleryCategories
@@ -330,8 +332,10 @@ const calcFilterCats = () => {
     .reduce((sum, cat) => sum + cat.code, 0)
 }
 
+// 转义建议文本中的 HTML 特殊字符，避免高亮渲染把标签内容当成页面代码。
 const escapeHtml = (str) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 
+// 在已转义的建议文字中标出匹配词，保留原始内容的安全展示。
 const highlightMatch = (text, query) => {
   if (!query) return escapeHtml(text)
   const lt = text.toLowerCase()
@@ -341,6 +345,7 @@ const highlightMatch = (text, query) => {
   return escapeHtml(text.substring(0, idx)) + '<b>' + escapeHtml(text.substring(idx, idx + query.length)) + '</b>' + escapeHtml(text.substring(idx + query.length))
 }
 
+// 将后端标签建议整理成下拉组件需要的展示格式。
 const buildSuggestionItem = (key, val, query) => {
   const colonIdx = key.indexOf(':')
   const ns = colonIdx > -1 ? key.substring(0, colonIdx) : 'other'
@@ -354,6 +359,7 @@ const tagOptions = ref([])
 const tagSearchQuery = ref('')
 const tagLabelCache = reactive({})
 
+// 保留当前已选标签，避免搜索新关键词后下拉列表丢掉选中项。
 const getSelectedOptions = () => {
   return searchTags.value.map(v => {
     const label = tagLabelCache[v] || tagStore.translate(v) || v
@@ -361,6 +367,7 @@ const getSelectedOptions = () => {
   })
 }
 
+// 向后端查询标签建议，同时合并已选标签供多选框显示。
 const searchTagMethod = (query) => {
   tagSearchQuery.value = query
   if (!query) {
@@ -386,6 +393,7 @@ const handleTagDropdownVisible = (visible) => {
   }
 }
 
+// 为合集构建输入框查询标签建议。
 const fetchCollectionTagSuggestions = (query, cb) => {
   if (!query || query.length < 1) return cb([])
   const lw = query.toLowerCase()
@@ -405,6 +413,7 @@ const handleCollectionTagSelect = (item) => {
   addTag()
 }
 
+// 校验抓取方式与输入，组装筛选条件后启动后台采集流程。
 const startWorkflow = async () => {
   if (crawlMode.value === 'gid') {
     const galleryUrls = [...new Set(gidInput.value.split(/[\n,，;；]+/).map(value => value.trim()).filter(Boolean))]
@@ -483,6 +492,7 @@ const quickActions = [
   }
 ]
 
+// 统一执行快捷维护操作，并把成功或失败写入本页日志。
 const execAction = async (key, url, label) => {
   try {
     await ElMessageBox.confirm(`确定要执行「${label}」操作？`, '确认', { type: 'warning' })
@@ -531,6 +541,7 @@ const removeTag = (tag) => {
   collectionForm.tags = collectionForm.tags.filter(t => t !== tag)
 }
 
+// 将用户选择的合集类型和标签提交给后台构建合集。
 const buildCollection = async () => {
   if (!collectionForm.collectionName.trim()) {
     ElMessage.warning('请输入合集名称')

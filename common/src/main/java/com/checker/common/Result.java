@@ -5,9 +5,8 @@ import lombok.Data;
 import java.io.Serializable;
 
 /**
- * 统一 API 响应包装类
- *
- * @param <T> 业务数据类型
+ * 统一返回业务状态码、中文提示和结果数据，供各服务接口使用。
+ * 这里的业务状态码放在响应体中；HTTP 状态由接口或安全过滤器决定，两者不能混为一谈。
  */
 @Data
 public class Result<T> implements Serializable {

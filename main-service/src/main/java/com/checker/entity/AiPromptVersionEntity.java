@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存某个 AI 用途使用过的提示词版本，方便追溯任务当时采用的提示词。
+ */
 @Data
 @TableName("ai_prompt_versions")
 public class AiPromptVersionEntity {

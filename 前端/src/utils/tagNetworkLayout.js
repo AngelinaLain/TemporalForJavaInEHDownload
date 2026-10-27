@@ -1,3 +1,4 @@
+/* 为小规模关系图计算稳定的节点位置、分类圆形布局和标签颜色。 */
 const WIDTH = 1100
 const HEIGHT = 740
 const TAU = Math.PI * 2
@@ -18,6 +19,7 @@ const NAMESPACES = {
 }
 const FALLBACK_COLORS = ['#8bb4ee', '#b4a0e3', '#75c6b4', '#e2b779', '#d98eae']
 
+// 将标签名转成稳定数值，用于备用颜色和重叠点的分离方向。
 function hash(value) {
   let result = 2166136261
   for (const char of String(value)) result = Math.imul(result ^ char.charCodeAt(0), 16777619)
@@ -32,11 +34,13 @@ export function namespaceColor(namespace) {
   return NAMESPACES[namespace]?.[1] || FALLBACK_COLORS[hash(namespace) % FALLBACK_COLORS.length]
 }
 
+// 根据出现频率计算节点半径，用平方根压低高频标签与低频标签的大小差距。
 export function nodeRadius(value, maxValue) {
   const max = Math.max(1, Number(maxValue) || 1)
   return 9 + 15 * Math.sqrt(Math.max(0, Math.min(1, (Number(value) || 0) / max)))
 }
 
+// 计算一组圆占用的边界，供紧凑摆放和画布居中使用。
 function bounds(circles) {
   const left = Math.min(...circles.map(circle => circle.x - circle.r))
   const right = Math.max(...circles.map(circle => circle.x + circle.r))
@@ -45,7 +49,7 @@ function bounds(circles) {
   return { left, right, top, bottom, width: right - left, height: bottom - top }
 }
 
-// Select the tightest valid tangent candidate; unlike random seeding this is repeatable.
+// 逐个尝试不重叠的相切位置，选择占地最紧凑的方案，让相同数据得到稳定布局。
 function pack(circles, gap = 6, aspect = 1) {
   const placed = []
   for (const circle of circles) {
@@ -71,7 +75,7 @@ function pack(circles, gap = 6, aspect = 1) {
         }
       }
     }
-    // Outer tangent candidates always exist, including for many equal-size circles.
+    // 找不到合适相切位置时向外摆放，避免同样大小的圆堆在一起。
     placed.push({ ...circle, ...(best || { x: placed.length * (circle.r * 2 + gap), y: 0 }) })
   }
   if (!placed.length) return []
@@ -81,6 +85,7 @@ function pack(circles, gap = 6, aspect = 1) {
   return placed.map(circle => ({ ...circle, x: circle.x - centerX, y: circle.y - centerY }))
 }
 
+// 先在分类内排圆，再摆放分类大圆，让同类标签聚在一起且彼此不重叠。
 function clusterLayout(nodes, maxValue) {
   const groups = new Map()
   for (const node of nodes) {
@@ -94,7 +99,7 @@ function clusterLayout(nodes, maxValue) {
   }).sort((a, b) => b.r - a.r || a.namespace.localeCompare(b.namespace))
 
   let packedGroups = pack(groupsWithChildren, 12, WIDTH / HEIGHT)
-  // Try rotations to favour the landscape canvas rather than assuming a square.
+  // 尝试多个旋转角度，选择更适合横向画布的排列，减少两侧空白。
   let bestScale = 0
   let bestGroups = packedGroups
   for (let step = 0; step < 24; step++) {
@@ -125,6 +130,7 @@ function clusterLayout(nodes, maxValue) {
   return { positions, clusters }
 }
 
+// 从稳定的分类位置出发，反复计算排斥与连线牵引，再消除重叠，得到关系网络。
 function forceLayout(nodes, links, maxValue, seed) {
   const particles = nodes.map(node => ({
     name: node.name,
@@ -143,11 +149,13 @@ function forceLayout(nodes, links, maxValue, seed) {
   })).filter(link => link.source !== undefined && link.target !== undefined)
 
   for (let iteration = 0; iteration < 220; iteration++) {
+    // 随迭代降低移动幅度，先展开重叠节点，再让布局逐步稳定。
     const cooling = 1 - iteration / 250
     for (const particle of particles) {
       particle.vx += (WIDTH / 2 - particle.x) * .002
       particle.vy += (HEIGHT / 2 - particle.y) * .002
     }
+    // 节点之间互相排斥，圆半径越大越需要留出足够的点击空间。
     for (let first = 0; first < particles.length; first++) {
       for (let second = first + 1; second < particles.length; second++) {
         const a = particles[first]
@@ -171,6 +179,7 @@ function forceLayout(nodes, links, maxValue, seed) {
         b.vy += forceY
       }
     }
+    // 有共现关系的节点相互牵引，同类节点的目标间距更短。
     for (const edge of edges) {
       const a = particles[edge.source]
       const b = particles[edge.target]
@@ -193,7 +202,7 @@ function forceLayout(nodes, links, maxValue, seed) {
       particle.y = Math.max(particle.r + 45, Math.min(HEIGHT - particle.r - 45, particle.y + particle.vy * cooling))
     }
   }
-  // Finish with collision relaxation so dense high-degree nodes remain clickable.
+  // 最后再把重叠节点推开，确保关系密集的节点仍能单独点击。
   for (let pass = 0; pass < 30; pass++) {
     for (let i = 0; i < particles.length; i++) {
       for (let j = i + 1; j < particles.length; j++) {
@@ -213,6 +222,7 @@ function forceLayout(nodes, links, maxValue, seed) {
   return Object.fromEntries(particles.map(particle => [particle.name, { x: particle.x, y: particle.y }]))
 }
 
+// 整理有效节点并选择分类或关系布局，向页面返回节点位置和分类范围。
 export function layoutNetwork(nodes, links = [], mode = 'force') {
   if (!nodes.length) return { positions: {}, clusters: [], width: WIDTH, height: HEIGHT }
   const maxValue = Math.max(1, ...nodes.map(node => Number(node.value) || 0))

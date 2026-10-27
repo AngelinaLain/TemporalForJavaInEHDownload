@@ -5,7 +5,7 @@ import java.util.function.LongConsumer;
 
 /**
  * 群晖文件上传服务：将本地下载好的漫画压缩包上传到 Komga 库目录。
- * 首选 SMB/CIFS，失败自动降级为 SFTP（SSH）。
+ * 实现优先使用可写挂载目录，其次尝试 SMB/CIFS，再回退到 SFTP（SSH）。
  */
 public interface SynologyUploadService {
 
@@ -28,7 +28,7 @@ public interface SynologyUploadService {
         upload(localFile, "", targetFilename, progress);
     }
 
-    /** 上载到相对于配置的目标的系列子目录中。 */
+    /** 上传到配置归档根目录下的系列子目录，并通过回调报告累计上传字节数。 */
     void upload(Path localFile, String relativeDirectory, String targetFilename,
                 LongConsumer progress) throws Exception;
 }

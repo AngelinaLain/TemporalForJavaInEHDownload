@@ -1,7 +1,7 @@
 package com.checker.common;
 
 /**
- * Temporal ApplicationFailure 错误类型枚举
+ * 集中定义工作流可识别的错误类型，帮助区分可重试故障和需要人工处理的问题。
  */
 public enum ErrorType {
     /**

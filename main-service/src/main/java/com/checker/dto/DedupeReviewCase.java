@@ -6,6 +6,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 把待审核记录、左右两本画廊和比较证据一起返回给前端，方便并排核对。
+ */
 @Data
 @Builder
 public class DedupeReviewCase {

@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/** 执行视觉复核：补齐采样页向量、计算相似证据，并按配置决定是否调用语言或视觉模型。 */
 @Service
 public class VisualEmbeddingReviewService {
     private static final int MAX_PAGES = 16;
@@ -76,6 +77,7 @@ public class VisualEmbeddingReviewService {
         this.objectMapper = objectMapper;
     }
 
+    /** 执行指定复核任务，统一记录运行状态、结果或失败原因。 */
     public void execute(String jobId) throws Exception {
         AiVisualReviewJobEntity job = jobMapper.selectById(jobId);
         if (job == null) throw new IllegalArgumentException("视觉复核任务不存在");
@@ -96,6 +98,7 @@ public class VisualEmbeddingReviewService {
         }
     }
 
+    /** 读取固定的任务配置和双方采样证据，按分析模式生成最终复核结果。 */
     private void doExecute(AiVisualReviewJobEntity job) throws Exception {
         EhGalleriesEntity leftGallery = requireGallery(job.getLeftGid());
         EhGalleriesEntity rightGallery = requireGallery(job.getRightGid());
@@ -107,6 +110,7 @@ public class VisualEmbeddingReviewService {
             throw new IllegalStateException("ai-service 本地视觉模型不可用，请检查 AI_EMBEDDING_ENABLED 和模型挂载");
         }
         String modelVersion = String.valueOf(embeddingStatus.get("modelVersion"));
+        // 先得到可复用的本地向量证据；外部模型失败时仍有完整的本地判断可展示。
         Map<Integer, GalleryPageEmbeddingEntity> leftEmbeddings = ensureEmbeddings(leftGallery, leftHashes, modelVersion);
         Map<Integer, GalleryPageEmbeddingEntity> rightEmbeddings = ensureEmbeddings(rightGallery, rightHashes, modelVersion);
 
@@ -116,6 +120,7 @@ public class VisualEmbeddingReviewService {
         AiVisualReviewResultEntity result = toResult(job, evidence);
 
         boolean warning = false;
+        // 只有本地判为可能存在版本差异的灰区才继续请求模型，明确结果不再重复消耗模型请求。
         if (!"EMBEDDING_ONLY".equals(job.getAnalysisMode()) && "POSSIBLE_VARIANT".equals(result.getDecision())) {
             try {
                 applyLlm(job, leftGallery, rightGallery, evidence, result);
@@ -131,6 +136,7 @@ public class VisualEmbeddingReviewService {
         jobMapper.updateById(job);
     }
 
+    /** 只为缺失或已过期的采样向量重新计算，已有相同来源指纹可复用。 */
     private Map<Integer, GalleryPageEmbeddingEntity> ensureEmbeddings(EhGalleriesEntity gallery,
                                                                        List<GalleryPageFingerprint> hashes,
                                                                        String modelVersion) throws Exception {
@@ -143,6 +149,7 @@ public class VisualEmbeddingReviewService {
         Map<Integer, GalleryPageEmbeddingEntity> current = persisted.stream()
                 .collect(Collectors.toMap(GalleryPageEmbeddingEntity::getPageIndex, item -> item, (a, b) -> a));
         Set<Integer> missing = new LinkedHashSet<>();
+        // 同一页的源指纹或模型版本变化后才重算，避免每次复核都重新读取图片和生成向量。
         for (GalleryPageFingerprint hash : selected) {
             GalleryPageEmbeddingEntity existing = current.get(hash.getPageIndex());
             if (existing == null || !sourceFingerprint(hash).equals(existing.getSourceFingerprint())) {
@@ -176,6 +183,7 @@ public class VisualEmbeddingReviewService {
         return current;
     }
 
+    /** 比较两侧采样向量，汇总相似页、覆盖率和阈值证据。 */
     private Evidence compare(List<GalleryPageFingerprint> leftHashes,
                              List<GalleryPageFingerprint> rightHashes,
                              Map<Integer, GalleryPageEmbeddingEntity> leftEmbeddings,
@@ -241,6 +249,7 @@ public class VisualEmbeddingReviewService {
                 scores, decision, confidence, reason);
     }
 
+    /** 把数值证据交给配置的模型解释，并在失败时保留本地比较结果。 */
     private void applyLlm(AiVisualReviewJobEntity job, EhGalleriesEntity leftGallery,
                           EhGalleriesEntity rightGallery, Evidence evidence,
                           AiVisualReviewResultEntity result) throws Exception {
@@ -281,6 +290,7 @@ public class VisualEmbeddingReviewService {
         result.setImagesTransmitted(transmitImages && !images.isEmpty());
     }
 
+    /** 只有任务和供应商均允许传图时，才整理发送给视觉模型的采样图片。 */
     private List<AiInternalClient.ImagePayload> llmImages(EhGalleriesEntity left, EhGalleriesEntity right,
                                                            Evidence evidence, Integer requested) throws Exception {
         int limit = Math.max(1, Math.min(8, requested == null ? 4 : requested));
@@ -304,6 +314,7 @@ public class VisualEmbeddingReviewService {
         return result;
     }
 
+    /** 从已配置的归档来源提取选中采样页，避免读取无关图片。 */
     private Map<Integer, ArchiveSampleImageExtractor.SampleImage> readSamples(
             EhGalleriesEntity gallery, Set<Integer> indexes) throws Exception {
         try (SynologyArchiveReader.ArchiveSession session = archiveReader.openSession()) {
@@ -354,6 +365,7 @@ public class VisualEmbeddingReviewService {
         return result;
     }
 
+    /** 保存结构化复核证据，供审核页面追溯模型与本地计算的判断。 */
     @Transactional
     protected void saveResult(AiVisualReviewResultEntity result) {
         AiVisualReviewResultEntity existing = resultMapper.selectOne(
@@ -365,6 +377,7 @@ public class VisualEmbeddingReviewService {
         }
     }
 
+    /** 从模型回复中提取并检查结果 JSON，拒绝无法解释的输出。 */
     private JsonNode parseJson(String output) throws Exception {
         String normalized = output == null ? "" : output.trim();
         int start = normalized.indexOf('{');

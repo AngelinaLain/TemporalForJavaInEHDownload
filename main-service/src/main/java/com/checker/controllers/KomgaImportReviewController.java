@@ -31,7 +31,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Komga 入库失败复核与补偿入口。重试只启动 Komga 补偿流程，不会重新下载文件。
+ * 展示等待或失败的 Komga 入库记录，并允许只重试扫描确认而不重新下载归档。
  */
 @RestController
 @RequestMapping("/api/komga-import-reviews")
@@ -50,6 +50,9 @@ public class KomgaImportReviewController {
         this.workflowConfig = workflowConfig;
     }
 
+    /**
+     * 分页读取复核记录，同时返回失败与等待数量，兼容中英文历史状态。
+     */
     @GetMapping
     public Result<Map<String, Object>> list(
             @RequestParam(defaultValue = "1") int page,
@@ -81,6 +84,9 @@ public class KomgaImportReviewController {
         return Result.success(payload);
     }
 
+    /**
+     * 先按当前状态认领画廊，再启动只做 Komga 确认的工作流；启动失败时还原为可重试状态。
+     */
     @PostMapping("/{gid}/retry")
     public Result<Map<String, String>> retry(@PathVariable Long gid) {
         EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
@@ -124,6 +130,9 @@ public class KomgaImportReviewController {
         }
     }
 
+    /**
+     * 统计某种入库状态的记录数量，同时兼容中文和英文存储值。
+     */
     private long countByStatus(DownloadStatus status) {
         QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
         query.and(wrapper -> wrapper.eq("download_status", status.getValue())
@@ -131,6 +140,9 @@ public class KomgaImportReviewController {
         return galleriesMapper.selectCount(query);
     }
 
+    /**
+     * 把画廊转换成复核列表项，只返回页面需要的字段。
+     */
     private KomgaImportReviewItem toItem(EhGalleriesEntity gallery) {
         return KomgaImportReviewItem.builder()
                 .gid(gallery.getGid())
@@ -146,6 +158,9 @@ public class KomgaImportReviewController {
                 .build();
     }
 
+    /**
+     * 生成本次入库补偿使用的轮询与重试参数。
+     */
     private WorkflowSettings buildSettings() {
         return WorkflowSettings.builder()
                 .maxConcurrency(workflowConfig.getMaxConcurrency())
@@ -157,11 +172,17 @@ public class KomgaImportReviewController {
                 .build();
     }
 
+    /**
+     * 判断一条记录是否处于指定状态，兼容历史中英文值。
+     */
     private boolean hasStatus(EhGalleriesEntity gallery, DownloadStatus status) {
         return status.getValue().equals(gallery.getDownloadStatus())
                 || status.name().equals(gallery.getDownloadStatus());
     }
 
+    /**
+     * 把支持的中文或英文复核状态统一成内部状态名称。
+     */
     private String normalizeStatus(String status) {
         return switch (status) {
             case "WAITING_KOMGA", "等待 Komga" -> "WAITING_KOMGA";
@@ -171,6 +192,9 @@ public class KomgaImportReviewController {
         };
     }
 
+    /**
+     * 获取内部复核状态对应的中文存储名称。
+     */
     private String statusLabel(String status) {
         return switch (status) {
             case "WAITING_KOMGA" -> "等待 Komga";

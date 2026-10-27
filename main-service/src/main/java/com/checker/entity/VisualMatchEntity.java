@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存两本画廊按抽样页面比较后的相似度、匹配页数和推荐版本。
+ */
 @Data
 @TableName("eh_visual_matches")
 public class VisualMatchEntity {

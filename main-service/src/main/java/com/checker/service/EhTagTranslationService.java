@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * EhTagTranslation 标签翻译服务
- * 数据源: https://github.com/EhTagTranslation/DatabaseReleases
+ * 数据源: <a href="https://github.com/EhTagTranslation/DatabaseReleases">EhTagTranslation</a>
  */
 public interface EhTagTranslationService {
 

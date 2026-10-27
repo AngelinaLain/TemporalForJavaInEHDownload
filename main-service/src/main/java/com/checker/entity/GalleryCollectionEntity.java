@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存本系统中由用户维护的画廊合集名称、说明及修改时间。
+ */
 @Data
 @TableName("eh_gallery_collections")
 public class GalleryCollectionEntity {

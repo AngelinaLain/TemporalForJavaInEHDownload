@@ -73,6 +73,7 @@
 </template>
 
 <script setup>
+// 查看 Komga 入库确认失败记录，并提供补偿重试和数据库关联 ID 刷新入口。
 import PageHeading from '../components/PageHeading.vue'
 import KomgaIdRefreshPanel from '../components/KomgaIdRefreshPanel.vue'
 import { onMounted, reactive, ref } from 'vue'
@@ -83,12 +84,14 @@ import { getStatusMeta } from '../constants/status'
 const records = ref([])
 const loading = ref(false)
 const firstLoad = ref(true)
+// 用户确认后只启动 Komga 补偿，不重复下载归档，并在提交后刷新列表。
 const retryingGid = ref(null)
 const status = ref('KOMGA_IMPORT_FAILED')
 const failedCount = ref(0)
 const waitingCount = ref(0)
 const pagination = reactive({ page: 1, size: 20, total: 0 })
 
+// 读取当前页入库复核记录及失败、等待数量。
 const loadData = async () => {
   loading.value = true
   try {

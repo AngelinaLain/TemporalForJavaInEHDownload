@@ -1,9 +1,9 @@
+/* 共享标签翻译和说明缓存，让列表、搜索和详情使用相同的标签信息。 */
 import { defineStore } from 'pinia'
 import api from '../api'
 
 /**
- * 命名空间 UI 信息：标签搜索下拉中显示的简短标签和颜色。
- * Operations.vue 直接引用此常量，消除重复定义。
+ * 给标签分类统一设置简短名称和颜色，供各页面的搜索下拉共用。
  */
 export const NS_INFO = {
   female:    { label: '女',    color: '#ad0024' },
@@ -23,12 +23,13 @@ export const useTagStore = defineStore('tags', {
   state: () => ({
     /** @type {Record<string, string>} namespace:tag → 中文名 */
     translations: {},
-    /** @type {Record<string, {name: string, intro: string}>} tag detail cache */
+    /** @type {Record<string, {name: string, intro: string}>} 标签中文名和说明的本地缓存 */
     detailCache: {},
     loaded: false,
     loading: false
   }),
   actions: {
+    // 翻译表只加载一次；同时进入多个页面时共用正在进行的请求状态。
     async loadTranslations() {
       if (this.loaded || this.loading) return
       this.loading = true
@@ -37,7 +38,7 @@ export const useTagStore = defineStore('tags', {
         this.translations = res.data || {}
         this.loaded = true
       } catch {
-        // 静默失败，标签保持英文显示
+        // 加载失败时继续显示原标签，用户仍能搜索和浏览。
       } finally {
         this.loading = false
       }
@@ -64,7 +65,7 @@ export const useTagStore = defineStore('tags', {
       if (!tag) return ''
       const lower = tag.toLowerCase()
 
-      // 直接完整匹配
+      // 优先查完整标签，找到后补上分类的中文名称。
       if (this.translations[lower]) {
         const colonIdx = lower.indexOf(':')
         if (colonIdx > 0) {
@@ -74,7 +75,7 @@ export const useTagStore = defineStore('tags', {
         return this.translations[lower]
       }
 
-      // 尝试 namespace:tag 匹配
+      // 没有完整译名时保留原标签内容，只将可识别的分类翻译成中文。
       const colonIdx = lower.indexOf(':')
       if (colonIdx > 0) {
         const ns = lower.substring(0, colonIdx)
@@ -88,7 +89,7 @@ export const useTagStore = defineStore('tags', {
     translateNs(ns) {
       return NS_MAP[ns?.toLowerCase()] || ns
     },
-    /** 返回命名空间的 UI 展示信息（简短标签 + 颜色），供搜索下拉使用 */
+    /** 返回标签分类的简短名称和颜色，供搜索下拉展示。 */
     getNsInfo(ns) {
       return NS_INFO[ns?.toLowerCase()] || { label: ns || 'other', color: '#888888' }
     }

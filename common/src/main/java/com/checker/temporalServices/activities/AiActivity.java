@@ -5,9 +5,10 @@ import io.temporal.activity.ActivityMethod;
 
 import java.util.List;
 
-/** AI 域 Activity：由 eh-ai-service 独占执行，主服务仅负责编排。 */
+/** 定义 AI 服务执行的任务，主工作流通过这个接口请求生成画廊简介。 */
 @ActivityInterface
 public interface AiActivity {
+    /** 根据标题与标签生成中文简介，具体模型调用在 AI 服务中执行。 */
     @ActivityMethod
     String generateGallerySummary(String title, List<String> tags);
 }

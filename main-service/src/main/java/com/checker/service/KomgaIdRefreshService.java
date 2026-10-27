@@ -21,7 +21,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
-/** Reconciles stale database IDs without writing Komga, gallery state, or physical archives. */
+/** 读取完整 Komga 物理文件索引，修复数据库中的旧书籍 ID；不改图库文件或画廊入库状态。 */
 @Service
 public class KomgaIdRefreshService {
     private static final int BATCH_SIZE = 200;
@@ -42,6 +42,7 @@ public class KomgaIdRefreshService {
         this.executor = executor;
     }
 
+    /** 校验刷新范围并只启动一个后台任务，立即返回任务状态供页面轮询。 */
     public synchronized Map<String, Object> start(List<Long> requestedGids) {
         List<Long> gids = normalizeGids(requestedGids);
         if (!komga.configured()) throw new IllegalArgumentException("请先配置 Komga 地址、API Key 和目标图库");
@@ -60,10 +61,13 @@ public class KomgaIdRefreshService {
         return snapshot(job);
     }
 
+    /** 返回当前任务的一致状态快照，避免界面读到更新到一半的计数。 */
     public Map<String, Object> status() { return snapshot(current); }
 
+    /** 标记任务停止；携带任务 ID 时先核对，防止旧页面取消刚启动的新任务。 */
     public Map<String, Object> cancel() { return cancel(null); }
 
+    /** 标记任务停止；携带任务 ID 时先核对，防止旧页面取消刚启动的新任务。 */
     public synchronized Map<String, Object> cancel(String expectedJobId) {
         Job job = current;
         if (expectedJobId != null && !expectedJobId.equals(job.jobId))
@@ -72,14 +76,17 @@ public class KomgaIdRefreshService {
         return snapshot(job);
     }
 
+    /** 先完整读取图库，再按固定 GID 上界分批扫描数据库；目录不完整时不开始写入。 */
     private void run(Job job, List<Long> gids) {
         try {
             Map<String, Object> bounds = galleries.getKomgaIdRefreshBounds(gids);
             long maxGid = numeric(bounds, "maxGid"), total = numeric(bounds, "total");
+            // 固定本次扫描上界，新加入的记录留给下一次任务，防止后台扫描始终追着新增数据跑。
             synchronized (job) { job.total = total; }
             checkCancelled(job);
             if (maxGid > 0 && total > 0) {
                 Index index = new Index(komga.librarySnapshot(job.cancelled::get));
+                // 必须先拿到完整图库再处理记录；不完整目录不能用来判断旧 ID 已经消失。
                 synchronized (job) { job.status = "RUNNING"; }
                 long after = 0;
                 while (after < maxGid) {
@@ -106,6 +113,7 @@ public class KomgaIdRefreshService {
         }
     }
 
+    /** 核对一条记录的物理身份，只把唯一候选写回数据库，并分类记录跳过原因。 */
     private void process(Job job, EhGalleriesEntity gallery, Index index) {
         String oldId = gallery.getKomgaBookId(), nextId = null, resultStatus, message;
         try {
@@ -128,6 +136,7 @@ public class KomgaIdRefreshService {
                 } else {
                     nextId = candidates.iterator().next();
                     checkCancelled(job);
+                    // 连同原文件名和目录一起比较，防止把扫描后已迁移的记录覆盖回旧关联。
                     int updated = galleries.compareAndSetKomgaBookId(gallery.getGid(), oldId, nextId,
                             gallery.getFilename(), gallery.getStoragePath());
                     if (updated == 1) {
@@ -151,7 +160,7 @@ public class KomgaIdRefreshService {
                 case "CONFLICT" -> job.conflicts++;
                 default -> job.failed++;
             }
-            // Valid unchanged rows need no table entry; every actionable result remains counted.
+            // 有效且未变更的记录只计数；明细留给更新、未命中和冲突，避免大量正常记录淹没结果。
             if (!"UNCHANGED".equals(resultStatus)) {
                 job.resultsTotal++;
                 if (job.results.size() < RESULT_LIMIT) {
@@ -164,6 +173,7 @@ public class KomgaIdRefreshService {
         }
     }
 
+    /** 限制指定 GID 的数量并去重，拒绝空值和非正整数。 */
     private static List<Long> normalizeGids(List<Long> requested) {
         if (requested == null || requested.isEmpty()) return List.of();
         if (requested.size() > 1000) throw new IllegalArgumentException("一次最多指定 1000 个 GID");
@@ -181,7 +191,7 @@ public class KomgaIdRefreshService {
         return value == null ? "" : value.substring(0, Math.min(value.length(), maximum));
     }
     private static String safeMessage(Exception failure) {
-        // SQL/connection exception text can contain internal addresses or statement parameters.
+        // 数据库和连接异常可能包含内部地址或参数，只返回适合界面展示的说明。
         return failure instanceof java.io.IOException && failure.getMessage() != null
                 ? truncate(failure.getMessage(), 240) : "刷新任务失败，请检查数据库和 Komga 服务后重试";
     }
@@ -192,6 +202,7 @@ public class KomgaIdRefreshService {
     }
     private static String normalizedName(String value) { return basename(value).replaceFirst("(?i)\\.(cbz|zip)$", "").toLowerCase(Locale.ROOT); }
 
+    /** 复制计数和有限结果明细，不把内部可变结果列表直接交给接口。 */
     private static Map<String, Object> snapshot(Job job) {
         synchronized (job) {
             Map<String, Object> result = new LinkedHashMap<>();
@@ -206,6 +217,7 @@ public class KomgaIdRefreshService {
         }
     }
 
+    /** 为完整图库建立书籍 ID、物理 GID 和规范化文件名索引，避免每条数据库记录遍历全库。 */
     private static final class Index {
         final Map<String, KomgaMediaClient.LibraryBook> byId = new HashMap<>();
         final Map<String, Set<String>> byGid = new HashMap<>(), byFilename = new HashMap<>();
@@ -222,7 +234,7 @@ public class KomgaIdRefreshService {
                 if (gids.size() == 1) {
                     byGid.computeIfAbsent(gids.iterator().next(), ignored -> new LinkedHashSet<>()).add(book.bookId());
                 } else if (gids.isEmpty()) {
-                    // An explicit different GID must never be overridden by a generic name field.
+                    // 物理文件已明确写出其他 GID 时，不能再靠普通同名字段把它认作当前画廊。
                     for (String filename : book.filenames()) if (!normalizedName(filename).isBlank())
                         byFilename.computeIfAbsent(normalizedName(filename), ignored -> new LinkedHashSet<>()).add(book.bookId());
                 }
@@ -242,6 +254,7 @@ public class KomgaIdRefreshService {
         }
     }
 
+    /** 保存一次后台任务的进度和有限明细；读取状态时通过同一把锁生成一致快照。 */
     private static final class Job {
         String jobId, lastError;
         volatile boolean running;

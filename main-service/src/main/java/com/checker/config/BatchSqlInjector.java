@@ -9,12 +9,13 @@ import com.baomidou.mybatisplus.extension.injector.methods.InsertBatchSomeColumn
 import java.util.List;
 
 /**
- * 自定义 SQL 注入器：在通用 CRUD 基础上增加 {@link InsertBatchSomeColumn} 方法，
- * 用于大批量写入时一次性生成 INSERT INTO ... VALUES (...),(...) 语句，
- * 相比逐条 INSERT 显著提升批量入库性能（默认排除 null 字段与自动填充字段）。
+ * 给通用数据库接口补充批量插入能力，让一次抓到的多条画廊能用一条插入语句写入。
  */
 public class BatchSqlInjector extends DefaultSqlInjector {
 
+    /**
+     * 保留框架原有的数据库操作，并注册批量插入方法；插入字段按定义的策略过滤。
+     */
     @Override
     public List<AbstractMethod> getMethodList(Class<?> mapperClass, TableInfo tableInfo) {
         List<AbstractMethod> methods = super.getMethodList(mapperClass, tableInfo);

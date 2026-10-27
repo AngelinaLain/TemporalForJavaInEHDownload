@@ -8,12 +8,17 @@ import io.swagger.v3.oas.models.security.SecurityScheme;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/** OpenAPI 文档的中文元数据与 JWT 认证定义。 */
+/**
+ * 配置接口文档的项目说明和登录令牌认证方式，方便在文档页面调试受保护接口。
+ */
 @Configuration
 public class OpenApiConfig {
 
     private static final String BEARER_AUTH = "BearerAuth";
 
+    /**
+     * 生成接口文档的基础信息，并声明请求头中使用的 JWT 认证方式。
+     */
     @Bean
     public OpenAPI galleryImportOpenApi() {
         return new OpenAPI()

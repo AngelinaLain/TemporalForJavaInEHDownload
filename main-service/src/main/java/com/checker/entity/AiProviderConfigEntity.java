@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存模型服务的连接地址、加密密钥和调用权限，供不同 AI 任务选择供应商。
+ */
 @Data
 @TableName("ai_provider_configs")
 public class AiProviderConfigEntity {

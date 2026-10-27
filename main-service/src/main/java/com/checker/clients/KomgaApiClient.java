@@ -15,6 +15,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
+/** 封装 Komga 合集、书籍和元数据的 HTTP 操作，集中复用连接和控制批量写入并发。 */
 @Slf4j
 @Component
 public class KomgaApiClient {
@@ -27,6 +28,7 @@ public class KomgaApiClient {
     public static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
     private String baseUrl;
+    /** 初始化复用的 HTTP 客户端，统一设置访问 Komga 的连接和读写超时。 */
     @PostConstruct
     public void init() {
         // 1. 防御性编程：去掉 yaml 配置中 URL 末尾可能多带的斜杠
@@ -136,6 +138,7 @@ public class KomgaApiClient {
         }
     }
 
+    /** 通知配置的 Komga Library 开始扫描，文件写入流程无需等待扫描完成。 */
     public void triggerLibraryScan() throws Exception {
         String libraryId = netConfig.getKomga().getLibraryId();
         if (libraryId == null || libraryId.isBlank()) throw new IllegalStateException("未配置 Komga Library ID");
@@ -297,6 +300,7 @@ public class KomgaApiClient {
         return true;
     }
 
+    /** 按当前数组顺序比较远端值与期望值，用于决定是否需要写回元数据。 */
     private static boolean jsonArrayEquals(JsonNode arrayNode, List<String> expected) {
         if (arrayNode == null || !arrayNode.isArray()) return expected.isEmpty();
         List<String> actual = new ArrayList<>();
@@ -304,6 +308,7 @@ public class KomgaApiClient {
         return actual.equals(expected);
     }
 
+    /** 比较作者及角色，判断元数据是否真的需要写回。 */
     private static boolean authorsMatch(JsonNode authorsNode, List<Map<String, String>> expected) {
         if (authorsNode == null || !authorsNode.isArray()) return expected.isEmpty();
         List<String> actual = new ArrayList<>();
@@ -371,6 +376,7 @@ public class KomgaApiClient {
         return List.copyOf(succeeded);
     }
 
+    /** 为单本书籍建立补丁请求，批量与单条更新共用同一格式。 */
     private Request buildMetadataPatchRequest(BookMetadataPatch patch) throws Exception {
         String url = baseUrl + "/api/v1/books/" + patch.bookId() + "/metadata";
         String json = objectMapper.writeValueAsString(patch.metadata());

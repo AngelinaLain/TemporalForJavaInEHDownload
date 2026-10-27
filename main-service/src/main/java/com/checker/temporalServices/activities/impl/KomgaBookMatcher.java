@@ -11,12 +11,13 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 对 Komga 搜索结果做确定性匹配，避免 fullTextSearch 命中后直接取第一条。
+ * 按物理文件名和 GID 筛选 Komga 候选，不把展示标题相近直接当成同一本书。
  */
 final class KomgaBookMatcher {
     private KomgaBookMatcher() {
     }
 
+    /** 先核对目标图库与系列，再收集物理文件身份匹配的所有书籍 ID，保留多候选供调用方判定歧义。 */
     static List<String> exactBookIds(JSONArray content, Long gid, String expectedFilename,
                                      String expectedSeriesId, String expectedLibraryId) {
         List<String> matches = new ArrayList<>();
@@ -35,6 +36,7 @@ final class KomgaBookMatcher {
         return matches;
     }
 
+    /** 优先比完整文件名或去扩展名的名称；旧数据可按物理路径中的精确 GID 前缀匹配。 */
     static boolean matchesFilename(JSONObject book, Long gid, String expectedFilename) {
         List<String> candidates = List.of(
                 StrUtil.blankToDefault(book.getStr("name"), ""),
@@ -61,10 +63,12 @@ final class KomgaBookMatcher {
                         .startsWith(gidPrefix.toLowerCase(Locale.ROOT)));
     }
 
+    /** 双方身份都有值时必须相同；缺值时保留历史接口的兼容行为。 */
     private static boolean matchesOptionalIdentity(String actual, String expected) {
         return StrUtil.isBlank(actual) || StrUtil.isBlank(expected) || actual.equals(expected);
     }
 
+    /** 解码路径并取最后一段文件名，兼容 Komga 返回的文件地址与普通名称。 */
     private static String basename(String value) {
         if (value == null || value.isBlank()) return "";
         String decoded;
@@ -78,6 +82,7 @@ final class KomgaBookMatcher {
         return (slash >= 0 ? normalized.substring(slash + 1) : normalized).trim();
     }
 
+    /** 忽略归档扩展名差异，比较同一物理文件的主体名称。 */
     private static String stripArchiveExtension(String value) {
         return value.replaceFirst("(?i)\\.(zip|cbz|rar)$", "");
     }

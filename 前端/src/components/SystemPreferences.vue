@@ -36,6 +36,7 @@
 </template>
 
 <script setup>
+// 提供字号切换与修改密码；密码只保存在当前表单，成功后要求重新登录。
 import { onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -50,10 +51,12 @@ const tab = ref('appearance'), submitting = ref(false), passwordError = ref('')
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 let passwordController
 
+// 清空表单中的密码和错误提示，避免关闭设置后仍保留敏感输入。
 function resetPasswordForm() {
   Object.assign(passwordForm, { currentPassword: '', newPassword: '', confirmPassword: '' })
   passwordError.value = ''
 }
+// 提前检查长度、编码字节数及两次输入，减少无效改密请求。
 function validatePassword() {
   if (!passwordForm.currentPassword) return '请输入当前密码'
   if ([...passwordForm.newPassword].length < 8) return '新密码至少需要 8 个字符'
@@ -62,6 +65,7 @@ function validatePassword() {
   if (passwordForm.newPassword === passwordForm.currentPassword) return '新密码不能与当前密码相同'
   return ''
 }
+// 防止重复提交；成功后清除本地凭据并重新登录，失败则留在当前表单显示原因。
 async function changePassword() {
   if (submitting.value) return
   passwordError.value = validatePassword()

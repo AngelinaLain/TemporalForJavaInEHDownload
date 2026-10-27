@@ -12,7 +12,7 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * EHentai画廊抓取队列
+ * 保存一条画廊的来源信息、下载状态、归档位置及 Komga 关联，是各处理阶段共用的数据库记录。
  */
 @Data // 自动生成 get/set/toString
 @TableName(value = "eh_galleries", autoResultMap = true)
@@ -110,14 +110,14 @@ public class EhGalleriesEntity implements Serializable {
      */
     private String filename;
 
-    /** Relative series directory below the configured Komga upload destination. */
+    /** 相对于 Komga 图库根目录的系列子目录，用于定位本地或群晖归档。 */
     private String storagePath;
 
-    /** Last collection/name/order signature written into ComicInfo.xml. */
+    /** 上次写入 ComicInfo.xml 的合集、名称和顺序摘要，用于判断是否需要重新同步。 */
     private String seriesSyncSignature;
 
-    /** Previous physical archive awaiting cleanup after a successful series publication. */
-    @JsonIgnore // Persistence-only journal; never send it in Temporal/API payloads.
+    /** 新系列归档发布后待清理的旧文件位置，失败时保留以便后续继续清理。 */
+    @JsonIgnore // 仅在数据库保存清理进度，不传给工作流或前端，避免泄露内部记录并增大消息。
     private String seriesCleanupPath;
     @JsonIgnore
     private String seriesCleanupFilename;

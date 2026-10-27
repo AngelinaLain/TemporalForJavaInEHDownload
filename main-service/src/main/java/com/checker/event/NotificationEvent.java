@@ -3,9 +3,7 @@ package com.checker.event;
 import org.springframework.context.ApplicationEvent;
 
 /**
- * 通知事件：从 Temporal 编排中解耦的异步邮件通知。
- * 通知 Activity 只负责发布事件（快速返回），实际邮件发送由
- * {@code NotificationEventListener} 在独立线程池异步消费。
+ * 承载待发送邮件的主题和内容，让工作流活动只发布事件，实际发送交给后台监听器。
  */
 public class NotificationEvent extends ApplicationEvent {
 

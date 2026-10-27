@@ -29,8 +29,7 @@ import java.util.Map;
 import static com.checker.common.SynologyTaskStatus.*;
 
 /**
- * 群晖 Activity 实现：负责与 Synology DownloadStation / FileStation 交互（任务推送、状态轮询、文件重命名）
- * 底层 SSH / HTTP 操作委托给 SynologyApiClient，本类专注 Temporal Activity 编排与错误处理。
+ * 操作群晖下载任务并汇报执行进度；底层认证、HTTP 和文件查询交给群晖客户端。
  */
 @Slf4j
 @Component
@@ -48,6 +47,7 @@ public class SynologyActivityImpl implements SynologyActivity {
 
 
     @Override
+    /** 先查同一下载地址是否已排队，避免活动重试时重复创建任务。 */
     public Long pushToSynology(String downloadUrl, Long gid, String destination) {
         String sid = synologyApiClient.getSynologySid();
 
@@ -77,6 +77,7 @@ public class SynologyActivityImpl implements SynologyActivity {
     }
 
     @Override
+    /** 按下载地址找到任务并检查完成大小；任务被清除时再检查物理文件是否存在。 */
     public SynologyTaskStatus checkSynologyTaskStatus(Long gid, String downloadUrl) {
         String sid = synologyApiClient.getSynologySid();
         Map<String, Object> form = new HashMap<>();
@@ -111,16 +112,16 @@ public class SynologyActivityImpl implements SynologyActivity {
                 SynologyTaskStatus taskStatus = SynologyTaskStatus.fromApiStatus(status);
                 if (taskStatus != null && taskStatus.isCompleted()) {
 
-                    // 获取群晖 API 返回的任务文件总大小 (bytes)
+                    // 群晖任务接口返回的大小单位为字节。
                     long fileSize = task.getLong("size", 0L);
-                    // 设定一个底线：如果文件小于 500KB (约 512,000 bytes)，绝不可能是正常的原图压缩包
+                    // 已完成的文件小于 5 KiB 时按错误网页处理，删除任务后交给工作流重试。
                     if (fileSize > 0 && fileSize < 5120) {
                         log.error("❌ 拦截到伪装文件！下载状态虽为 finished，但体积极小 ({} bytes)，判定为错误网页。GID: {}", fileSize, gid);
                         synologyApiClient.deleteDownloadTask(task.getStr("id"));
                         return ERROR; // 强制返回 error，让 Temporal 触发告警并重试
                     }
 
-                    // ... 原有的正常记录文件名的逻辑 ...
+                    // 保存下载任务的实际文件名，供后续重命名和入库确认使用。
                     String taskTitle = task.getStr("title", "");
                     if (StrUtil.isNotBlank(taskTitle)) {
                         EhGalleriesEntity updateFile = new EhGalleriesEntity();
@@ -141,7 +142,7 @@ public class SynologyActivityImpl implements SynologyActivity {
         }
 
         log.warn("⚠️ 任务不在列表中, GID: {} (可能已完成并被清除)", gid);
-        // 兜底检查：去物理硬盘看一眼文件到底在不在（通过前缀匹配或后缀）
+        // 已完成任务可能被清除，此时通过文件大小确认实际归档是否仍在磁盘上。
         Double actualSize = synologyApiClient.getFileSizeMbViaSSH(gid);
         if (actualSize != null && actualSize > 0.0) {
             return FINISHED; // 文件确实在，说明是下载完被清除了
@@ -152,6 +153,7 @@ public class SynologyActivityImpl implements SynologyActivity {
 
 
     @Override
+    /** 分段等待并持续心跳，再轮询下载结果，让长时间等待留在活动内而不膨胀工作流历史。 */
     public SynologyDownloadResult waitForDownloadComplete(Long gid, String downloadUrl, long estimatedWaitSeconds) {
         ActivityExecutionContext context = Activity.getExecutionContext();
         context.heartbeat("任务已推送，等待下载完成");
@@ -198,6 +200,7 @@ public class SynologyActivityImpl implements SynologyActivity {
 
 
     @Override
+    /** 根据数据库标题生成带 GID 的安全归档名，远端重命名成功后更新本地记录。 */
     public String renameSynologyFile(Long gid, String oldFilename) {
         if (StrUtil.isBlank(oldFilename)) return null;
 

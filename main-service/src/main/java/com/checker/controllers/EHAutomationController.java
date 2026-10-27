@@ -26,9 +26,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * EHentai 自动化工作流 REST 控制器
- * <p>
- * 全部端点为敏感操作，要求管理员角色（@PreAuthorize）。
+ * 提供采集、失败重试、通知测试和 Komga 元数据维护的操作入口，将耗时工作交给工作流或后台服务。
  */
 @RestController
 @RequestMapping("/api/temporal/eh")
@@ -40,10 +38,7 @@ public class EHAutomationController {
     private WorkflowClient workflowClient;
 
     /**
-     * 启动 EHentai 自动化工作流：按搜索条件抓取画廊并推送下载
-     *
-     * @param searchOptions 搜索参数（关键词、分类、评分等）
-     * @return 包含 workflowId 和 runId 的响应
+     * 根据用户的检索条件启动自动化主工作流，并返回本次工作流标识。
      */
     @PostMapping("/start")
     public Result<Map<String, String>> startWorkflow(@Valid @RequestBody SearchOptions searchOptions) {
@@ -80,7 +75,7 @@ public class EHAutomationController {
     }
 
     /**
-     * 触发：重试数据库中所有标记为“下载失败”的画廊
+     * 启动失败任务重试流程，重新处理符合重试条件的画廊。
      */
     @PostMapping("/retry-failed")
     public Result<Map<String, String>> retryFailedWorkflow() {
@@ -107,7 +102,7 @@ public class EHAutomationController {
     @Autowired
     private NotificationActivity notificationActivity;
     /**
-     * 测试/Debug 专用：直接测试 Microsoft Graph API 发送邮件功能
+     * 发送测试通知，帮助检查邮件配置是否可用。
      */
     @PostMapping("/test-email")
     public Result<Map<String, String>> testEmail(@RequestBody(required = false) Map<String, String> payload) {
@@ -126,7 +121,7 @@ public class EHAutomationController {
     @Autowired
     private KomgaCollectionService komgaCollectionService;
     /**
-     * 根据指定的英文 Tag 动态创建或更新中文合集
+     * 按标签查找系列，并在 Komga 中创建或补充对应合集。
      */
     @PostMapping("/collections/build-by-tags")
     public Result<String> buildCollectionByTags(@RequestBody KomgaCollectionRequest request) {
@@ -143,7 +138,7 @@ public class EHAutomationController {
     private KomgaSyncService komgaSyncService;
 
     /**
-     * 一键修复：将数据库中的标签强制覆盖同步到 Komga (Book & Series)
+     * 启动数据库标签向 Komga 的后台同步。
      */
     @PostMapping("/sync-tags")
     public Result<String> syncTagsToKomga() {
@@ -153,7 +148,7 @@ public class EHAutomationController {
     }
 
     /**
-     * 批量刷新所有已入库书籍的 Komga 元数据
+     * 启动后台任务，把数据库现有元数据批量同步到已关联的 Komga 书籍。
      */
     @PostMapping("/batch-refresh-metadata")
     public Result<String> batchRefreshMetadata() {
@@ -165,7 +160,7 @@ public class EHAutomationController {
     private com.checker.service.EhGalleriesService ehGalleriesService;
 
     /**
-     * 一键补全缺失的画廊文件大小 (file_size_mb 为空或为0的记录)
+     * 启动文件体积回填任务，更新缺失或需要核对的大小信息。
      */
     @PostMapping("/batch-update-filesize")
     public Result<String> batchUpdateFileSize() {

@@ -4,6 +4,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+/**
+ * 接收创建或修改本地画廊合集时填写的名称和说明。
+ */
 @Data
 public class GalleryCollectionRequest {
     @NotBlank(message = "合集名称不能为空")

@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/** 整理重复画廊候选、生成灰区审核，并把人工选择安全地写回版本关系。 */
 @Service
 public class DedupeReviewService {
     public static final String PENDING = "PENDING";
@@ -41,6 +42,7 @@ public class DedupeReviewService {
         this.visualFingerprintService = visualFingerprintService;
     }
 
+    /** 分页查询人工审核记录，并附加候选画廊及当前视觉证据。 */
     public IPage<DedupeReviewEntity> page(int page, int size, String decision) {
         QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();
         if (decision != null && !decision.isBlank() && !"ALL".equalsIgnoreCase(decision)) {
@@ -50,18 +52,21 @@ public class DedupeReviewService {
         return reviewMapper.selectPage(new Page<>(Math.max(page, 1), Math.min(Math.max(size, 1), 100)), query);
     }
 
+    /** 统计仍待人工处置的记录数量。 */
     public long countPending() {
         QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();
         query.eq("decision", PENDING);
         return reviewMapper.selectCount(query);
     }
 
+    /** 读取审核记录，不存在时停止后续处置。 */
     public DedupeReviewEntity require(Long id) {
         if (id == null) throw new IllegalArgumentException("审核记录不存在");
         DedupeReviewEntity review = reviewMapper.selectById(id);
         if (review == null) throw new IllegalArgumentException("审核记录不存在");
         return review;
     }
+    /** 查找同一候选组的审核记录，避免重复建立同组审核。 */
     public List<DedupeReviewEntity> findByCandidateKey(String candidateKey) {
         if (candidateKey == null || candidateKey.isBlank()) return List.of();
         QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();
@@ -108,6 +113,7 @@ public class DedupeReviewService {
         return created;
     }
 
+    /** 画廊指纹变化后刷新它涉及的审核证据。 */
     public void refreshVisualEvidenceForGid(Long gid) {
         if (gid == null) return;
         QueryWrapper<DedupeReviewEntity> query = new QueryWrapper<>();
@@ -115,6 +121,7 @@ public class DedupeReviewService {
         reviewMapper.selectList(query).forEach(this::refreshVisualEvidence);
     }
 
+    /** 重新计算指定审核的视觉证据，不替代已经记录的人工决定。 */
     private void refreshVisualEvidence(DedupeReviewEntity review) {
         if (review == null || visualFingerprintService == null) return;
         GalleryVisualMatch visual = visualFingerprintService.matchAndPersist(review.getLeftGid(), review.getRightGid());
@@ -134,6 +141,7 @@ public class DedupeReviewService {
         reviewMapper.update(null, update);
     }
 
+    /** 收集仍被人工审核占用的画廊，避免自动选优提前处理这些记录。 */
     public Set<Long> heldGids(List<DedupeReviewEntity> reviews) {
         Set<Long> held = new HashSet<>();
         for (DedupeReviewEntity review : reviews) {
@@ -181,6 +189,7 @@ public class DedupeReviewService {
         return held;
     }
 
+    /** 根据候选证据和已确认关系整理需要一起比较的版本组。 */
     public List<List<EhGalleriesEntity>> cluster(
             List<EhGalleriesEntity> bucket, List<DedupeReviewEntity> reviews) {
         Map<PairKey, DedupeReviewEntity> decisions = index(reviews);
@@ -188,6 +197,7 @@ public class DedupeReviewService {
                 (left, right) -> effectiveMatch(left, right, decisions));
     }
 
+    /** 在候选组中确定首选版本，并保留当前健康或正在处理的记录。 */
     public EhGalleriesEntity choosePreferred(
             List<EhGalleriesEntity> candidates, List<DedupeReviewEntity> reviews) {
         Set<Long> candidateGids = new HashSet<>();
@@ -209,6 +219,7 @@ public class DedupeReviewService {
         return GalleryDeduplication.choosePreferred(candidates);
     }
 
+    /** 锁定候选组后保存人工结论，重算版本关系并返回需要继续处理的画廊。 */
     @Transactional
     public ResolutionOutcome resolve(Long reviewId, String requestedDecision,
                                      Long preferredGid, String reviewedBy) {
@@ -239,6 +250,7 @@ public class DedupeReviewService {
         return new ResolutionOutcome(review.getId(), decision, dispatchGids);
     }
 
+    /** 按最新人工结论和候选证据重算组内首选及重复关系。 */
     private List<Long> recomputeCandidate(String candidateKey, Set<Long> affected) {
         List<EhGalleriesEntity> bucket = selectBucket(candidateKey);
         List<DedupeReviewEntity> reviews = findByCandidateKey(candidateKey);
@@ -287,6 +299,7 @@ public class DedupeReviewService {
         return dispatch.stream().distinct().toList();
     }
 
+    /** 把人工确认相同的画廊纳入候选组，避免分组边界丢掉已确认关系。 */
     private void expandByManualMatches(Set<Long> affected, List<DedupeReviewEntity> reviews) {
         boolean changed;
         do {
@@ -307,6 +320,7 @@ public class DedupeReviewService {
         return result;
     }
 
+    /** 把人工决定和自动视觉证据合并为本次使用的匹配结论。 */
     private boolean effectiveMatch(EhGalleriesEntity left, EhGalleriesEntity right,
                                    Map<PairKey, DedupeReviewEntity> decisions) {
         DedupeReviewEntity review = decisions.get(PairKey.of(left.getGid(), right.getGid()));
@@ -324,6 +338,7 @@ public class DedupeReviewService {
         return galleriesMapper.selectList(query);
     }
 
+    /** 锁定同一候选组的数据库锁桶，串行处理同时发生的选优和审核。 */
     private void lockCandidateKey(String candidateKey) {
         galleriesMapper.ensureDedupeLock(candidateKey);
         galleriesMapper.lockDedupeCandidate(candidateKey);
@@ -358,6 +373,7 @@ public class DedupeReviewService {
         return decision == null ? "" : decision.trim().toUpperCase();
     }
 
+    /** 固定较小 GID 在左，使同一对画廊不会因传参顺序不同形成两份索引。 */
     public record PairKey(Long left, Long right) {
         public static PairKey of(Long first, Long second) {
             if (first == null || second == null) throw new IllegalArgumentException("GID 不能为空");
@@ -365,6 +381,7 @@ public class DedupeReviewService {
         }
     }
 
+    /** 返回人工结论和需要继续下载处理的首选画廊，供调用方接续工作流。 */
     public record ResolutionOutcome(Long reviewId, String decision, List<Long> dispatchGids) {
     }
 }

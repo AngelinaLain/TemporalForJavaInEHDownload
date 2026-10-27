@@ -11,10 +11,12 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+/** 从归档顺序读取指定图片页，限制单页大小，为视觉模型提供少量采样图片。 */
 @Component
 public class ArchiveSampleImageExtractor {
     private static final int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
+    /** 只读取要求的采样页，凑齐后停止扫描；单张图片超过限制时明确失败。 */
     public Map<Integer, SampleImage> extract(InputStream archive, Set<Integer> pageIndexes) throws IOException {
         Map<Integer, SampleImage> result = new LinkedHashMap<>();
         if (pageIndexes == null || pageIndexes.isEmpty()) return result;
@@ -55,6 +57,7 @@ public class ArchiveSampleImageExtractor {
         return "image/jpeg";
     }
 
+    /** 记录采样页在归档中的位置、文件名、格式及图片内容。 */
     public record SampleImage(int pageIndex, String pageName, String mimeType, byte[] bytes) {
     }
 }

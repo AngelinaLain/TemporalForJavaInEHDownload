@@ -37,6 +37,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 提供疑似重复画廊的人工审核接口，并在用户确认后派发需要继续下载的版本。
+ */
 @RestController
 @RequestMapping("/api/dedupe-reviews")
 @Tag(name = "去重审核", description = "重复图库候选项审核与 AI 辅助判定")
@@ -63,6 +66,9 @@ public class DedupeReviewController {
         this.visualReviewJobService = visualReviewJobService;
     }
 
+    /**
+     * 分页返回审核记录，并批量补充左右两本画廊的信息，方便并排比较。
+     */
     @GetMapping
     public Result<Map<String, Object>> list(
             @RequestParam(defaultValue = "1") int page,
@@ -89,7 +95,9 @@ public class DedupeReviewController {
         return Result.success(payload);
     }
 
-    /** AI output is evidence only; an administrator must still resolve the audit case. */
+    /**
+     * 为当前审核记录的候选对启动 AI 视觉复核，只提供辅助证据，不自动提交人工结论。
+     */
     @PostMapping("/{id}/ai-review")
     public Result<Map<String, Object>> startAiReview(@PathVariable Long id) {
         try {
@@ -102,6 +110,9 @@ public class DedupeReviewController {
             return Result.error(503, "Temporal 工作流启动失败: " + exception.getMessage());
         }
     }
+    /**
+     * 保存人工结论，再为需要继续处理的画廊启动下载工作流。
+     */
     @PostMapping("/{id}/resolve")
     public Result<Map<String, Object>> resolve(@PathVariable Long id,
                                                @RequestBody ResolveDedupeReviewRequest request,
@@ -122,6 +133,9 @@ public class DedupeReviewController {
         }
     }
 
+    /**
+     * 逐个为获准继续处理的画廊建立子任务，并返回实际派发的工作流标识。
+     */
     private List<Map<String, String>> dispatch(List<Long> gids) {
         List<Map<String, String>> started = new ArrayList<>();
         WorkflowSettings settings = buildSettings();
@@ -151,6 +165,9 @@ public class DedupeReviewController {
         return started;
     }
 
+    /**
+     * 为本次补偿下载构建工作流参数快照。
+     */
     private WorkflowSettings buildSettings() {
         return WorkflowSettings.builder()
                 .maxConcurrency(workflowConfig.getMaxConcurrency())
@@ -162,6 +179,9 @@ public class DedupeReviewController {
                 .build();
     }
 
+    /**
+     * 把审核结论、视觉证据和两侧画廊组合成前端审核卡片所需的数据。
+     */
     private DedupeReviewCase toCase(DedupeReviewEntity review,
                                     Map<Long, EhGalleriesEntity> galleries) {
         return DedupeReviewCase.builder()

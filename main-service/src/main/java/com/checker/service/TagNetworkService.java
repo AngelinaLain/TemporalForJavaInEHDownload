@@ -12,7 +12,7 @@ import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-/** Catalog and focused neighborhoods deliberately avoid an all-tag Cartesian product. */
+/** 提供标签目录和选中标签的直接关联，避免一次计算全库标签的所有两两组合。 */
 @Service
 public class TagNetworkService {
     private static final int SNAPSHOT_SECONDS = 300;
@@ -49,10 +49,12 @@ public class TagNetworkService {
                 .expireAfterWrite(SNAPSHOT_SECONDS, TimeUnit.SECONDS).ticker(ticker).build();
     }
 
+    /** 按请求返回高频标签网络或完整目录快照，后续分页必须使用同一快照。 */
     public Map<String, Object> network(int limit, int minWeight, String keyword, int offset, int pageSize,
                                        String snapshotId) {
         String query = keyword(keyword);
         if (limit == 0) {
+            // 完整目录的页码必须绑定同一快照，数据刷新或缓存过期时明确要求重载，不能悄悄漏标签。
             if (offset < 0) throw new IllegalArgumentException("标签分页位置不能小于 0");
             int size = Math.max(50, Math.min(1000, pageSize));
             String id = snapshotId == null ? "" : snapshotId.trim();
@@ -77,24 +79,27 @@ public class TagNetworkService {
         return networks.get(new NetworkKey(query, size, weight), this::topNetwork);
     }
 
+    /** 只展开选中标签的直接共现关系，限制返回数量并报告真实关联总数。 */
     public Map<String, Object> neighbors(String tag, String keyword, int minWeight, int limit) {
         if (tag == null || tag.isBlank() || tag.length() > 200) throw new IllegalArgumentException("请选择有效标签");
         return neighborhoods.get(new NeighborhoodKey(keyword(keyword), tag.trim(),
                 Math.max(1, Math.min(100, minWeight)), Math.max(10, Math.min(200, limit))), this::loadNeighbors);
     }
 
+    /** 按作品范围统计标签出现次数，复用短期缓存减少重复聚合。 */
     private List<Map<String, Object>> catalog(String keyword) {
         return catalogs.get(keyword, key -> jdbc.queryForList(catalogSql(key), params(key)));
     }
 
-    // Serialize catalog creation so concurrent first-page requests cannot each allocate an unbounded catalog.
+    // 首包目录串行建立，避免多个请求同时把完整目录加载到内存。
+    /** 流式读取标签目录，边读取边限制内存，并把名称、分类和译名固定在同一快照。 */
     private synchronized CatalogSnapshot createSnapshot(String query, String id) {
         Map<String, String> dictionary = dictionaries.get(0, ignored -> translations.getTranslationMap());
         List<SnapshotTag> tags = new ArrayList<>();
         long[] bytes = {256L + query.length() * 2L};
         jdbc.query(connection -> {
             var statement = connection.prepareStatement(catalogSql(query), ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
-            // Connector/J streams rows instead of buffering the entire result before the budget check.
+            // 让 MySQL 驱动逐行读取，边读边检查容量，而不是先在驱动里缓存整个结果。
             statement.setFetchSize(Integer.MIN_VALUE);
             Object[] parameters = params(query);
             for (int index = 0; index < parameters.length; index++) statement.setObject(index + 1, parameters[index]);
@@ -103,7 +108,7 @@ public class TagNetworkService {
             String name = row.getString("name");
             String label = dictionary == null ? name : dictionary.getOrDefault(name.toLowerCase(Locale.ROOT), name);
             String namespace = name.contains(":") ? name.substring(0, name.indexOf(':')) : "misc";
-            // Includes the entry, list references, strings and conservative object overhead.
+            // 估算行对象、列表引用和字符串占用，提前拒绝过大的快照。
             bytes[0] += 192L + 2L * (name.length() + label.length() + namespace.length());
             if (bytes[0] > snapshotMaxBytes) {
                 throw new IllegalArgumentException("标签目录超过单次快照容量，请缩小作品关键词后重试");
@@ -111,6 +116,7 @@ public class TagNetworkService {
             tags.add(new SnapshotTag(name, label, namespace, row.getLong("value")));
         });
         CatalogSnapshot snapshot = new CatalogSnapshot(query, List.copyOf(tags), (int) bytes[0]);
+        // 快照中的顺序、总数和译名一起固定；后续分页只切片，不重新做全库聚合。
         snapshots.put(id, snapshot);
         snapshots.cleanUp();
         if (snapshots.getIfPresent(id) == null) {
@@ -126,6 +132,7 @@ public class TagNetworkService {
                 " GROUP BY jt.tag ORDER BY value DESC, jt.tag ASC";
     }
 
+    /** 仅在少量高频标签之间计算共现，限制连线数量。 */
     private Map<String, Object> topNetwork(NetworkKey key) {
         List<Map<String, Object>> catalog = catalog(key.keyword());
         List<Map<String, Object>> tags = catalog.subList(0, Math.min(key.limit(), catalog.size()));
@@ -143,6 +150,7 @@ public class TagNetworkService {
         return Map.of("nodes", tags.stream().map(this::node).toList(), "links", links, "total", catalog.size(), "mode", "top");
     }
 
+    /** 先统计关联总数，再读取最强的有限关联，让界面说明是否还有未展示标签。 */
     private Map<String, Object> loadNeighbors(NeighborhoodKey key) {
         List<Object> args = new ArrayList<>(Arrays.asList(params(key.keyword())));
         args.add(key.tag()); args.add(key.tag()); args.add(key.minWeight());
@@ -170,7 +178,7 @@ public class TagNetworkService {
 
     private Map<String, Object> node(Map<String, Object> row) {
         String tag = String.valueOf(row.get("name"));
-        // Full catalogs must not trigger one Redis/AI translation request per tag.
+        // 全量目录使用本地翻译快照，避免每个标签都单独请求 Redis 或 AI。
         Map<String, String> dictionary = dictionaries.get(0, ignored -> translations.getTranslationMap());
         String label = dictionary == null ? tag : dictionary.getOrDefault(tag.toLowerCase(Locale.ROOT), tag);
         return Map.of("name", tag, "label", label,

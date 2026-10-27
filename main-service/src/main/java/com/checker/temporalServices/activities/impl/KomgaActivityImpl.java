@@ -29,7 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Komga Activity 实现：负责与 Komga 漫画库服务交互（元数据拉取、图书搜索、标签推送、库扫描）
+ * 补齐画廊元数据，确认 Komga 中的物理书籍，并写入阅读元数据与入库状态。
  */
 @Slf4j
 @Component
@@ -49,9 +49,8 @@ public class KomgaActivityImpl implements KomgaActivity {
     private KomgaApiClient komgaApiClient;
 
     /**
-     * Komga 的 fullTextSearch 搜索的是展示元数据，不保证搜索物理文件名。扫描确认时按
-     * 系列拉取 BookDto，再用 name/url 做本地精确匹配。短缓存用于合并并发工作流轮询，
-     * 10 秒后自动刷新，不会延长当前 15 秒的扫描确认周期。
+     * Komga 的全文搜索面向展示元数据，不能保证找到物理文件名。
+     * 确认时读取目标图库或系列的书籍快照，再按名称和路径精确匹配；短缓存合并并发轮询。
      */
     private final Cache<String, JSONArray> booksBySeriesCache = Caffeine.newBuilder()
             .maximumSize(10)
@@ -59,6 +58,7 @@ public class KomgaActivityImpl implements KomgaActivity {
             .build();
 
     @Override
+    /** 向源站读取当前画廊的标签并更新数据库，供后续 ComicInfo 和阅读元数据使用。 */
     public void fetchAndSaveMetadata(Long gid, String token) {
         String jsonBody = String.format("{\"method\":\"gdata\",\"gidlist\":[[%d,\"%s\"]],\"namespace\":1}", gid, token);
 
@@ -82,6 +82,7 @@ public class KomgaActivityImpl implements KomgaActivity {
     }
 
     @Override
+    /** 保留旧流程的全文搜索入口，命中首条结果即返回；新入库确认使用物理身份精确匹配方法。 */
     public String findBookInKomga(Long gid) {
         String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list";
         JSONObject searchBody = new JSONObject();
@@ -118,6 +119,7 @@ public class KomgaActivityImpl implements KomgaActivity {
     }
 
     @Override
+    /** 读取目标图库的物理文件信息，只在唯一匹配时确认书籍，多个候选明确返回歧义。 */
     public KomgaBookMatchResult findExactBookInKomga(Long gid) {
         EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
         if (gallery == null) {
@@ -158,6 +160,7 @@ public class KomgaActivityImpl implements KomgaActivity {
 
 
     @Override
+    /** 写入前比较现有阅读元数据，更新成功后再保存 Book ID 并标记已入库。 */
     public void pushMetadataToKomga(String bookId, Long gid) {
         EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
         Map<String, Object> metadata = komgaApiClient.buildBookMetadata(gallery);
@@ -181,6 +184,7 @@ public class KomgaActivityImpl implements KomgaActivity {
 
 
     @Override
+    /** 请求 Komga 扫描图库，并清理短期书籍缓存，让后续轮询能够看到新结果。 */
     public void triggerKomgaLibraryScan() {
         String libraryId = netConfig.getKomga().getLibraryId();
         if (StrUtil.isBlank(libraryId)) {
@@ -200,6 +204,7 @@ public class KomgaActivityImpl implements KomgaActivity {
         }
     }
 
+    /** 将 HTTP 失败转换成工作流可识别的错误类别，鉴权失败无需重复请求。 */
     private ApplicationFailure komgaHttpFailure(String action, int status) {
         String message = action + ", HTTP: " + status;
         if (status == 401 || status == 403) {
@@ -208,12 +213,14 @@ public class KomgaActivityImpl implements KomgaActivity {
         return ApplicationFailure.newFailure(message, ErrorType.KOMGA_SCAN_FAILED.getCode());
     }
 
+    /** 按图库和系列共用短期书籍列表，合并并发流程的重复查询。 */
     private JSONArray getBooksInTargetSeries(String targetSeriesId) {
         String libraryId = StrUtil.blankToDefault(netConfig.getKomga().getLibraryId(), "");
         String cacheKey = libraryId + "|" + targetSeriesId;
         return booksBySeriesCache.get(cacheKey, ignored -> queryBooksInTargetSeries(targetSeriesId));
     }
 
+    /** 读取目标图库的书籍列表并短期复用，供物理文件唯一匹配使用。 */
     private JSONArray getBooksInTargetLibrary() {
         String libraryId = StrUtil.blankToDefault(netConfig.getKomga().getLibraryId(), "");
         return booksBySeriesCache.get("library|" + libraryId, ignored -> {
@@ -238,6 +245,7 @@ public class KomgaActivityImpl implements KomgaActivity {
         });
     }
 
+    /** 只读取指定系列内的物理书籍，失败时交由上层工作流处理。 */
     private JSONArray queryBooksInTargetSeries(String targetSeriesId) {
         String komgaUrl = netConfig.getKomga().getUrl() + "/api/v1/books/list?unpaged=true";
         JSONObject seriesIdCond = new JSONObject();
@@ -266,11 +274,8 @@ public class KomgaActivityImpl implements KomgaActivity {
 
 
     /**
-     * 懒加载并缓存目标系列 ID，只在第一次访问时查询 Komga，后续复用缓存值。
-     * 若查询结果为 null（系列不存在），不会缓存，下次调用会重新查询。
-     */
-    /**
-     * 根据系列名称在 Komga 中查找对应的 seriesId
+     * 在目标图库内按展示标题或原始系列名查找完全一致的系列。
+     * 没有匹配时返回空值，不将模糊搜索的第一项当成目标。
      *
      * @param seriesName 目标系列名称
      * @return 匹配的 seriesId，未找到返回 null
@@ -321,6 +326,7 @@ public class KomgaActivityImpl implements KomgaActivity {
         }
     }
 
+    /** 有图库配置且响应也有图库 ID 时要求一致，兼容缺少此字段的历史响应。 */
     private boolean matchesConfiguredLibrary(JSONObject series, String libraryId) {
         String actualLibraryId = series.getStr("libraryId");
         return StrUtil.isBlank(libraryId)

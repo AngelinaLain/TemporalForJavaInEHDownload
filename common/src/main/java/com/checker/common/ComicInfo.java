@@ -8,9 +8,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * ComicRack ComicInfo 元数据模型。
- * Komga 在扫描漫画压缩包时读取内嵌的 ComicInfo.xml 并自动写入书/系列元数据，
- * 从而免去下载后逐本 PATCH 元数据 API 的脆弱链路。
+ * 把画廊标题、作者、合集、标签和简介组织成 Komga 能识别的 ComicInfo.xml 元数据。
  */
 @Data
 @Builder
@@ -24,7 +22,7 @@ public class ComicInfo {
     /** 系列（合集）名称，映射到 Komga Series */
     private String series;
 
-    /** Book order inside the Komga series. */
+    /** 这本画廊在 Komga 系列中的顺序。 */
     private Integer number;
 
     /** 剧情简介 */
@@ -37,7 +35,7 @@ public class ComicInfo {
     private List<String> tags;
 
     /**
-     * 生成 ComicInfo.xml 内容（含 XML 转义）。
+     * 按 ComicInfo 格式生成 XML，省略没有值的字段，并转义文本中的特殊字符。
      */
     public String toXml() {
         StringBuilder sb = new StringBuilder(512);
@@ -59,6 +57,9 @@ public class ComicInfo {
         return sb.toString();
     }
 
+    /**
+     * 只有字段有内容时才添加对应 XML 节点，避免写入无意义的空字段。
+     */
     private static void appendElement(StringBuilder sb, String name, String value) {
         if (value == null || value.isBlank()) {
             return;
@@ -68,6 +69,9 @@ public class ComicInfo {
                 .append("</").append(name).append(">\n");
     }
 
+    /**
+     * 转义文本中的 XML 特殊字符，防止标题或简介破坏元数据结构。
+     */
     private static String escapeXml(String value) {
         return value.replace("&", "&amp;")
                 .replace("<", "&lt;")

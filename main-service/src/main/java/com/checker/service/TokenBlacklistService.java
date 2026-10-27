@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit;
  * JWT 黑名单服务：
  * <ul>
  *   <li>Redis 可用时：黑名单存储于 Redis（key = jti，TTL = Token 剩余有效期），
- *       支持注销/改密后跨实例即时失效；</li>
+ *       让注销操作在多个实例间立即生效；改密后的旧会话另由凭据版本校验拒绝；</li>
  *   <li>Redis 不可用时：自动降级为本地 Caffeine 缓存（单实例内生效）。</li>
  * </ul>
  */
@@ -25,7 +25,7 @@ public class TokenBlacklistService {
 
     private static final String REDIS_KEY_PREFIX = "eh:jwt:blacklist:";
 
-    /** 本地降级缓存：过期时间跟随 Token 剩余有效期 */
+    /** 共享存储不可用时的本地黑名单；缓存按容量淘汰，令牌自身仍会校验有效期。 */
     private final Cache<String, Boolean> fallbackCache = Caffeine.newBuilder()
             .maximumSize(100_000)
             .build();

@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * EHentai 网络配置类，绑定 application.yaml 中 eh-config 前缀的属性
+ * 集中读取源站、代理、群晖、Komga 和下载配置，供不同服务使用同一份连接设置。
  */
 @Data
 @Component
@@ -31,6 +31,7 @@ public class EhNetworkConfig {
     /** 多账号 Cookie 轮转池：配置后按请求轮询分散单账号频率，Cookie 失效自动切换 */
     private List<Cookies> cookiePool = new ArrayList<>();
 
+    /** 保存一个源站账号的 Cookie 字段，供请求认证与账号轮换使用。 */
     @Data
     public static class Cookies {
         private String memberId;
@@ -39,14 +40,16 @@ public class EhNetworkConfig {
         private String star;
 
         /**
-         * 方便直接获取拼装好的 Cookie 字符串用于 OkHttp 请求
+         * 按源站要求拼接当前账号的 Cookie 请求头。
          */
         public String getFullCookieString() {
             return String.format("ipb_member_id=%s; ipb_pass_hash=%s; sk=%s; star=%s;",
                     memberId, passHash, sk, star);
         }
 
-        /** 账号是否完整配置（四个字段全部非空才可参与轮转） */
+        /**
+         * 检查该账号或代理是否具备参与请求所需的基本配置。
+         */
         public boolean isConfigured() {
             return memberId != null && !memberId.isBlank()
                     && passHash != null && !passHash.isBlank()
@@ -55,6 +58,7 @@ public class EhNetworkConfig {
         }
     }
 
+    /** 保存单个代理的类型、地址和认证信息，供网络客户端建立连接。 */
     @Data
     public static class Proxy {
         private String host;
@@ -64,12 +68,15 @@ public class EhNetworkConfig {
         private String type;
 
         /**
-         * 方便获取代理完整 URL
+         * 把代理类型、地址和认证信息拼成代理连接地址，供网络客户端使用。
          */
         public String getProxyUrl() {
             return String.format("%s://%s:%s@%s:%d", type, username, password, host, port);
         }
 
+        /**
+         * 检查该账号或代理是否具备参与请求所需的基本配置。
+         */
         public boolean isConfigured() {
             return host != null && !host.isBlank() && port != null;
         }
@@ -122,7 +129,7 @@ public class EhNetworkConfig {
     @Data
     public static class Komga {
         private String url;
-        /** Browser-reachable URL; falls back to url when blank. Never contains API credentials. */
+        /** 浏览器跳转使用的地址；留空时使用服务端地址，不在地址中附带 API 密钥。 */
         private String publicUrl;
         private String libraryId;
         private String apiKey;
@@ -156,12 +163,12 @@ public class EhNetworkConfig {
     }
 
     /**
-     * Container/local filesystem access to the Komga library root. When configured and
-     * accessible it is preferred over SMB/SFTP, which remain compatibility fallbacks.
+     * 配置当前进程可直接访问的 Komga 图库根目录。
+     * 挂载可用时优先直接读写文件，否则原有归档流程可继续使用 SMB 或 SFTP。
      */
     @Data
     public static class ArchiveStorage {
-        /** Absolute path inside the running process/container, e.g. /data/komga-library. */
+        /** 当前进程或容器内部的图库绝对路径，例如 /data/komga-library。 */
         private String mountPath;
     }
 

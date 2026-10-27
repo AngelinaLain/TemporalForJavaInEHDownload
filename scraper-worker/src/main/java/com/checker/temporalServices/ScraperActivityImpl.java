@@ -44,7 +44,8 @@ import java.util.regex.Pattern;
 import java.io.ByteArrayInputStream;
 
 /**
- * 爬虫 Activity 实现：负责 EHentai 画廊列表抓取与下载链接提取
+ * 执行画廊检索、元数据补全、少量预览指纹采样及归档下载地址提取。
+ * 分页时向任务引擎汇报进度，并设置请求间隔和翻页上限，避免异常页面触发持续抓取。
  */
 @Slf4j
 @Component
@@ -59,11 +60,12 @@ public class ScraperActivityImpl implements ScraperActivity {
     private static final Pattern GALLERY_REFERENCE_PATTERN = Pattern.compile(
             "(?i)(?:https?://(?:e-hentai|exhentai)\\.org/)?(?:g/)?(\\d+)[/:]([a-z0-9]+)(?:/.*)?");
     private static final int DELAY_MS = 3000;
-    private static final int MAX_SAFE_PAGES = 100; // 防止网站结构突变导致无限死循环的安全阈值
-    private static final int METADATA_BATCH_SIZE = 25; // EH gdata 单次请求上限
+    private static final int MAX_SAFE_PAGES = 100; // 页面结构变化或游标异常时，最多抓取到此页数。
+    private static final int METADATA_BATCH_SIZE = 25; // 每批元数据查询不超过源站接口允许的条数。
     private static final int VISUAL_SAMPLE_COUNT = 16;
     private static final long MAX_PREVIEW_BYTES = 10L * 1024 * 1024;
 
+    /** 为每个画廊均匀采样少量预览图生成指纹，单个画廊失败不会阻断其他画廊。 */
     @Override
     public Map<Long, List<GalleryPageFingerprint>> analyzeGalleryPreviews(List<EhGalleriesEntity> galleries) {
         Map<Long, List<GalleryPageFingerprint>> result = new LinkedHashMap<>();
@@ -107,6 +109,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         return result;
     }
 
+    /** 在图片列表首尾之间均匀取样，避免只比较封面附近的页面。 */
     private List<Element> sampleElements(Elements images, int limit) {
         if (images == null || images.isEmpty()) return List.of();
         if (images.size() <= limit) return new ArrayList<>(images);
@@ -118,15 +121,16 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     @Override
+    /** 持续抓取检索页并汇总记录，停止后补齐作品识别需要的元数据。 */
     public List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions) {
         List<EhGalleriesEntity> allResults = new ArrayList<>();
         String currentUrl = buildInitialSearchUrl(searchOptions);
         int pageNo = 1;
         String lastNextCursor = currentUrl;
 
-        // 调度器：负责分页流转、心跳与节流
+        // 每次循环只处理一页，记录心跳后再判断是否继续，防止长任务被误判超时。
         while (StrUtil.isNotBlank(currentUrl) && pageNo <= MAX_SAFE_PAGES) {
-            // 向 Temporal Server 汇报心跳，防止长耗时 Activity 被误判超时
+            // 汇报当前页码，任务引擎可据此判断抓取仍在进行。
             Activity.getExecutionContext().heartbeat(pageNo);
             log.info("正在抓取第 {} 页: {}", pageNo, currentUrl);
 
@@ -134,7 +138,7 @@ public class ScraperActivityImpl implements ScraperActivity {
             PageScrapeResult pageResult = scrapeSinglePage(currentUrl, searchOptions, pageNo);
             allResults.addAll(pageResult.getGalleries());
 
-            // 终止条件判断
+            // 无结果或没有下一页时停止，并给本次记录保留停止原因。
             if (!pageResult.isHasData() || !pageResult.isHasNextPage()) {
                 String stopReason = !pageResult.isHasData() ? "no_data_on_page" : "end_of_pages";
                 log.info("停止翻页，原因: {}", stopReason);
@@ -147,17 +151,17 @@ public class ScraperActivityImpl implements ScraperActivity {
             lastNextCursor = currentUrl;
             pageNo++;
 
-            // 礼貌抓取：翻页间歇延迟
+            // 翻页之间留出间隔，减少连续请求给源站带来的压力。
             ThreadUtil.sleep(DELAY_MS);
         }
 
-        // 安全保护触发的日志
+        // 达到上限也保留明确停止原因，便于排查分页结构或筛选范围。
         if (pageNo > MAX_SAFE_PAGES) {
             log.warn("达到最大安全翻页限制 {}，停止抓取，防止死循环。", MAX_SAFE_PAGES);
             allResults.forEach(r -> r.setTraceStopReason("max_safe_pages_reached"));
         }
 
-        // 统一设置最后一次的游标
+        // 保存最后一次下一页地址，方便追踪任务停在何处。
         String finalCursor = lastNextCursor;
         allResults.forEach(r -> r.setTraceLastNextCursor(finalCursor));
 
@@ -167,8 +171,8 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     /**
-     * 一页一页地返回结果，确保任何一次 Activity 完成响应都远小于 Temporal 的 4 MiB 限制。
-     * 完整列表聚合由 Workflow 负责，以保留后续批量去重和入库行为。
+     * 每次只返回一页结果，避免一次把全部画廊放入任务响应而超过载荷大小限制。
+     * 后续翻页、汇总和入库由工作流安排，本方法同时补齐当前页的元数据。
      */
     @Override
     public GalleryScrapePage scrapeGalleryPage(SearchOptions searchOptions, String currentUrl, int pageNo) {
@@ -196,6 +200,7 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     @Override
+    /** 从完整链接或 GID/token 输入构造记录，补齐元数据后丢弃仍无法识别标题的项。 */
     public List<EhGalleriesEntity> scrapeGalleriesByUrls(List<String> galleryUrls) {
         List<EhGalleriesEntity> galleries = new ArrayList<>();
         if (galleryUrls == null) return galleries;
@@ -225,8 +230,8 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     /**
-     * 在下载排队前通过 EH gdata 补全作品识别需要的元数据。
-     * 元数据查询失败不会阻断普通抓取，只会跳过本次作品级去重。
+     * 按源站接口的单批上限补齐标题、标签、页数和评分，再生成作品识别信息。
+     * 某批查询失败时保留普通抓取结果，不让元数据暂不可用阻断整个采集任务。
      */
     private void enrichGalleryMetadata(List<EhGalleriesEntity> galleries) {
         List<EhGalleriesEntity> candidates = galleries.stream()
@@ -285,6 +290,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         log.info("作品级去重元数据补全完成：{}/{} 条具备可靠作品指纹", identified, galleries.size());
     }
 
+    /** 读取可选整数；源站缺值或格式异常时保留为空，避免误当成有效的零。 */
     private Integer parseInteger(String value) {
         if (StrUtil.isBlank(value)) {
             return null;
@@ -296,6 +302,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         }
     }
 
+    /** 读取可选小数；无法解析时保留为空，供后续判断信息是否缺失。 */
     private Double parseDouble(String value) {
         if (StrUtil.isBlank(value)) {
             return null;
@@ -307,7 +314,7 @@ public class ScraperActivityImpl implements ScraperActivity {
         }
     }
     /**
-     * 提取出的 URL 拼接逻辑
+     * 将关键词、语言、分类及高级筛选拼成源站可接受的初始检索地址。
      */
     private String buildInitialSearchUrl(SearchOptions searchOptions) {
         String searchParam = URLUtil.encodeAll(searchOptions.getKeyword());
@@ -349,7 +356,7 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     /**
-     * 提取出的单页抓取与解析逻辑
+     * 解析一页中的画廊标题、链接和身份信息，并提取不同于当前页的下一页地址。
      */
     private PageScrapeResult scrapeSinglePage(String url, SearchOptions searchOptions, int pageNo) {
         PageScrapeResult result = new PageScrapeResult();
@@ -395,21 +402,22 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     @Override
+    /** 先读取归档页面估算大小，再提交下载表单，解析跳转地址并补齐启动参数。 */
     public ArchiveDownloadInfo extractDownloadUrl(Long gid, String token) {
         String archiveUrl = String.format("%s?gid=%d&token=%s", Constants.EHENTAI_ARCHIVER_URL, gid, token);
         ArchiveDownloadInfo info = new ArchiveDownloadInfo();
 
-        // 心跳上报：直链提取涉及两次串行 HTTP 调用 + 多次正则解析，耗时可能超过心跳超时阈值
+        // 两次串行网络请求之间汇报阶段进度，让任务引擎知道当前仍在提取下载地址。
         Activity.getExecutionContext().heartbeat("正在获取归档页面元数据: " + gid);
 
-        // 1. 🌟 先发起 GET 请求，获取归档页面元数据（包含文件大小）
+        // 第一步读取归档准备页，优先从原始归档下载区域取得文件大小。
         log.info("正在获取归档页面元数据: {}", archiveUrl);
         String prepareHtml = ehNetworkClient.getHtml(archiveUrl);
         Document doc = Jsoup.parse(prepareHtml);
 
         double finalSizeMb = 0.0;
 
-        // 【模式一】：尝试从 H@H Downloader 区域获取
+        // 优先读取明确的原始归档区域，减少误取其他页面数字的机会。
         Element orgTd = doc.selectFirst("td:has(a[onclick*=do_hathdl('org')])");
         if (orgTd != null) {
             String tdText = orgTd.text();
@@ -421,7 +429,7 @@ public class ScraperActivityImpl implements ScraperActivity {
             }
         }
 
-        // 【模式二】：如果模式一失败（大小仍为 0.0），安全回退到之前的全文匹配模式
+        // 指定区域没有大小时，改在整页查找预计大小文字。
         if (finalSizeMb <= 0.0) {
             log.info("⚠️ H@H 区域未能获取到大小，回退到全文匹配模式...");
 
@@ -433,7 +441,7 @@ public class ScraperActivityImpl implements ScraperActivity {
                 finalSizeMb = parseSizeToMb(fallbackMatcher.group(2), fallbackMatcher.group(3));
                 log.info("📊 从全文回退模式解析到大小: {} MB", finalSizeMb);
             } else {
-                // 【模式三兜底】：直接清洗掉所有 HTML 标签后当纯文本暴力匹配
+                // 页面标签干扰匹配时，最后改为读取去掉标签的纯文本。
                 String cleanText = doc.text();
                 Matcher pureTextMatcher = Pattern.compile("Estimated Size:\\s*([\\d.]+)\\s*(MB|GB|KB|MiB|GiB)", Pattern.CASE_INSENSITIVE).matcher(cleanText);
                 if (pureTextMatcher.find()) {
@@ -449,7 +457,7 @@ public class ScraperActivityImpl implements ScraperActivity {
 
         Activity.getExecutionContext().heartbeat("正在提交下载表单获取直链: " + gid);
 
-        // 2. 🌟 发起 POST 请求，模拟点击下载获取真实直链
+        // 第二步提交原始归档下载表单，取得最终的下载跳转地址。
         Map<String, Object> form = new HashMap<>();
         form.put("dlcheck", "Download Original Archive");
         form.put("dltype", "org");
@@ -457,9 +465,9 @@ public class ScraperActivityImpl implements ScraperActivity {
         String postHtml = ehNetworkClient.postForm(archiveUrl, form);
         Document postDoc = Jsoup.parse(postHtml);
 
-        // JS redirect 只能用正则
+        // 优先解析脚本中的页面跳转；没有脚本跳转时再检查普通下载链接。
         String jsRedirect = ReUtil.getGroup1("document\\.location\\s*=\\s*['\"](https?://[^'\"]+)['\"]", postHtml);
-        // HTML 链接用 Jsoup
+        // 直接解析下载按钮链接，兼容没有脚本跳转的页面。
         Element clickEl = postDoc.selectFirst("a:contains(Click Here To Start Downloading)");
         String clickLink = clickEl != null ? clickEl.attr("href") : null;
 
@@ -483,7 +491,7 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     /**
-     * 辅助方法：统一将不同单位的容量文本转换为 MB 浮点数
+     * 将页面上不同单位的文件大小统一换算为 MB。
      */
     private double parseSizeToMb(String valueStr, String unitStr) {
         double size = Double.parseDouble(valueStr);
@@ -497,7 +505,7 @@ public class ScraperActivityImpl implements ScraperActivity {
     }
 
     /**
-     * 内部 DTO：用于在单页解析方法与主调度器之间传递解析状态
+     * 保存单页解析结果，包括画廊记录、是否有数据以及下一页地址。
      */
     @Data
     private static class PageScrapeResult {

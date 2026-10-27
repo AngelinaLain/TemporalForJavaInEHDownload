@@ -13,9 +13,15 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ThreadPoolExecutor;
 
+/**
+ * 统一配置本地缓存和后台线程池，让维护任务与图像计算分别使用有容量限制的执行资源。
+ */
 @Configuration
 @EnableCaching
 public class CacheConfig {
+    /**
+     * 创建通用本地缓存，限制保存条数并设置过期时间，避免缓存随请求不断增长。
+     */
     @Bean
     public CacheManager cacheManager() {
         CaffeineCacheManager cacheManager = new CaffeineCacheManager();
@@ -27,9 +33,8 @@ public class CacheConfig {
     }
 
     /**
-     * Bounded executor for user-triggered maintenance jobs.
-     * Keeps long-running I/O away from the common ForkJoinPool and rejects work
-     * once the queue is full instead of creating unbounded concurrent work.
+     * 创建用户触发的维护任务线程池，把耗时网络与存储操作放到后台执行。
+     * 线程和等待队列都有上限，队列满后拒绝新任务，避免同时启动过多维护工作。
      */
     @Bean(name = "backgroundTaskExecutor")
     public TaskExecutor backgroundTaskExecutor() {
@@ -45,9 +50,8 @@ public class CacheConfig {
     }
 
     /**
-     * CPU-bound pool used to decode sampled pages and calculate perceptual hashes in parallel.
-     * It is intentionally separate from maintenance jobs so a large refresh cannot starve
-     * notifications or other background work. Zero selects a conservative CPU-based default.
+     * 创建抽样页解码和感知哈希计算专用线程池，避免大批图片计算挤占邮件等维护任务。
+     * 未指定并发数时按处理器数量选取保守值；队列满后由提交线程执行，让提交速度随处理能力降低。
      */
     @Bean(name = "visualFingerprintExecutor")
     public TaskExecutor visualFingerprintExecutor(

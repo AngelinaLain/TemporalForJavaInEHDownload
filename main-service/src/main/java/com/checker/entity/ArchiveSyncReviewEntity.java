@@ -11,6 +11,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 保存数据库画廊与群晖归档之间的待核对关系，包括候选文件和封面对比结果。
+ */
 @Data
 @TableName(value = "eh_archive_sync_reviews", autoResultMap = true)
 public class ArchiveSyncReviewEntity {

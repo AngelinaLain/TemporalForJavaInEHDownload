@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Date;
 
+/** 创建和跟踪两本画廊的视觉复核任务，把已确认的配置固定到任务并交给工作流执行。 */
 @Service
 public class AiVisualReviewJobService {
     private final AiVisualReviewJobMapper jobMapper;
@@ -41,6 +42,7 @@ public class AiVisualReviewJobService {
         this.workflowClient = workflowClient;
     }
 
+    /** 检查两个画廊及模型配置，再保存本次复核所用的配置快照。 */
     @Transactional
     public AiVisualReviewJobEntity create(long firstGid, long secondGid) {
         if (firstGid <= 0 || secondGid <= 0 || firstGid == secondGid) {
@@ -82,7 +84,7 @@ public class AiVisualReviewJobService {
         return job;
     }
 
-    /** Reuse an unfinished pair review so refreshing an audit case never sends duplicate requests. */
+    /** 优先复用同一对画廊尚未完成的任务，避免反复刷新审核页面时重复请求模型。 */
     @Transactional
     public AiVisualReviewJobEntity createOrReuse(long firstGid, long secondGid) {
         long left = Math.min(firstGid, secondGid);
@@ -94,6 +96,7 @@ public class AiVisualReviewJobService {
         return active == null ? create(left, right) : active;
     }
 
+    /** 建立或复用复核任务后启动工作流，启动失败时记录失败状态。 */
     public AiVisualReviewJobEntity launch(long leftGid, long rightGid) {
         AiVisualReviewJobEntity job = createOrReuse(leftGid, rightGid);
         if (job.getWorkflowId() != null && !job.getWorkflowId().isBlank()) return job;
@@ -110,12 +113,14 @@ public class AiVisualReviewJobService {
             throw exception;
         }
     }
+    /** 保存任务对应的工作流标识，便于查询和跟踪执行过程。 */
     public void attachWorkflow(String jobId, String workflowId) {
         AiVisualReviewJobEntity job = require(jobId);
         job.setWorkflowId(workflowId);
         jobMapper.updateById(job);
     }
 
+    /** 把启动失败原因写回任务，避免任务一直停在等待状态。 */
     public void markLaunchFailed(String jobId, Throwable failure) {
         AiVisualReviewJobEntity job = require(jobId);
         job.setStatus("FAILED");
@@ -126,12 +131,14 @@ public class AiVisualReviewJobService {
         jobMapper.updateById(job);
     }
 
+    /** 读取指定复核任务，不存在时返回业务错误。 */
     public AiVisualReviewJobEntity require(String jobId) {
         AiVisualReviewJobEntity job = jobMapper.selectById(jobId);
         if (job == null) throw new IllegalArgumentException("视觉复核任务不存在");
         return job;
     }
 
+    /** 组合任务状态与复核结果，供界面统一展示。 */
     public Map<String, Object> view(String jobId) {
         AiVisualReviewJobEntity job = require(jobId);
         AiVisualReviewResultEntity result = resultMapper.selectOne(

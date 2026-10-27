@@ -42,28 +42,33 @@ public class SynologyArchiveReader {
         this.mountedStorage = mountedStorage;
     }
 
+    /** 从挂载目录或群晖共享读取指定归档，并在任务结束后释放连接。 */
     public <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
         return read("", filename, function);
     }
 
+    /** 从挂载目录或群晖共享读取指定归档，并在任务结束后释放连接。 */
     public <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception {
         try (ArchiveSession session = openSession()) {
             return session.read(relativeDirectory, filename, function);
         }
     }
 
+    /** 列出目录中的归档名称，优先使用挂载目录，其次尝试共享协议。 */
     public List<String> listArchives() throws Exception {
         try (ArchiveSession session = openSession()) {
             return session.listArchives();
         }
     }
 
+    /** 根据数据库文件名和真实 GID，解析可供系列同步使用的唯一归档。 */
     public Optional<String> resolveArchive(String directory, String filename, Long gid) throws Exception {
         try (ArchiveSession session = openSession()) {
             return selectSeriesArchive(filename, gid, session.listArchives(directory));
         }
     }
 
+    /** 检查确切文件名是否存在，用于需要精确确认目标的流程。 */
     public boolean existsExact(String directory, String filename) throws Exception {
         try (ArchiveSession session = openSession()) {
             return session.listArchives(directory).contains(filename);
@@ -77,16 +82,19 @@ public class SynologyArchiveReader {
         }
     }
 
+    /** 通过可用的存储方式改名，不重新下载归档。 */
     public void rename(String sourceFilename, String targetFilename) throws Exception {
         try (ArchiveSession session = openSession()) {
             session.rename(sourceFilename, targetFilename);
         }
     }
 
+    /** 按指定目录和文件名删除归档，必要时兼容同 GID 历史名称。 */
     public void delete(String filename) throws Exception {
         delete("", filename);
     }
 
+    /** 按指定目录和文件名删除归档，必要时兼容同 GID 历史名称。 */
     public void delete(String relativeDirectory, String filename) throws Exception {
         try (ArchiveSession session = openSession()) {
             session.delete(relativeDirectory, filename);
@@ -101,6 +109,7 @@ public class SynologyArchiveReader {
         return new ReusableArchiveSession();
     }
 
+    /** 在一批归档操作中复用 SMB/SFTP 连接，网络故障后按协议重建连接。 */
     private final class ReusableArchiveSession implements ArchiveSession {
         private SMBClient smbClient;
         private Connection smbConnection;
@@ -109,6 +118,7 @@ public class SynologyArchiveReader {
         private com.jcraft.jsch.Session sshSession;
         private ChannelSftp sftp;
 
+        /** 从挂载目录或群晖共享读取指定归档，并在任务结束后释放连接。 */
         @Override
         public <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
@@ -154,6 +164,7 @@ public class SynologyArchiveReader {
             throw new IOException(message.toString(), cause);
         }
 
+        /** 复用 SMB 连接打开归档，精确文件缺失时只查对应 GID 的候选。 */
         private <T> T readViaSmb(String relativeDirectory, String filename, EhNetworkConfig.Smb smb,
                                  ArchiveInputFunction<T> function) throws Exception {
             ensureSmbConnected(smb);
@@ -191,6 +202,7 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 按需建立并复用 SMB 连接，避免每本归档重新握手。 */
         private void ensureSmbConnected(EhNetworkConfig.Smb smb) throws Exception {
             if (smbShare != null && smbShare.isConnected()) return;
             closeSmb();
@@ -204,6 +216,7 @@ public class SynologyArchiveReader {
             smbShare = (DiskShare) smbSession.connectShare(smb.getShare());
         }
 
+        /** 通过 SFTP 打开归档，连接失败按既定次数重试。 */
         private <T> T readViaSftp(String relativeDirectory, String filename,
                                   ArchiveInputFunction<T> function) throws Exception {
             ensureSftpConnected();
@@ -233,6 +246,7 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 区分归档处理异常与连接异常，避免把坏归档当成网络错误反复重试。 */
         private <T> T applyArchiveFunction(InputStream input, ArchiveInputFunction<T> function)
                 throws ArchiveProcessingException {
             try {
@@ -242,11 +256,13 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 列出目录中的归档名称，优先使用挂载目录，其次尝试共享协议。 */
         @Override
         public List<String> listArchives() throws Exception {
             return listArchives("");
         }
 
+        /** 列出目录中的归档名称，优先使用挂载目录，其次尝试共享协议。 */
         @Override
         public List<String> listArchives(String relativeDirectory) throws Exception {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
@@ -291,6 +307,7 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 通过可用的存储方式改名，不重新下载归档。 */
         @Override
         public void rename(String sourceFilename, String targetFilename) throws Exception {
             validateFilename(sourceFilename);
@@ -328,6 +345,7 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 按指定目录和文件名删除归档，必要时兼容同 GID 历史名称。 */
         @Override
         public void delete(String relativeDirectory, String filename) throws Exception {
             delete(relativeDirectory, filename, false);
@@ -338,6 +356,7 @@ public class SynologyArchiveReader {
             delete(relativeDirectory, filename, true);
         }
 
+        /** 按指定目录和文件名删除归档，必要时兼容同 GID 历史名称。 */
         private void delete(String relativeDirectory, String filename, boolean exact) throws Exception {
             String safeDirectory = validateRelativeDirectory(relativeDirectory);
             validateFilename(filename);
@@ -418,6 +437,7 @@ public class SynologyArchiveReader {
             }
         }
 
+        /** 按需建立并复用 SFTP 连接，统一设置连接超时。 */
         private void ensureSftpConnected() throws Exception {
             if (sftp != null && sftp.isConnected() && sshSession != null && sshSession.isConnected()) return;
             closeSftp();
@@ -480,7 +500,7 @@ public class SynologyArchiveReader {
         try {
             closeable.close();
         } catch (Exception ignored) {
-            // The original read/connect error is more useful than a cleanup failure.
+                // 保留原始读取或连接错误，关闭连接时的次要异常不应遮住真正原因。
         }
     }
 
@@ -513,6 +533,7 @@ public class SynologyArchiveReader {
         return directory == null || directory.isBlank() ? filename : directory.replace('\\', '/') + "/" + filename;
     }
 
+    /** 拒绝绝对路径、目录穿越和非法分段，确保操作留在配置的归档范围。 */
     private static String validateRelativeDirectory(String value) {
         if (value == null || value.isBlank()) return "";
         String normalized = value.replace('\\', '/');
@@ -536,13 +557,13 @@ public class SynologyArchiveReader {
                 .findFirst();
     }
 
-    /** Series sync knows the real GID even when legacy database filenames contain no prefix. */
+    /** 系列同步已知真实 GID，即使旧数据库文件名没有前缀，也可据此定位唯一归档。 */
     static Optional<String> selectSeriesArchive(String filename, Long gid, List<String> names) throws IOException {
         if (gid == null) throw new IllegalArgumentException("画廊 GID 为空");
         List<String> candidates = names.stream().filter(SynologyArchiveReader::isSupportedArchive)
                 .filter(name -> {
                     Matcher prefix = GID_PREFIX.matcher(name);
-                    // An explicit different GID must never be accepted by title.
+                    // 文件已明确属于其他 GID 时，不能因为标题相同就接受它。
                     if (prefix.find()) return prefix.group(1).equals(gid.toString());
                     return name.equals(filename) || (!isSupportedArchive(filename)
                             && (name.equals(filename + ".cbz") || name.equals(filename + ".zip")));
@@ -553,7 +574,7 @@ public class SynologyArchiveReader {
         return candidates.stream().findFirst();
     }
 
-    /** True when both supported archive names identify the same stable EH GID. */
+    /** 判断两个受支持的归档文件名是否指向同一个稳定 GID，用于识别历史改名副本。 */
     public static boolean isArchiveForSameGid(String requestedFilename, String candidateFilename) {
         if (requestedFilename == null || candidateFilename == null || !isSupportedArchive(candidateFilename)) {
             return false;
@@ -601,13 +622,16 @@ public class SynologyArchiveReader {
     }
 
     @FunctionalInterface
+    /** 让调用方在归档输入流有效期间处理内容，读取器负责关闭流和底层连接。 */
     public interface ArchiveInputFunction<T> {
         T apply(InputStream input) throws Exception;
     }
 
+    /** 定义一次可复用的归档访问会话，批量任务结束后统一关闭连接。 */
     public interface ArchiveSession extends AutoCloseable {
         <T> T read(String relativeDirectory, String filename, ArchiveInputFunction<T> function) throws Exception;
 
+        /** 从挂载目录或群晖共享读取指定归档，并在任务结束后释放连接。 */
         default <T> T read(String filename, ArchiveInputFunction<T> function) throws Exception {
             return read("", filename, function);
         }
@@ -622,6 +646,7 @@ public class SynologyArchiveReader {
 
         void delete(String relativeDirectory, String filename) throws Exception;
 
+        /** 按指定目录和文件名删除归档，必要时兼容同 GID 历史名称。 */
         default void delete(String filename) throws Exception {
             delete("", filename);
         }
@@ -630,6 +655,7 @@ public class SynologyArchiveReader {
         void close();
     }
 
+    /** 标记“文件已经打开，但内容处理失败”，避免这类错误触发无意义的重新连接。 */
     private static final class ArchiveProcessingException extends Exception {
         private final Exception original;
 

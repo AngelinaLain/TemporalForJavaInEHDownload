@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 记录历史视觉指纹刷新中失败的画廊和原因，供后续定向重试。
+ */
 @Data
 @TableName("eh_visual_refresh_failures")
 public class VisualRefreshFailureEntity {

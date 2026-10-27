@@ -20,9 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 重试失败下载工作流实现：查询失败画廊并通过子工作流重新执行下载、入库流程
- * <p>
- * 与主工作流共享同一套子工作流和滑动窗口并发控制机制。
+ * 从失败记录中安排下载或入库补偿子流程，限制同时运行数量，并在结束后汇总最终状态。
  */
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkflow {
@@ -37,7 +35,9 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
     private boolean fatalErrorOccurred = false;
 
     @Override
+    /** 读取失败记录并按并发窗口启动恢复子流程，结束后重新核对首选关系和最终通知。 */
     public void retryFailedTasks() {
+        // 版本标记保留已运行历史的调用顺序，新任务才使用对应的新认领与通知规则。
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);

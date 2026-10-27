@@ -7,6 +7,9 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+/**
+ * 读写疑似重复画廊的审核记录，并为人工确认提供行锁，避免并发覆盖结论。
+ */
 @Mapper
 public interface DedupeReviewMapper extends BaseMapper<DedupeReviewEntity> {
 
@@ -20,6 +23,9 @@ public interface DedupeReviewMapper extends BaseMapper<DedupeReviewEntity> {
             "#{visualRecommendedGid}, #{visualQualityDelta}, #{visualReason}, #{visualAlgorithmVersion}, " +
             "#{recommendedGid}, 'PENDING') " +
             "ON DUPLICATE KEY UPDATE candidate_key = VALUES(candidate_key)")
+    /**
+     * 新增待审核的候选画廊对；同一对已有记录时保留原记录，避免重试覆盖人工结论。
+     */
     int insertPending(@Param("candidateKey") String candidateKey,
                       @Param("leftGid") Long leftGid,
                       @Param("rightGid") Long rightGid,
@@ -35,6 +41,9 @@ public interface DedupeReviewMapper extends BaseMapper<DedupeReviewEntity> {
                       @Param("visualAlgorithmVersion") Integer visualAlgorithmVersion,
                       @Param("recommendedGid") Long recommendedGid);
 
+    /**
+     * 读取并锁住指定审核记录，让同一条人工决策在事务中串行处理。
+     */
     @Select("SELECT * FROM eh_dedupe_reviews WHERE id = #{id} FOR UPDATE")
     DedupeReviewEntity selectByIdForUpdate(@Param("id") Long id);
 }

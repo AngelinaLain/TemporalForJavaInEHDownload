@@ -21,6 +21,9 @@ import org.springframework.web.bind.annotation.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
+/**
+ * 为数据概览、标签图谱和画廊检索提供查询接口，把聚合结果整理为前端使用的格式。
+ */
 @RestController
 @RequestMapping("/api/dashboard")
 @Tag(name = "仪表盘", description = "图库统计、检索、进度与标签信息")
@@ -52,7 +55,7 @@ public class DashboardController {
     }
 
     /**
-     * 总体统计概览
+     * 返回画廊状态及容量等基础汇总，不逐条加载全部画廊。
      */
     @GetMapping("/stats")
     public Result<Map<String, Object>> getStats() {
@@ -68,7 +71,7 @@ public class DashboardController {
     }
 
     /**
-     * 面板分析数据。所有聚合都在数据库中完成，并可按抓取时间和下载状态收窄范围。
+     * 按日期、状态和合集等统一范围获取统计数据，筛选条件不合法时返回明确提示。
      */
     @GetMapping("/analytics")
     public Result<Map<String, Object>> getAnalytics(@ModelAttribute GalleryAnalyticsRequest request) {
@@ -80,8 +83,7 @@ public class DashboardController {
     }
 
     /**
-     * 标签共现图谱。节点仅保留出现频率最高的标签，再计算这些标签在同一画廊中的共现，
-     * 避免对完整标签库执行笛卡尔积。
+     * 返回高频标签关系，或按固定快照分页读取全部标签目录，避免加载时排序变化造成漏项。
      */
     @GetMapping("/tag-network")
     public Result<Map<String, Object>> getTagNetwork(
@@ -98,6 +100,9 @@ public class DashboardController {
         }
     }
 
+    /**
+     * 仅查询选定标签的直接共现关系，并返回真实关联总数和是否截断的标记。
+     */
     @GetMapping("/tag-network/neighbors")
     public Result<Map<String, Object>> getTagNeighbors(
             @RequestParam String tag,
@@ -111,7 +116,7 @@ public class DashboardController {
         }
     }
     /**
-     * 下载状态分布（饼图）
+     * 把数据库聚合的下载状态数量整理为状态分布数据。
      */
     @GetMapping("/status-distribution")
     public Result<List<Map<String, Object>>> getStatusDistribution() {
@@ -134,7 +139,7 @@ public class DashboardController {
     }
 
     /**
-     * 本地下载进度：返回处于「下载中」的画廊及其已下载字节数/预估大小/百分比。
+     * 返回当前下载中的画廊及其下载进度，供概览实时展示。
      */
     @GetMapping("/download-progress")
     public Result<List<Map<String, Object>>> getDownloadProgress() {
@@ -162,7 +167,7 @@ public class DashboardController {
     }
 
     /**
-     * 数据库连接状态：SELECT 1 探活 + 基础统计。
+     * 查询数据库连接及容量等信息，失败时返回可识别的服务状态。
      */
     @GetMapping("/db-status")
     public Result<Map<String, Object>> getDbStatus() {
@@ -186,7 +191,7 @@ public class DashboardController {
     }
 
     /**
-     * 文件大小分布（柱状图）
+     * 返回画廊文件体积的区间分布，用于容量图表。
      */
     @GetMapping("/file-size-distribution")
     public Result<Map<String, Object>> getFileSizeDistribution() {
@@ -207,7 +212,7 @@ public class DashboardController {
         return Result.success(result);
     }
     /**
-     * 抓取时间线（按日统计）
+     * 按抓取时间统计画廊数量，供历史趋势图展示。
      */
     @GetMapping("/crawl-timeline")
     public Result<Map<String, Object>> getCrawlTimeline() {
@@ -234,8 +239,7 @@ public class DashboardController {
     }
 
     /**
-     * 标签命名空间统计（Top 20）。
-     * 使用 MySQL JSON_TABLE 在数据库侧聚合，避免全量加载画廊到内存。
+     * 汇总标签分类数量，供概览查看内容组成。
      */
     @GetMapping("/tag-stats")
     public Result<List<Map<String, Object>>> getTagStats() {
@@ -252,7 +256,7 @@ public class DashboardController {
     }
 
     /**
-     * 画廊列表（分页 + 筛选）
+     * 执行画廊列表的组合检索与分页，只返回当前页需要的轻量字段。
      */
     @GetMapping("/galleries")
     public Result<IPage<Map<String, Object>>> getGalleries(@ModelAttribute GallerySearchRequest request) {
@@ -263,6 +267,9 @@ public class DashboardController {
         }
     }
 
+    /**
+     * 把中文与英文状态写法归一成业务状态，兼容历史数据和不同调用方。
+     */
     private String normalizeStatus(String status) {
         return switch (status) {
             case "PENDING", "未下载" -> "PENDING";
@@ -280,6 +287,9 @@ public class DashboardController {
         };
     }
 
+    /**
+     * 将内部状态转换为对应中文名称，便于与历史存储值匹配。
+     */
     private String statusLabel(String status) {
         return switch (status) {
             case "PENDING" -> "未下载";
@@ -298,7 +308,7 @@ public class DashboardController {
     }
 
     /**
-     * 搜索联想：根据输入返回匹配的标题和标签建议
+     * 为标题或标签输入返回数量受限的检索建议，帮助用户快速选择条件。
      */
     @GetMapping("/suggestions")
     public Result<List<Map<String, String>>> getSuggestions(
@@ -353,7 +363,7 @@ public class DashboardController {
     }
 
     /**
-     * 获取标签翻译映射表（namespace:tag → 中文名）
+     * 返回可供前端批量使用的标签翻译字典。
      */
     @GetMapping("/tag-translations")
     public Result<Map<String, String>> getTagTranslations() {
@@ -361,7 +371,7 @@ public class DashboardController {
     }
 
     /**
-     * 手动刷新 EhTag 翻译缓存
+     * 主动刷新标签翻译数据，让后续查询使用最新字典。
      */
     @PostMapping("/tag-translations/refresh")
     public Result<String> refreshTagTranslations() {
@@ -370,7 +380,7 @@ public class DashboardController {
     }
 
     /**
-     * 获取标签详情（中文名 + 描述）
+     * 查询单个标签的翻译和详细信息，供页面按需展示。
      */
     @GetMapping("/tag-detail")
     public Result<Map<String, String>> getTagDetail(@RequestParam String tag) {

@@ -7,7 +7,9 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 
-/** A compact, versioned perceptual fingerprint for one sampled gallery page. */
+/**
+ * 在服务间传递单张抽样页的感知哈希、画质和算法版本，用于比较画廊是否重复。
+ */
 @Data
 @Builder
 @NoArgsConstructor

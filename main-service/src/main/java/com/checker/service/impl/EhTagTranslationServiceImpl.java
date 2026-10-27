@@ -110,12 +110,14 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         this.aiTagTranslationService = aiTagTranslationServiceProvider.getIfAvailable();
     }
 
+    /** 启动后准备本地翻译表，网络刷新失败时保留可用缓存。 */
     @PostConstruct
     public void init() {
         // 异步加载，不阻塞启动
         scheduleRefresh("启动时加载 EhTag 翻译数据库失败，标签将保持英文显示");
     }
 
+    /** 依次尝试本地词典、共享缓存和可用回退，不让单个缺词阻塞页面。 */
     @Override
     public String translate(String tag) {
         ensureFresh();
@@ -143,6 +145,7 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         return buildFallback(tag);
     }
 
+    /** 合并处理多个标签，批量补齐词典未命中的结果。 */
     @Override
     public Map<String, String> translateBatch(List<String> tags) {
         ensureFresh();
@@ -254,11 +257,13 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         return Map.copyOf(tagMap);
     }
 
+    /** 翻译标签分类名称，未知分类保留原值，确保界面仍能展示。 */
     @Override
     public String translateNamespace(String namespace) {
         return NS_CHINESE.getOrDefault(namespace.toLowerCase(), namespace);
     }
 
+    /** 手动发起词典刷新，沿用异步刷新合并机制。 */
     @Override
     public void refreshCache() {
         try {
@@ -268,6 +273,7 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         }
     }
 
+    /** 从当前描述快照读取标签释义，词典需要刷新时先触发后台检查。 */
     @Override
     public String getDescription(String tag) {
         ensureFresh();
@@ -282,12 +288,14 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         return Map.copyOf(tagDescMap);
     }
 
+    /** 检查词典是否需要更新，先保留当前快照供读取。 */
     private void ensureFresh() {
         if (System.currentTimeMillis() - lastFetchTime.get() > CACHE_TTL_MS) {
             scheduleRefresh("后台刷新翻译数据库失败");
         }
     }
 
+    /** 合并同时发生的刷新请求，避免重复下载整个词典。 */
     private void scheduleRefresh(String failureMessage) {
         if (!refreshScheduled.compareAndSet(false, true)) {
             return;
@@ -308,6 +316,7 @@ public class EhTagTranslationServiceImpl implements EhTagTranslationService {
         }
     }
 
+    /** 依次尝试可用下载地址，完整解析后才替换当前翻译快照。 */
     private synchronized void fetchAndBuild() throws IOException {
         // 双重检查，避免并发重复拉取
         if (System.currentTimeMillis() - lastFetchTime.get() < 60_000) return;

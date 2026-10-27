@@ -78,6 +78,7 @@
 </template>
 
 <script setup>
+// 查看运行中的工作流、执行历史与实时日志，并提供人工终止入口。
 import PageHeading from '../components/PageHeading.vue'
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -127,18 +128,20 @@ const formatTime = (value) => {
          `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+// 读取工作流列表并更新当前运行状态，失败时保留页面等待重试。
 const loadWorkflows = async () => {
   loading.value = true
   try {
     const res = await api.get('/temporal/monitor/workflows')
     roots.value = res.data || []
   } catch {
-    // handled by interceptor
+    // 失败提示由统一接口处理显示，保留当前页面供用户继续操作。
   } finally {
     loading.value = false
   }
 }
 
+// 读取当前筛选条件下的执行历史。
 const loadHistory = async () => {
   try {
     const res = await api.get(`/temporal/monitor/workflows/${logWorkflowId.value}/history`, {
@@ -152,10 +155,11 @@ const loadHistory = async () => {
       }
     }
   } catch {
-    // handled by interceptor
+    // 失败提示由统一接口处理显示，保留当前页面供用户继续操作。
   }
 }
 
+// 打开指定工作流的日志并开始定时更新。
 const openLogs = (row) => {
   logWorkflowId.value = row.workflowId
   logRunId.value = row.runId
@@ -168,6 +172,7 @@ const openLogs = (row) => {
   }
 }
 
+// 关闭日志时清除计时器，避免隐藏对话框继续请求。
 const stopLogPolling = () => {
   if (logPollTimer.value) {
     clearInterval(logPollTimer.value)
@@ -175,6 +180,7 @@ const stopLogPolling = () => {
   }
 }
 
+// 说明人工终止的影响，确认后停止指定工作流并刷新状态。
 const terminate = async (row) => {
   try {
     await ElMessageBox.confirm(
@@ -192,7 +198,7 @@ const terminate = async (row) => {
     ElMessage.success('终止指令已发送')
     loadWorkflows()
   } catch {
-    // handled by interceptor
+    // 失败提示由统一接口处理显示，保留当前页面供用户继续操作。
   }
 }
 

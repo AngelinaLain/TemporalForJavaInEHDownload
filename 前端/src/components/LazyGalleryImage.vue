@@ -7,14 +7,18 @@
 </template>
 
 <script setup>
+// 图片接近可视区域时才请求内容，并在替换或离开页面时取消请求、释放图片地址。
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { Picture } from '@element-plus/icons-vue'
 import { fetchGalleryBlob } from '../utils/galleryMedia'
 const props = defineProps({ src: { type: String, required: true }, alt: { type: String, default: '' } })
 const host = ref(null), objectUrl = ref(''), loading = ref(false), failed = ref(false)
 let observer, controller, visible = false
+// 停止图片请求并释放旧图片地址，供更换图片和卸载时使用。
 function release() { controller?.abort(); if (objectUrl.value) URL.revokeObjectURL(objectUrl.value); objectUrl.value = '' }
+// 浏览器无法解码图片时释放地址，并允许用户手动重试。
 function failImage() { if (objectUrl.value) URL.revokeObjectURL(objectUrl.value); objectUrl.value = ''; failed.value = true }
+// 通过共用队列加载一张图片，并用请求身份检查防止旧响应覆盖新图片。
 async function load() {
   if (loading.value || !props.src) return
   const request = new AbortController()
@@ -27,6 +31,7 @@ async function load() {
 }
 watch(() => props.src, () => { release(); loading.value = false; failed.value = false; if (visible) load() })
 onMounted(() => {
+  // 提前少量距离开始加载，用户滚到图片时更容易看到内容，而不是整页预取。
   observer = new IntersectionObserver(entries => {
     if (entries.some(entry => entry.isIntersecting)) { visible = true; observer.disconnect(); load() }
   }, { rootMargin: '120px' })

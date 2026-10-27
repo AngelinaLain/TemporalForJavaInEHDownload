@@ -17,10 +17,8 @@ import java.util.regex.Pattern;
 import java.util.function.BiPredicate;
 
 /**
- * 基于 EH 元数据对同一作品的不同翻译版本进行保守归组。
- * <p>
- * 不使用中文标题作为唯一依据：只有原始标题，或“标题 + 至少两个核心标签”
- * 足以构成稳定身份时，才生成去重指纹。
+ * 根据标题、作者、原作、角色和页数识别同一作品的不同画廊版本。
+ * 先生成较宽松的候选键缩小比较范围，再用多种信号评分和保守分组，避免把相似作品误合并。
  */
 public final class GalleryDeduplication {
 
@@ -38,6 +36,9 @@ public final class GalleryDeduplication {
     private GalleryDeduplication() {
     }
 
+    /**
+     * 根据现有标题与标签回填作品指纹、候选键和算法版本，信息不足时清除不可靠的识别值。
+     */
     public static void populateIdentity(EhGalleriesEntity gallery) {
         calculateIdentity(gallery).ifPresentOrElse(identity -> {
             gallery.setDedupeKey(identity.key());
@@ -52,10 +53,17 @@ public final class GalleryDeduplication {
         });
     }
 
+    /**
+     * 判断记录是否已有可用于候选召回的作品键，缺少依据的记录不参与自动归组。
+     */
     public static boolean isIdentifiable(EhGalleriesEntity gallery) {
         return gallery != null && gallery.getCandidateKey() != null && !gallery.getCandidateKey().isBlank();
     }
 
+    /**
+     * 优先使用原始标题，再提取稳定的作者等身份标签生成严格作品键。
+     * 另用标题前缀生成候选键，只负责召回可能相同的作品；候选键相同本身不表示可以合并。
+     */
     public static Optional<Identity> calculateIdentity(EhGalleriesEntity gallery) {
         if (gallery == null) {
             return Optional.empty();
@@ -97,7 +105,7 @@ public final class GalleryDeduplication {
     }
 
     /**
-     * 对候选画廊做可解释的多信号评分。只有候选键相同的记录才应调用此方法。
+     * 综合标题、作者、原作、角色及页数计算同作品分数，同时记录每项加减分原因供人工核对。
      */
     public static MatchResult match(EhGalleriesEntity left, EhGalleriesEntity right) {
         if (left == null || right == null) {
@@ -172,20 +180,24 @@ public final class GalleryDeduplication {
         return new MatchResult(bounded, reasons.isEmpty() ? "没有足够的共同信号" : String.join("；", reasons));
     }
 
+    /**
+     * 检查两条画廊的综合分数是否达到自动判定同一作品的阈值。
+     */
     public static boolean isAutomaticMatch(EhGalleriesEntity left, EhGalleriesEntity right) {
         return match(left, right).score() >= AUTO_MATCH_THRESHOLD;
     }
 
     /**
-     * 使用保守的完全连接规则聚类：新成员必须与组内每条记录都达到自动阈值。
-     * 这样可避免 A≈B、B≈C 但 A≉C 时发生链式误合并。
+     * 按稳定顺序把候选画廊分组，新成员必须与组内每条记录都被判为同一作品。
+     * 这种规则避免只因甲像乙、乙像丙，就把实际上不同的甲和丙连带合并；外部判定器可纳入人工结论。
      */
     public static List<List<EhGalleriesEntity>> clusterCandidates(List<EhGalleriesEntity> candidates) {
         return clusterCandidates(candidates, GalleryDeduplication::isAutomaticMatch);
     }
 
     /**
-     * 使用外部判定器聚类，供持久化人工 MATCH/DIFFERENT 结论覆盖自动评分。
+     * 按稳定顺序把候选画廊分组，新成员必须与组内每条记录都被判为同一作品。
+     * 这种规则避免只因甲像乙、乙像丙，就把实际上不同的甲和丙连带合并；外部判定器可纳入人工结论。
      */
     public static List<List<EhGalleriesEntity>> clusterCandidates(
             List<EhGalleriesEntity> candidates,
@@ -213,7 +225,9 @@ public final class GalleryDeduplication {
         return groups;
     }
 
-    /** 评分优先，其次选择页数更多、GID 更新的版本。 */
+    /**
+     * 在同作品候选中优先选择评分更高的版本，再按页数和 GID 决定同分记录的顺序。
+     */
     public static EhGalleriesEntity choosePreferred(List<EhGalleriesEntity> candidates) {
         if (candidates == null || candidates.isEmpty()) {
             throw new IllegalArgumentException("候选画廊不能为空");
@@ -225,6 +239,9 @@ public final class GalleryDeduplication {
         return candidates.stream().max(preference).orElseThrow();
     }
 
+    /**
+     * 统一标签分类和名称的字符形式、大小写与空白，供作品身份计算使用。
+     */
     private static String normalizeTag(String tag) {
         String normalized = Normalizer.normalize(tag, Normalizer.Form.NFKC)
                 .trim()
@@ -236,11 +253,17 @@ public final class GalleryDeduplication {
         return normalized.substring(0, separator) + ":" + normalizeTitle(normalized.substring(separator + 1));
     }
 
+    /**
+     * 优先选择原始标题，缺少时使用显示标题，并做统一清理。
+     */
     private static String effectiveTitle(EhGalleriesEntity gallery) {
         String original = normalizeTitle(gallery.getOriginalTitle());
         return original.isBlank() ? normalizeTitle(gallery.getTitle()) : original;
     }
 
+    /**
+     * 只提取指定分类中的有效标签，供作者、原作等不同信号分别比较。
+     */
     private static Set<String> tagsInNamespaces(EhGalleriesEntity gallery, Set<String> namespaces) {
         if (gallery == null || gallery.getTags() == null) return Set.of();
         Set<String> result = new HashSet<>();
@@ -284,6 +307,9 @@ public final class GalleryDeduplication {
         return union == 0 ? 0D : intersection * 1D / union;
     }
 
+    /**
+     * 把标题的共同字符与长度关系换算为相似分数，供近似标题的加分判断使用。
+     */
     private static double titleSimilarity(String left, String right) {
         if (left == null || right == null || left.isBlank() || right.isBlank()) return 0D;
         if (left.equals(right)) return 1D;
@@ -312,6 +338,9 @@ public final class GalleryDeduplication {
         return value != null && !value.isBlank();
     }
 
+    /**
+     * 统一字符形式、大小写和无关标记，让同一标题的不同展示写法可以比较。
+     */
     private static String normalizeTitle(String title) {
         if (title == null || title.isBlank()) {
             return "";
@@ -323,6 +352,9 @@ public final class GalleryDeduplication {
         return NON_IDENTITY_CHARACTER.matcher(normalized).replaceAll("");
     }
 
+    /**
+     * 把稳定的身份文本压缩成固定长度摘要，便于数据库存储与候选查找。
+     */
     private static String sha256(String value) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));

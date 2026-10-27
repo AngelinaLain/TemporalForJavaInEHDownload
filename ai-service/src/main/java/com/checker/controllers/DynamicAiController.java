@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+/** 接收主服务传来的动态供应商配置，查询模型列表或执行一次模型调用。 */
 @RestController
 @RequestMapping("/api/ai/dynamic")
 public class DynamicAiController {
@@ -20,6 +21,7 @@ public class DynamicAiController {
         this.client = client;
     }
 
+    /** 测试目标模型服务并返回可选模型，连接异常时只返回统一说明。 */
     @PostMapping("/models")
     public ResponseEntity<?> models(@RequestBody DynamicAiRequest request) {
         try {
@@ -32,6 +34,7 @@ public class DynamicAiController {
         }
     }
 
+    /** 调用选定模型，区分参数错误与服务不可用，避免把远端异常详情返回调用方。 */
     @PostMapping("/chat")
     public ResponseEntity<?> chat(@RequestBody DynamicAiRequest request) {
         try {

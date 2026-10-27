@@ -13,11 +13,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/** 按标签汇总 Komga 系列，再创建同名合集或合并已有合集成员。 */
 @Slf4j
 @Service
 public class KomgaCollectionServiceImpl implements KomgaCollectionService {
     @Autowired
     private KomgaApiClient komgaApiClient;
+    /** 根据标签查找系列并去重，再创建合集或与已有合集成员合并。 */
     @Override
     public void processCollectionAssignment(KomgaCollectionRequest request) {
         try {

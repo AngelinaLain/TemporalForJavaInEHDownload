@@ -43,8 +43,8 @@ public class AiSummaryService {
     }
 
     /**
-     * 生成摘要，永不抛异常：
-     * 熔断打开或最终失败时返回本地词典兜底文本；瞬时 503 重新上抛交 Temporal 重试。
+     * 生成摘要；模型暂停调用或一般失败时，使用标题和本地标签组成说明。
+     * 服务暂时不可用的 503 错误继续抛出，让工作流按既定策略重试。
      */
     public String generateSummaryWithFallback(String title, List<String> tags) {
         try {

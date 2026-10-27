@@ -12,7 +12,7 @@ import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-/** Six bounded aggregate queries, cached briefly per filter combination; no gallery entities or media are loaded. */
+/** 用六组有规模限制的聚合查询生成概览；按筛选组合短暂缓存，不加载画廊实体或图片。 */
 @Service
 public class GalleryAnalyticsService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
@@ -22,6 +22,7 @@ public class GalleryAnalyticsService {
 
     public GalleryAnalyticsService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+    /** 规范化筛选组合并复用短期缓存，返回同一范围内的数据概览。 */
     public Map<String, Object> analyze(GalleryAnalyticsRequest request) {
         if (request.getDays() < 0 || request.getDays() > 3650) throw new IllegalArgumentException("时间范围应在 0–3650 天之间");
         String grain = GalleryFilterBuilder.option(request.getGrain(), "day", Set.of("day", "week", "month"), "时间粒度");
@@ -43,6 +44,7 @@ public class GalleryAnalyticsService {
         return cache.get(new Key(filter.where(), filter.args(), from, to, grain), this::compute);
     }
 
+    /** 在数据库侧执行各维度聚合，再拼装可继续钻取的统计结果。 */
     private Map<String, Object> compute(Key key) {
         Map<String, String> counts = new LinkedHashMap<>();
         counts.put("duplicates", "g.duplicate_of_gid IS NOT NULL");
@@ -137,6 +139,7 @@ public class GalleryAnalyticsService {
         return result;
     }
 
+    /** 补齐时间线上没有记录的日期段，使图表不会把空缺日期连错。 */
     private void fillTimeline(Map<String, Object> result, Key key, Map<String, Object> aggregate) {
         LocalDate end = key.to() == null ? today() : key.to();
         LocalDate oldest = aggregate.get("first_date") == null ? end : LocalDate.parse(String.valueOf(aggregate.get("first_date")));

@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/** 管理 AI 供应商、用途配置和提示词版本，保存前检查模型权限并加密供应商密钥。 */
 @Service
 public class AiConfigurationService {
     public static final String VISUAL_REVIEW = "VISUAL_DUPLICATE_REVIEW";
@@ -46,17 +47,20 @@ public class AiConfigurationService {
         this.cipher = cipher;
     }
 
+    /** 返回可展示的供应商配置，不把已加密密钥当作明文返回。 */
     public List<AiProviderView> providers() {
         return providerMapper.selectList(new QueryWrapper<AiProviderConfigEntity>().orderByAsc("name"))
                 .stream().map(AiProviderView::from).toList();
     }
 
+    /** 读取指定供应商，不存在时返回可理解的业务错误。 */
     public AiProviderConfigEntity requireProvider(long id) {
         AiProviderConfigEntity provider = providerMapper.selectById(id);
         if (provider == null) throw new IllegalArgumentException("AI 供应商不存在");
         return provider;
     }
 
+    /** 补齐默认用途后读取用途配置，确保调用方拿到受支持的配置。 */
     public AiUseCaseConfigEntity requireUseCase(String useCase) {
         ensureDefaults();
         AiUseCaseConfigEntity config = useCaseMapper.selectOne(
@@ -65,12 +69,14 @@ public class AiConfigurationService {
         return config;
     }
 
+    /** 按版本读取提示词，缺失时终止当前操作。 */
     public AiPromptVersionEntity requirePrompt(Long id) {
         AiPromptVersionEntity prompt = id == null ? null : promptMapper.selectById(id);
         if (prompt == null) throw new IllegalArgumentException("提示词版本不存在");
         return prompt;
     }
 
+    /** 校验并加密新供应商配置，重名时返回业务错误。 */
     @Transactional
     public AiProviderView create(AiProviderRequest request) {
         AiProviderConfigEntity entity = new AiProviderConfigEntity();
@@ -83,6 +89,7 @@ public class AiConfigurationService {
         return AiProviderView.from(entity);
     }
 
+    /** 更新供应商配置；未提供新密钥时由配置处理逻辑保留旧密钥。 */
     @Transactional
     public AiProviderView update(long id, AiProviderRequest request) {
         AiProviderConfigEntity entity = requireProvider(id);
@@ -95,17 +102,20 @@ public class AiConfigurationService {
         return AiProviderView.from(entity);
     }
 
+    /** 删除指定供应商；记录不存在时给出说明。 */
     @Transactional
     public void delete(long id) {
         if (providerMapper.deleteById(id) == 0) throw new IllegalArgumentException("AI 供应商不存在");
     }
 
+    /** 列出用途配置及其模型、权限和当前提示词版本。 */
     public List<Map<String, Object>> useCases() {
         ensureDefaults();
         return useCaseMapper.selectList(new QueryWrapper<AiUseCaseConfigEntity>().orderByAsc("use_case"))
                 .stream().map(this::view).toList();
     }
 
+    /** 检查模式、阈值和图片发送权限，再保存用途配置及新的提示词版本。 */
     @Transactional
     public Map<String, Object> updateUseCase(String useCase, AiUseCaseRequest request) {
         String normalized = normalizeUseCase(useCase);
@@ -116,6 +126,7 @@ public class AiConfigurationService {
         }
         AiProviderConfigEntity provider = request.providerId() == null ? null : requireProvider(request.providerId());
         boolean wantsImages = Boolean.TRUE.equals(request.allowImageTransmission());
+        // 用途与供应商必须同时允许传图，单独选择视觉模型不代表可以发送本地图片。
         if (wantsImages && !"VISION_LLM".equals(request.analysisMode())) {
             throw new IllegalArgumentException("只有视觉 LLM 模式可以发送图片");
         }
@@ -134,22 +145,26 @@ public class AiConfigurationService {
         config.setHighSimilarity(request.highSimilarity() == null
                 ? new BigDecimal("0.94000") : request.highSimilarity());
         String prompt = blankToNull(request.prompt());
+        // 新提示词另存一个版本，正在运行的任务仍可使用创建时固定的旧版本。
         if (prompt != null) config.setPromptVersionId(createPrompt(normalized, prompt, false).getId());
         useCaseMapper.updateById(config);
         return view(config);
     }
 
+    /** 取得指定用途的内置提示词，用于初始化或恢复。 */
     public String defaultPrompt(String useCase) {
         String prompt = DEFAULT_PROMPTS.get(normalizeUseCase(useCase));
         if (prompt == null) throw new IllegalArgumentException("不支持的 AI 用例");
         return prompt;
     }
 
+    /** 为缺失的 AI 用途建立默认配置，不覆盖用户已经保存的设置。 */
     @Transactional
     public void ensureDefaults() {
         for (String useCase : DEFAULT_PROMPTS.keySet()) findOrCreate(useCase);
     }
 
+    /** 先查现有用途，仅在不存在时建立默认记录。 */
     private AiUseCaseConfigEntity findOrCreate(String useCase) {
         AiUseCaseConfigEntity existing = useCaseMapper.selectOne(
                 new QueryWrapper<AiUseCaseConfigEntity>().eq("use_case", useCase));
@@ -168,6 +183,7 @@ public class AiConfigurationService {
         return config;
     }
 
+    /** 保存独立的提示词版本，使任务可以追溯实际使用的文本。 */
     private AiPromptVersionEntity createPrompt(String useCase, String prompt, boolean isDefault) {
         QueryWrapper<AiPromptVersionEntity> query = new QueryWrapper<>();
         query.eq("use_case", useCase).orderByDesc("version").last("LIMIT 1");
@@ -201,6 +217,7 @@ public class AiConfigurationService {
         return view;
     }
 
+    /** 集中校验供应商地址、并发和权限，并处理密钥保留或加密。 */
     private void applyProvider(AiProviderConfigEntity entity, AiProviderRequest request, boolean updating) {
         validateBaseUrl(request.baseUrl());
         String scope = request.scope().trim().toUpperCase();
@@ -222,6 +239,7 @@ public class AiConfigurationService {
         entity.setEnabled(!Boolean.FALSE.equals(request.enabled()));
     }
 
+    /** 拒绝无效地址和带用户凭据的 URL，避免错误连接或泄露账号信息。 */
     private static void validateBaseUrl(String value) {
         try {
             URI uri = URI.create(value == null ? "" : value.trim());

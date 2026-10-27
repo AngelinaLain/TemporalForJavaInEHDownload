@@ -9,10 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 单个 EH 搜索页的抓取结果。
- *
- * <p>不要把完整搜索结果作为一个 Activity 返回值。Temporal 默认的 gRPC 消息上限为
- * 4 MiB，大搜索会使整个实体列表超过该限制。此 DTO 将跨服务传输限制为一页的数据。</p>
+ * 承载单个搜索页抓到的画廊和下一页地址，让主工作流逐页接收结果。
+ * 每次只返回一页，避免一次传输全部画廊时超过 Temporal 的消息大小限制。
  */
 @Data
 @NoArgsConstructor

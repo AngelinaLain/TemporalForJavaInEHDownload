@@ -1,3 +1,4 @@
+/* 统一发送后端请求、附带登录凭据，并区分业务失败与可选图片加载失败。 */
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import router from '../router'
@@ -15,9 +16,10 @@ api.interceptors.request.use(config => {
   return config
 })
 
+// 处理未登录响应：后台可选媒体保留会话，普通业务请求清除凭据并跳转登录。
 function handleUnauthorized(config) {
-  // A failed optional image must not terminate the user's current page/session.
-  // Protected APIs still validate the token; foreground business requests retain normal re-login behavior.
+  // 单张图片加载失败只影响图片显示，不清除整页的登录状态。
+  // 服务端仍会校验凭据；普通业务请求收到未登录响应时继续要求重新登录。
   if (config?.preserveSession) return
   localStorage.removeItem('token')
   router.push('/login')
@@ -25,7 +27,7 @@ function handleUnauthorized(config) {
 
 api.interceptors.response.use(
   response => {
-    // Authenticated media is loaded as a Blob; do not treat image bytes as a Result envelope.
+    // 图片请求返回二进制内容，直接交给图片组件，不按普通业务响应解析。
     if (response.config.responseType === 'blob' || response.config.responseType === 'arraybuffer') {
       return response
     }

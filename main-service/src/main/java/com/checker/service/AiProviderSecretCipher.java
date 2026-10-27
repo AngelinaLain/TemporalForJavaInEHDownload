@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
 
+/** 使用应用主密钥加解密供应商密钥，让数据库无需保存明文 API Key。 */
 @Component
 public class AiProviderSecretCipher {
     private static final int NONCE_LENGTH = 12;
@@ -22,6 +23,7 @@ public class AiProviderSecretCipher {
         this.masterKey = masterKey == null ? "" : masterKey;
     }
 
+    /** 使用随机加密参数保护供应商密钥，返回可存入数据库的密文。 */
     public String encrypt(String plaintext) {
         if (plaintext == null || plaintext.isBlank()) return null;
         requireMasterKey();
@@ -38,6 +40,7 @@ public class AiProviderSecretCipher {
         }
     }
 
+    /** 校验并解开已保存的密文，供服务端发起模型请求时使用。 */
     public String decrypt(String encrypted) {
         if (encrypted == null || encrypted.isBlank()) return null;
         requireMasterKey();
@@ -56,11 +59,13 @@ public class AiProviderSecretCipher {
         }
     }
 
+    /** 从主密钥派生固定长度的加密密钥。 */
     private SecretKeySpec key() throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(masterKey.getBytes(StandardCharsets.UTF_8));
         return new SecretKeySpec(digest, "AES");
     }
 
+    /** 检查主密钥是否满足要求，缺失时拒绝把密钥以不安全方式保存。 */
     private void requireMasterKey() {
         if (masterKey.length() < 16) {
             throw new IllegalStateException("保存 API Key 前必须配置至少 16 个字符的 AI_CONFIG_MASTER_KEY");

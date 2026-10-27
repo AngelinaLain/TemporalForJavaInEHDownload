@@ -22,20 +22,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Temporal 工作流共享工具类 — 非 Spring Bean，包内可见。
- * 统一配置类
- * <p>
- * 集中管理：
- * <ul>
- *   <li>统一的 ActivityOptions 配置</li>
- *   <li>下载完成后的 Komga 入库前置三步骤（抓取元数据 → 文件重命名 → 触发扫描）</li>
- *   <li>Komga 异步轮询入库任务构建（20 次重试 × 15 秒）</li>
- * </ul>
+ * 集中定义工作流使用的活动队列、超时与重试策略，以及汇总通知和旧历史兼容步骤。
+ * Komga 轮询次数和间隔由调用方传入的运行设置决定，不在工具类中写死。
  */
 class WorkflowSteps {
 
 
-    /** 所有 Activity Stub 共用的超时与重试策略 */
+    /** 普通数据库、通知和图库操作使用的超时与重试策略。 */
     static final ActivityOptions DEFAULT_OPTIONS = ActivityOptions.newBuilder()
             .setStartToCloseTimeout(Duration.ofMinutes(5))
             .setRetryOptions(RetryOptions.newBuilder()
@@ -50,8 +43,8 @@ class WorkflowSteps {
                     ).build()).build();
 
     /**
-     * AI Activity 专用配置：显式指定 EH_TASK_QUEUE（AiActivityImpl 注册在该队列），
-     * 给 LLM 推理留出足够的超时时间，失败最多重试 2 次。
+     * 将 AI 推理派发到专用队列，并为模型响应留出执行时间。
+     * 尝试次数包含首次调用，避免长时间模型故障阻塞整个入库流程。
      */
     static final ActivityOptions AI_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(Constants.AI_TASK_QUEUE)
@@ -64,10 +57,8 @@ class WorkflowSteps {
             .build();
 
     /**
-     * 爬虫 Activity 专用配置：更长超时 + 心跳检测 + 指数退避重试
-     * <p>
-     * 指数退避策略：初始 30s → 60s → 120s → ... → 最大 30min
-     * Cookie 失效、配额超限、IP 封禁等致命错误直接标记为不可重试，交由 Workflow 层通知人工介入。
+     * 抓取操作使用更长超时和心跳检查，临时失败时逐步延长重试间隔。
+     * 登录凭据失效、配额超限或 IP 封禁等问题不自动重试，交给工作流记录并通知处理。
      */
     static final ActivityOptions SCRAPER_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(Constants.SCRAPER_TASK_QUEUE)
@@ -88,8 +79,8 @@ class WorkflowSteps {
             .build();
 
     /**
-     * 群晖长轮询 Activity 专用配置：把下载等待与状态轮询整体下沉到 Activity 内部，
-     * 48 小时 StartToClose + 5 分钟心跳，避免 Workflow 层 sleep 轮询占用事件历史。
+     * 下载等待与状态轮询在一个长时间活动内完成，并通过心跳检查执行状态，
+     * 避免把每次等待都写进工作流历史；具体时间限制以此配置为准。
      */
     static final ActivityOptions SYNO_LONG_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(Constants.TASK_QUEUE)
@@ -109,9 +100,8 @@ class WorkflowSteps {
             .build();
 
     /**
-     * 本地导入 Activity 专用配置：本地下载大文件可能耗时极长，
-     * 48 小时 StartToClose + 5 分钟心跳。下载器内部已处理连接级重试，外层 Workflow.retry
-     * 还会重新提取过期直链，因此 Activity 本身不再叠加重试，避免 3×3 放大为 9 次执行。
+     * 本地大文件导入允许长时间执行，并持续检查心跳。
+     * 下载器内部处理网络重试，外层工作流负责刷新过期直链；本层不再重复叠加尝试次数。
      */
     static final ActivityOptions LOCAL_IMPORT_OPTIONS = ActivityOptions.newBuilder()
             .setTaskQueue(Constants.TASK_QUEUE)
@@ -180,6 +170,7 @@ class WorkflowSteps {
         return content.toString().trim();
     }
 
+    /** 将旧中文状态和枚举名称统一成展示名称，供批量通知统计。 */
     private static String normalizeDownloadStatus(String value) {
         if (value == null) return null;
         for (DownloadStatus status : DownloadStatus.values()) {
@@ -191,14 +182,8 @@ class WorkflowSteps {
     }
 
     /**
-     * 暂时没有用到此函数的地方
-     * -------
-     * 下载完成后的 Komga 入库前置三步骤：
-     * <ol>
-     *   <li>向 EHentai 请求标签数据并写入数据库</li>
-     *   <li>若数据库已存有文件名，则重命名群晖文件</li>
-     *   <li>触发 Komga 库扫描</li>
-     * </ol>
+     * 保留旧流程的下载后处理入口：补标签、重命名文件，再触发图库扫描。
+     * 新流程由独立的 Komga 入库子流程负责确认和记录结果。
      */
     @Deprecated(since = "0.1", forRemoval = false)
     static void postDownloadKomgaProcess(
@@ -215,10 +200,8 @@ class WorkflowSteps {
     }
 
     /**
-     * 暂时没有用到此函数的地方
-     * -------
-     * 构建 Komga 异步轮询入库任务。
-     * 超时后通过 {@code notificationActivity} 发送邮件告警。
+     * 保留旧流程的异步入库等待入口，按传入设置决定轮询次数与间隔。
+     * 旧历史保留单条超时通知，新流程由父工作流统一汇总。
      *
      * @param gallery            目标画廊实体（需要 gid、title）
      * @param timeoutSubject     超时邮件主题

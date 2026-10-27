@@ -80,6 +80,7 @@
 </template>
 
 <script setup>
+// 组合检索画廊、保存可分享的筛选地址，并提供悬停封面、本地图片预览和 Komga 跳转。
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -131,12 +132,16 @@ const activeChips = computed(() => {
   return chips
 })
 
+// 读取最近搜索词，只保留有效字符串和固定条数，损坏数据不影响页面打开。
 function readHistory() { try { const value = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); return Array.isArray(value) ? value.filter(item => typeof item === 'string').slice(0, 8) : [] } catch { return [] } }
+// 将本次关键词放到最近搜索首位并去重，浏览器无法保存时不阻断检索。
 function saveHistory() { const value = draft.keyword.trim(); if (!value) return; recentKeywords.value = [value, ...recentKeywords.value.filter(word => word !== value)].slice(0, 8); try { localStorage.setItem(HISTORY_KEY, JSON.stringify(recentKeywords.value)) } catch {} }
 function clearHistory() { recentKeywords.value = []; try { localStorage.removeItem(HISTORY_KEY) } catch {} }
+// 从地址中的 JSON 解析标签，剔除无效值并限制数量，防止异常地址拖慢页面。
 function parseTags(value) { try { const tags = JSON.parse(typeof value === 'string' ? value : '[]'); return Array.isArray(tags) ? [...new Set(tags.filter(tag => typeof tag === 'string' && tag.trim()).map(tag => tag.trim()))].slice(0, 20) : [] } catch { return [] } }
 function str(value) { return typeof value === 'string' ? value : '' }
 function positive(value, fallback, max) { const number = Number(value); return Number.isInteger(number) && number > 0 ? Math.min(number, max) : fallback }
+// 把页面地址还原为筛选条件，并兼容旧参数和中文状态。
 function fromRoute(query) {
   const f = defaults()
   scalarFields.forEach(key => { f[key] = str(query[key]) })
@@ -151,6 +156,7 @@ function fromRoute(query) {
   f.komga = ['all', 'linked', 'unlinked'].includes(query.komga) ? query.komga : 'all'
   return f
 }
+// 将筛选、排序和页码写入地址，方便刷新、分享及浏览器前进后退。
 function buildRoute(filters, page = pagination.page, size = pagination.size, sortProp = sort.prop, order = sort.order) {
   const query = { page: String(page), size: String(size), sort: sortProp, order }
   scalarFields.forEach(key => { if (filters[key] !== '' && filters[key] != null) query[key] = String(filters[key]).trim() })
@@ -165,7 +171,9 @@ function buildRoute(filters, page = pagination.page, size = pagination.size, sor
   return query
 }
 function sameQuery(a, b) { const keys = new Set([...Object.keys(a), ...Object.keys(b)]); return [...keys].every(key => String(a[key] ?? '') === String(b[key] ?? '')) }
+// 筛选变更统一通过路由触发加载；地址未变时允许显式刷新。
 async function navigate(query, refreshIfSame = false) { hideHover(); if (!sameQuery(route.query, query)) await router.push({ path: '/galleries', query }); else if (refreshIfSame) loadData() }
+// 提交前校验数值和日期上下限，避免无效范围进入查询。
 function validate() {
   for (const [min, max, label] of [['minRating', 'maxRating', '评分'], ['minPages', 'maxPages', '页数'], ['minSizeMb', 'maxSizeMb', '大小']]) {
     if (draft[min] !== '' && draft[max] !== '' && Number(draft[min]) > Number(draft[max])) { ElMessage.warning(label + '下限不能超过上限'); return false }
@@ -176,6 +184,7 @@ function validate() {
 function applyFilters() { if (!validate()) return; saveHistory(); navigate(buildRoute(draft, 1), true) }
 function resetFilters() { Object.assign(draft, defaults()); tagInput.value = ''; excludeInput.value = ''; navigate(buildRoute(draft, 1), true) }
 function useRecent(word) { draft.keyword = word; applyFilters() }
+// 移除一个已生效的筛选项，保留其余已提交条件并从第一页重查。
 function clearChip(key) {
   Object.assign(draft, JSON.parse(JSON.stringify(committed)))
   if (key === 'tags') { draft.tags = []; draft.tag = '' }
@@ -199,8 +208,11 @@ function addTag(value, excluded = false) {
   else { if (tag !== draft.tag) draft.tags = [...new Set([...draft.tags, tag])].slice(0, 20); tagInput.value = '' }
 }
 function removeTag(tag) { if (draft.tag === tag) draft.tag = ''; draft.tags = draft.tags.filter(item => item !== tag) }
+// 点击标签后保留其余已生效条件，替换标签范围并从第一页查询。
 function searchTag(tag) { hideHover(); detailVisible.value = false; Object.assign(draft, JSON.parse(JSON.stringify(committed))); draft.tag = tag; draft.tags = []; navigate(buildRoute(draft, 1), true) }
+// 点击合集后限定到该合集，保留其他查询条件并从第一页显示成员。
 function searchCollection(row) { Object.assign(draft, JSON.parse(JSON.stringify(committed))); draft.collectionId = String(row.collectionId); draft.collectionScope = 'assigned'; navigate(buildRoute(draft, 1), true) }
+// 取消上一页请求，只提交当前路由的轻量查询；迟到的响应不能覆盖新筛选结果。
 async function loadData() {
   hideHover(); listController?.abort()
   const request = new AbortController(); listController = request
@@ -215,6 +227,7 @@ async function loadData() {
   } catch (failure) { if (listController === request && failure.code !== 'ERR_CANCELED') listError.value = tableData.value.length ? '检索失败，当前保留上次成功的结果。' : '检索失败，请调整条件后重试。' }
   finally { if (listController === request) { loading.value = false; firstLoad.value = false } }
 }
+// 按输入框类型分别取消旧建议请求，防止较慢的旧关键词结果回填。
 async function fetchSuggestions(value, callback, type, kind) {
   const text = value?.trim()
   const previous = kind === 'title' ? titleController : kind === 'exclude' ? excludeController : tagController
@@ -239,6 +252,7 @@ function safeUrl(value) { try { const url = new URL(value); return ['http:', 'ht
 function openMedia(row) { hideHover(); mediaGallery.value = row; mediaVisible.value = true }
 function showDetail(row) { hideHover(); detailRow.value = row; detailVisible.value = true }
 async function loadTagDetail(tag) { if (!tagDetails[tag]) tagDetails[tag] = await tagStore.fetchDetail(tag) }
+// 先在点击事件中打开空窗口，再取得安全链接，兼容浏览器的弹窗限制。
 async function openKomga(row) {
   hideHover()
   if (openingKomga.value) return
@@ -253,11 +267,13 @@ async function openKomga(row) {
   } catch { target.close() }
   finally { if (!isDisposed) openingKomga.value = null }
 }
+// 计算悬停卡位置并限制在窗口内，避免靠近屏幕边缘时遮出视野。
 function positionHover(event) {
   const width = Math.min(366, window.innerWidth - 24), height = 236
   hover.left = Math.max(12, Math.min(event.clientX + 20, window.innerWidth - width - 12))
   hover.top = Math.max(12, Math.min(event.clientY + 16, window.innerHeight - height - 12))
 }
+// 同一行停留一秒后才请求一张封面；离开或切换记录会取消旧任务。
 function scheduleHover(row, event) {
   if (event.pointerType === 'touch' || mediaVisible.value || detailVisible.value) return
   hideHover(); hoverCandidate = row.gid; positionHover(event)
@@ -273,6 +289,7 @@ function scheduleHover(row, event) {
     finally { if (hoverController === request) hover.loading = false }
   }, 1000)
 }
+// 清除等待计时和封面请求，防止快速划过列表时继续加载或显示旧封面。
 function hideHover() { clearTimeout(hoverTimer); hoverCandidate = null; hoverController?.abort(); hoverController = null; hover.visible = false; hover.row = null; hover.url = ''; hover.loading = false }
 function closeOnScroll(event) { if (!event.target?.closest?.('.gallery-hover-card')) hideHover() }
 watch(() => route.fullPath, () => {

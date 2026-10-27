@@ -2,6 +2,9 @@ package com.checker.common;
 
 import lombok.Getter;
 
+/**
+ * 统一接口返回的常用业务状态码和中文提示，供成功、校验失败和权限错误等场景复用。
+ */
 @Getter
 public enum ResultCode {
     SUCCESS(200, "操作成功"),

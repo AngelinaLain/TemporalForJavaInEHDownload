@@ -4,6 +4,9 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+/**
+ * 把归档下载地址与预计体积一起传给下载任务，并兼容旧工作流只保存下载地址字符串的历史记录。
+ */
 @Data
 @NoArgsConstructor
 public class ArchiveDownloadInfo {

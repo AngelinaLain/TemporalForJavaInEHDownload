@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.*;
 
+/** 用轻量分页查询画廊列表，统一处理筛选、排序和展示字段，不随列表读取图片。 */
 @Service
 public class GalleryQueryService {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -16,7 +17,7 @@ public class GalleryQueryService {
             "gid", "g.gid", "title", "g.title", "downloadStatus", "g.download_status",
             "fileSizeMb", "g.file_size_mb", "crawledAt", "g.crawled_at",
             "rating", "g.rating", "pageCount", "g.page_count", "updatedAt", "g.updated_at");
-    // Intentionally exclude crawler trace JSON, tokens and persistence-only cleanup journals.
+    // 列表只取展示和筛选所需字段，不读取体积大的抓取记录、源站令牌或归档清理日志。
     private static final String COLUMNS = "g.gid, g.title, g.original_title, g.page_count, g.rating, " +
             "g.dedupe_key, g.duplicate_of_gid, g.dedupe_confidence, g.dedupe_match_score, " +
             "g.dedupe_match_reason, g.dedupe_algorithm_version, g.filename, g.storage_path, " +
@@ -26,6 +27,7 @@ public class GalleryQueryService {
 
     public GalleryQueryService(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
+    /** 按受支持的排序和筛选分页读取轻量记录，避免列表请求加载大字段和图片。 */
     public IPage<Map<String, Object>> search(GallerySearchRequest query) {
         GalleryFilterBuilder.SqlFilter filter = GalleryFilterBuilder.build(query);
         String sort = SORTS.get(query.getSortBy());
@@ -64,6 +66,7 @@ public class GalleryQueryService {
         return result;
     }
 
+    /** 把数据库字段整理为前端记录，并补齐安全的状态与合集展示信息。 */
     private Map<String, Object> toRecord(Map<String, Object> row) {
         Map<String, Object> result = new LinkedHashMap<>();
         row.forEach((key, value) -> result.put(camelCase(key), value));
@@ -75,7 +78,7 @@ public class GalleryQueryService {
         } catch (Exception ignored) { result.put("tags", List.of()); }
         String status = String.valueOf(result.get("downloadStatus"));
         try { result.put("downloadStatus", GalleryFilterBuilder.normalizeStatus(status)); }
-        catch (IllegalArgumentException ignored) { /* Unknown historical states remain visible. */ }
+        catch (IllegalArgumentException ignored) { /* 历史数据中的未知状态仍按原值展示。 */ }
         return result;
     }
 

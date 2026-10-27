@@ -23,7 +23,7 @@ import java.util.concurrent.Semaphore;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-/** Local-library preview: reads archive entries or Komga, never the gallery's origin site. */
+/** 从本地归档或 Komga 提供分页预览、封面和大图；预览过程不访问画廊源站。 */
 @Service
 public class GalleryMediaService {
     private static final Set<Integer> PAGE_SIZES = Set.of(10, 20, 50, 100);
@@ -46,11 +46,12 @@ public class GalleryMediaService {
         this.config = config;
     }
 
+    /** 返回当前页图片索引；只列出图片，不提前读取这一页的所有原图。 */
     public Map<String, Object> page(long gid, int page, int size) {
         return page(gid, page, size, false);
     }
 
-    /** A successful ID update should be visible to previews and Komga links immediately. */
+    /** 清除指定画廊的预览缓存，使更新后的 Komga ID 立即用于图片和跳转链接。 */
     public void invalidate(long gid) {
         EhGalleriesEntity previous;
         try { previous = metadata.getOrLoad(gid, () -> galleries.getPreviewMetadata(gid)); }
@@ -63,6 +64,7 @@ public class GalleryMediaService {
         }
     }
 
+    /** 返回当前页图片索引；只列出图片，不提前读取这一页的所有原图。 */
     public Map<String, Object> page(long gid, int page, int size, boolean refresh) {
         if (page < 1 || !PAGE_SIZES.contains(size)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "分页大小只支持 10、20、50、100");
         return limited(() -> {
@@ -97,6 +99,7 @@ public class GalleryMediaService {
         });
     }
 
+    /** 校验图片页码，并按需要复用缩略图缓存或读取当前原图。 */
     public ImageData image(long gid, int index, boolean thumbnail) {
         if (index < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "页码必须大于 0");
         return limited(() -> {
@@ -109,6 +112,7 @@ public class GalleryMediaService {
         });
     }
 
+    /** 按与预览相同的本地来源读取封面，优先复用已有缩略图缓存。 */
     public ImageData cover(long gid) {
         return limited(() -> {
             EhGalleriesEntity gallery = requireGallery(gid);
@@ -117,13 +121,14 @@ public class GalleryMediaService {
                 if (source.total() < 1) throw new ResponseStatusException(HttpStatus.NOT_FOUND, source.message());
                 if ("KOMGA".equals(source.source())) {
                     try { return asImage(komga.cover(source.location()), true); }
-                    catch (IOException unavailable) { /* Try the first page of the same local book. */ }
+                    catch (IOException unavailable) { /* 封面接口不可用时，改读同一本地书籍的第一页。 */ }
                 }
                 return loadImage(source, 1, true);
             });
         });
     }
 
+    /** 生成浏览器可访问的 Komga 链接，保留部署路径并去除凭据等敏感地址部分。 */
     public Map<String, Object> komgaLink(long gid) {
         EhGalleriesEntity gallery = requireGallery(gid);
         if (!hasBook(gallery)) return Map.of("available", false, "url", "", "message", "该画廊尚未关联 Komga 书籍");
@@ -139,10 +144,11 @@ public class GalleryMediaService {
         }
     }
 
+    /** 先找本地归档，再检查 Komga；旧书籍 ID 失效时重新定位，并保留每一步的检测说明。 */
     private SourceIndex source(EhGalleriesEntity gallery) throws Exception {
         return sources.getOrLoad(revision(gallery), () -> {
             List<Map<String, String>> diagnostics = new ArrayList<>();
-            // Direct archive access avoids both origin-site availability and a Komga HTTP round trip.
+            // 先直接读取归档，减少一次 Komga 请求，也让预览不依赖源站画廊是否还存在。
             try {
                 var archive = mounted.findReadableArchive(gallery.getStoragePath(), gallery.getFilename(), gallery.getGid());
                 if (archive.isPresent()) {
@@ -207,13 +213,14 @@ public class GalleryMediaService {
         return new SourceIndex("KOMGA", Math.min(count, 100_000), bookId, List.of(), message, List.of());
     }
 
+    /** 按已经选定的本地来源读取一张图片，归档只打开所需条目，Komga 仅请求对应页。 */
     private ImageData loadImage(SourceIndex source, int index, boolean thumbnail) throws Exception {
         byte[] bytes;
         switch (source.source()) {
             case "KOMGA" -> {
                 try { bytes = komga.image(source.location(), index, thumbnail); }
                 catch (IOException failure) {
-                    // Older Komga releases may not have per-page thumbnails.
+                    // 兼容没有逐页缩略图接口的 Komga 版本：读取该页原图后由本服务缩小。
                     if (!thumbnail) throw failure;
                     bytes = komga.image(source.location(), index, false);
                 }
@@ -274,6 +281,7 @@ public class GalleryMediaService {
         return bytes;
     }
 
+    /** 只读取预览需要的少量元数据，短暂缓存后用于同一画廊的多个图片请求。 */
     private EhGalleriesEntity requireGallery(long gid) {
         if (gid <= 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "GID 必须是正整数");
         try {
@@ -286,6 +294,7 @@ public class GalleryMediaService {
     private static boolean hasBook(EhGalleriesEntity gallery) { return gallery.getKomgaBookId() != null && !gallery.getKomgaBookId().isBlank(); }
     private static String revision(EhGalleriesEntity gallery) { return gallery.getGid() + ":" + gallery.getKomgaBookId() + ":" + gallery.getStoragePath() + ":" + gallery.getFilename() + ":" + gallery.getUpdatedAt(); }
 
+    /** 限制同时进行的预览操作，异常时保留业务状态码，并始终归还并发名额。 */
     private <T> T limited(Callable<T> task) {
         if (!budget.tryAcquire()) throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "预览请求较多，请稍后重试");
         try { return task.call(); }
@@ -295,6 +304,7 @@ public class GalleryMediaService {
     }
 
     record SourceIndex(String source, int total, String location, List<String> names, String message, List<Map<String, String>> diagnostics) {}
+    /** 把图片字节和已识别的格式一起交给控制器，保证响应头与实际内容一致。 */
     public record ImageData(byte[] bytes, String mimeType) {
         public ImageData(byte[] bytes) throws IOException { this(bytes, PreviewImageCodec.mime(bytes)); }
     }

@@ -28,7 +28,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Reconciles local collection membership to physical Komga series directories. */
+/** 根据本地合集关系整理 Komga 的实际系列目录，并记录源文件清理进度以便失败后继续。 */
 @Service
 @Slf4j
 public class KomgaSeriesSyncService {
@@ -66,6 +66,7 @@ public class KomgaSeriesSyncService {
         this.executor = executor;
     }
 
+    /** 建立一次系列同步任务并交给后台执行，已有任务运行时拒绝重复启动。 */
     public synchronized Map<String, Object> start() {
         if (!running.compareAndSet(false, true)) throw new IllegalStateException("Komga 系列同步正在运行");
         processed.set(0);
@@ -86,6 +87,7 @@ public class KomgaSeriesSyncService {
         return status();
     }
 
+    /** 汇总同步进度、错误和待清理副本数量。 */
     public Map<String, Object> status() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("running", running.get());
@@ -101,6 +103,7 @@ public class KomgaSeriesSyncService {
         return result;
     }
 
+    /** 只挑出目录、签名或清理日志确有变化的记录，逐本同步并汇总结果。 */
     private void run() {
         try {
             QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
@@ -112,7 +115,7 @@ public class KomgaSeriesSyncService {
                 if (gallery.getSeriesCleanupFilename() != null
                         || !Objects.equals(currentPath, placement.relativeDirectory())
                         || !Objects.equals(gallery.getSeriesSyncSignature(), placement.signature())) {
-                    // Never rewrite thousands of untouched unassigned books merely to add a signature.
+                    // 未归组且目录未变的旧书不必仅为补签名而重写，避免无意义地处理整个图库。
                     if (gallery.getSeriesCleanupFilename() != null
                             || placement.collectionId() != null || !currentPath.isBlank()) {
                         targets.add(new SyncTarget(gallery, placement));
@@ -143,6 +146,7 @@ public class KomgaSeriesSyncService {
         }
     }
 
+    /** 读取旧归档、写入目标目录并更新数据库位置，源副本的删除放在确认目标之后。 */
     private void synchronize(SyncTarget target) throws Exception {
         EhGalleriesEntity gallery = target.gallery();
         GallerySeriesPlacementService.SeriesPlacement placement = target.placement();
@@ -178,8 +182,7 @@ public class KomgaSeriesSyncService {
 
             boolean needsCleanup = !readDirectory.equals(placement.relativeDirectory())
                     || !sourceFilename.equals(targetFilename);
-            // Persist the destination AND cleanup journal before removing the source. A failed
-            // database update leaves the source intact; a failed cleanup is retried after restart.
+        // 先把新位置和待清理源文件写入数据库，再删除旧副本；写库失败保留源文件，清理失败留待重试。
             UpdateWrapper<EhGalleriesEntity> update = currentRecord(gallery)
                     .set("filename", targetFilename)
                     .set("storage_path", placement.relativeDirectory())
@@ -201,6 +204,7 @@ public class KomgaSeriesSyncService {
         }
     }
 
+    /** 先确认目标副本仍存在，再按日志精确清理旧副本，失败则保留待重试状态。 */
     private boolean cleanupPreviousArchive(EhGalleriesEntity gallery) {
         if (gallery.getSeriesCleanupFilename() == null) return true;
         try {
@@ -209,7 +213,7 @@ public class KomgaSeriesSyncService {
                     && gallery.getSeriesCleanupFilename().equals(gallery.getFilename())) {
                 throw new IOException("清理路径与当前归档相同，已阻止删除");
             }
-            // Never remove the old copy if the committed destination has disappeared.
+            // 数据库虽已记录新位置，但目标文件若已消失，仍要保留旧副本，避免两边都没有文件。
             if (!archiveReader.existsExact(normalizePath(gallery.getStoragePath()), gallery.getFilename())) {
                 throw new IOException("目标归档不存在，保留旧文件");
             }
@@ -239,6 +243,7 @@ public class KomgaSeriesSyncService {
         return update;
     }
 
+    /** 检查归档是否可读且包含需要的内容，避免发布不完整的目标文件。 */
     private static void validateArchive(Path archive) throws IOException {
         try (org.apache.commons.compress.archivers.zip.ZipFile zip =
                      new org.apache.commons.compress.archivers.zip.ZipFile(archive.toFile())) {

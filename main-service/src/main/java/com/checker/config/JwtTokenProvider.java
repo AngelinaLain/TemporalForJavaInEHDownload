@@ -12,6 +12,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * 签发和解析登录令牌，维护用户名、角色、令牌编号和密码版本等认证信息。
+ */
 @Component
 public class JwtTokenProvider {
 
@@ -27,10 +30,16 @@ public class JwtTokenProvider {
         this.expiration = expiration;
     }
 
+    /**
+     * 为管理员签发带过期时间、角色和凭据版本的登录令牌；兼容调用使用初始凭据版本。
+     */
     public String generateToken(String username) {
         return generateToken(username, 0);
     }
 
+    /**
+     * 为管理员签发带过期时间、角色和凭据版本的登录令牌；兼容调用使用初始凭据版本。
+     */
     public String generateToken(String username, long credentialVersion) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);
@@ -48,26 +57,37 @@ public class JwtTokenProvider {
                 .compact();
     }
 
+    /**
+     * 从已签名的令牌中读取用户名，供请求认证使用。
+     */
     public String getUsernameFromToken(String token) {
         return parseClaims(token).getSubject();
     }
 
+    /**
+     * 读取令牌的唯一编号，供注销黑名单精确失效某个令牌。
+     */
     public String getJtiFromToken(String token) {
         return parseClaims(token).getId();
     }
 
+    /**
+     * 读取令牌自然过期的时间，用于设置黑名单的保留期限。
+     */
     public Date getExpirationFromToken(String token) {
         return parseClaims(token).getExpiration();
     }
 
-    /** Tokens issued before versioned credentials belong to the bootstrap generation. */
+    /**
+     * 读取签发时的密码版本；旧令牌没有该字段时按初始版本处理，不能跨越改密继续使用。
+     */
     public long getCredentialVersionFromToken(String token) {
         Object version = parseClaims(token).get("credentialVersion");
         return version == null ? 0L : version instanceof Number number ? number.longValue() : -1L;
     }
 
     /**
-     * 从 Token 中读取角色声明；旧版 Token 无该声明时回退为默认管理员角色。
+     * 读取令牌中的角色并统一补齐权限前缀，没有角色字段时返回空列表供兼容逻辑处理。
      */
     @SuppressWarnings("unchecked")
     public List<String> getRolesFromToken(String token) {
@@ -78,6 +98,9 @@ public class JwtTokenProvider {
         return Collections.emptyList();
     }
 
+    /**
+     * 检查令牌签名、格式和过期时间，验证失败时返回否，避免异常直接打断请求处理。
+     */
     public boolean validateToken(String token) {
         try {
             Jwts.parser().verifyWith(key).build().parseSignedClaims(token);
@@ -87,6 +110,9 @@ public class JwtTokenProvider {
         }
     }
 
+    /**
+     * 使用当前签名密钥解析令牌内容，无法验证的令牌不能作为可信声明读取。
+     */
     private Claims parseClaims(String token) {
         return Jwts.parser()
                 .verifyWith(key)

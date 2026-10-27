@@ -12,17 +12,17 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * EhGalleries 数据访问层，继承 MyBatis-Plus BaseMapper 提供通用 CRUD
+ * 负责画廊表的查询与写入，提供列表、统计、批量保存和带并发校验的更新方法。
  */
 @Mapper
 public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
 
-    /** Small projection for media requests; never read crawler trace JSON per image. */
+    /** 预览只读取定位归档和 Komga 所需的字段，避免每张图片请求都加载抓取追踪大数据。 */
     @Select("SELECT gid, download_status, komga_book_id, storage_path, filename, updated_at " +
             "FROM eh_galleries WHERE gid = #{gid}")
     EhGalleriesEntity getPreviewMetadata(@Param("gid") long gid);
 
-    /** Fixed upper cursor and lightweight row count for a requested ID-refresh scope. */
+    /** 读取本次 Komga ID 刷新范围的数量和最大 GID，让后续按固定上界分批处理。 */
     @Select({"<script>", "SELECT COALESCE(MAX(gid),0) maxGid, COUNT(*) total FROM eh_galleries WHERE",
             "<choose><when test='gids != null and !gids.isEmpty()'>gid IN",
             "<foreach collection='gids' item='gid' open='(' separator=',' close=')'>#{gid}</foreach>",
@@ -40,7 +40,7 @@ public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
     List<EhGalleriesEntity> getKomgaIdRefreshBatch(@Param("after") long after, @Param("maxGid") long maxGid,
                                                 @Param("gids") List<Long> gids, @Param("size") int size);
 
-    /** Do not overwrite a mapping or physical identity changed after the job read the row. */
+    /** 只有原 ID、文件名和目录仍与读取时一致才更新，避免覆盖其他任务刚改过的记录。 */
     @Update("UPDATE eh_galleries SET komga_book_id = #{newId}, updated_at = CURRENT_TIMESTAMP " +
             "WHERE gid = #{gid} AND BINARY komga_book_id <=> BINARY #{oldId} " +
             "AND BINARY filename <=> BINARY #{filename} AND BINARY storage_path <=> BINARY #{storagePath}")

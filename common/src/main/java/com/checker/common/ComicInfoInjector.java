@@ -13,11 +13,8 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.StandardCopyOption;
 
 /**
- * 向漫画压缩包内注入 ComicInfo.xml。
- * <p>
-     * 采用 Commons Compress 的 raw-entry copy：原 zip 各条目按原始压缩字节原样拷贝，
- * 仅在压缩包最前面插入一个 ComicInfo.xml 条目，因此对数百 MB 的大文件也足够高效。
- * Komga 扫描时优先读取压缩包内的第一个 ComicInfo.xml 并自动写入元数据。
+ * 把 ComicInfo.xml 写入现有漫画压缩包，让 Komga 扫描时识别标题、作者和合集。
+ * 先写临时归档并原样复制已有压缩条目，再替换原文件，避免重新压缩大文件或留下写到一半的归档。
  */
 @Slf4j
 public final class ComicInfoInjector {

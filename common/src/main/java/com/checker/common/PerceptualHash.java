@@ -20,7 +20,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Iterator;
 
-/** JImageHash 64位DCT感知哈希与有界图像解码。 */
+/**
+ * 在限制图片解码尺寸的前提下计算页面感知哈希，并兼容部分颜色配置异常的图片。
+ */
 public final class PerceptualHash {
     public static final int ALGORITHM_VERSION = 2;
     private static final int HASH_BITS = 64;
@@ -32,6 +34,9 @@ public final class PerceptualHash {
     private PerceptualHash() {
     }
 
+    /**
+     * 读取图片并计算整页与中心区域指纹，附带原始尺寸、画质和算法版本，供画廊视觉匹配复用。
+     */
     public static GalleryPageFingerprint fingerprint(InputStream input, Long gid, int pageIndex,
                                                      String pageName, String source) throws IOException {
         DecodedImage decoded = readBounded(input);
@@ -59,6 +64,9 @@ public final class PerceptualHash {
                 .build();
     }
 
+    /**
+     * 计算两个有效哈希有多少位不同；格式无效时按最大差异处理，避免误判为相同图片。
+     */
     public static int distance(String left, String right) {
         if (left == null || right == null || left.length() != 16 || right.length() != 16) return 64;
         try {
@@ -69,6 +77,10 @@ public final class PerceptualHash {
     }
 
 
+    /**
+     * 先读取图片尺寸并按需抽样解码，防止超大图片一次占用过多内存。
+     * 正常颜色转换失败时尝试读取原始像素，必要时去掉损坏的 JPEG 颜色描述后重试。
+     */
     private static DecodedImage readBounded(InputStream input) throws IOException {
         try (ImageInputStream imageInput = ImageIO.createImageInputStream(input)) {
             if (imageInput == null) return null;
@@ -85,13 +97,12 @@ public final class PerceptualHash {
                 ImageReadParam param = reader.getDefaultReadParam();
                 param.setSourceSubsampling(subsampling, subsampling, 0, 0);
                 try {
-                    // 规范化，而回退仍然可以倒带阅读器。有些畸形
-                    // jpeg解码为延迟的彩色管理图像，仅在drawImage（）时抛出
-                    // 稍后触及他们不匹配的ICC配置文件。
+                    // 立即转换为普通 RGB，让颜色描述不匹配的问题在这里暴露。
+                    // 此时输入流仍可回到开头，后续才能换一种方式重读。
                     return new DecodedImage(rgbImage(reader.read(0, param)), width, height);
                 } catch (IllegalArgumentException colorSpaceFailure) {
-                    // 有些jpeg包含组件数不匹配的ICC配置文件
-                    // 他们的CMYK/YCCK光栅。读取原始示例以绕过ImageIO颜色转换。
+                    // 某些 JPEG 的颜色描述与实际像素分量不匹配。
+                    // 改读原始像素，绕过会失败的自动颜色转换。
                     imageInput.seek(0);
                     reader.reset();
                     reader.setInput(imageInput, true, true);
@@ -113,6 +124,9 @@ public final class PerceptualHash {
         }
     }
 
+    /**
+     * 把解码结果转换为普通 RGB 图片，提前触发颜色转换并隔离异常色彩描述。
+     */
     private static BufferedImage rgbImage(BufferedImage source) {
         if (source == null) return null;
         if (source.getType() == BufferedImage.TYPE_INT_RGB) return source;
@@ -127,10 +141,7 @@ public final class PerceptualHash {
     }
 
     /**
-     *  一些畸形的jpeg将RGB ICC配置文件附加到灰度/CMYK栅格。JDK JPEG
-     *  在调用者可以检查像素之前，阅读器可能会同时失败正常和原始光栅读取。
-     *  重试没有APP2 ICC_PROFILE段的相同编码图像；其他JPEG元数据和
-     *  压缩扫描保持字节对字节不变。
+     * 去掉可能损坏的 JPEG 颜色描述后重新解码，仍失败时保留原失败信息。
      */
     private static DecodedImage retryWithoutJpegIccProfile(ImageInputStream imageInput,
                                                             Throwable colorSpaceFailure,
@@ -156,7 +167,9 @@ public final class PerceptualHash {
         return output.toByteArray();
     }
 
-    /** 当输入不是JPEG或不包含ICC APP2段时返回{@code null}. */
+    /**
+     * 仅移除 JPEG 中的 ICC 颜色描述段，保留图像压缩数据，供异常颜色配置的解码兜底使用。
+     */
     static byte[] removeJpegIccProfile(byte[] jpeg) {
         if (jpeg == null || jpeg.length < 4 || (jpeg[0] & 0xff) != 0xff || (jpeg[1] & 0xff) != 0xd8) {
             return null;
@@ -198,6 +211,9 @@ public final class PerceptualHash {
         return removed ? output.toByteArray() : null;
     }
 
+    /**
+     * 把原始像素数据转换成可计算哈希的 RGB 图片，兼容灰度与多分量颜色数据。
+     */
     static BufferedImage rgbFromRaster(Raster raster) {
         int width = raster.getWidth();
         int height = raster.getHeight();
@@ -244,6 +260,9 @@ public final class PerceptualHash {
         return (int) Math.max(0, Math.min(255, Math.round(value * 255D / max)));
     }
 
+    /**
+     * 把页面的视觉结构计算成固定长度的十六进制感知哈希。
+     */
     private static String hash(BufferedImage source) {
         Hash result = HASHER.hash(source);
         String hex = result.getHashValue().toString(16);
@@ -253,6 +272,9 @@ public final class PerceptualHash {
         return "0".repeat(HASH_HEX_LENGTH - hex.length()) + hex;
     }
 
+    /**
+     * 创建固定参数的感知哈希算法，确保不同页面和服务使用相同的计算方式。
+     */
     private static HashingAlgorithm createHasher() {
         HashingAlgorithm hasher = new PerceptiveHash(HASH_BITS);
         if (hasher.getKeyResolution() != HASH_BITS) {
@@ -261,6 +283,9 @@ public final class PerceptualHash {
         return hasher;
     }
 
+    /**
+     * 根据图片的明暗与局部细节估算画质，作为同作品版本推荐的辅助依据。
+     */
     private static int quality(BufferedImage image) {
         BufferedImage small = new BufferedImage(128, 128, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D graphics = small.createGraphics();

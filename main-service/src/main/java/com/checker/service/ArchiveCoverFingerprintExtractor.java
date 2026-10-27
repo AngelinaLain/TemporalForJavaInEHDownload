@@ -12,12 +12,13 @@ import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-/** Reads only enough of a CBZ/ZIP to fingerprint its first decodable page. */
+/** 顺序读取 CBZ/ZIP，找到第一张可以解码的图片后生成封面指纹，避免整本图片进入内存。 */
 @Component
 public class ArchiveCoverFingerprintExtractor {
     private static final int MAX_IMAGE_ATTEMPTS = 5;
     private static final int MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 
+    /** 顺序查找第一张可解码图片并生成封面指纹，跳过目录和非图片条目。 */
     public GalleryPageFingerprint extract(InputStream archive, Long gid, String filename) throws IOException {
         int attempted = 0;
         Throwable firstFailure = null;
@@ -45,6 +46,7 @@ public class ArchiveCoverFingerprintExtractor {
         throw new IOException("无法读取封面 " + filename + ": " + reason, firstFailure);
     }
 
+    /** 在限制范围内读取图片，防止单个压缩条目占满内存。 */
     private static byte[] readBounded(InputStream input, int limit) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(limit, 1024 * 1024));
         byte[] buffer = new byte[32 * 1024];

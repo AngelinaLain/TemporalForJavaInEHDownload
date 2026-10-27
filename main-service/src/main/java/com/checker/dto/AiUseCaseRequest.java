@@ -8,6 +8,9 @@ import jakarta.validation.constraints.NotBlank;
 
 import java.math.BigDecimal;
 
+/**
+ * 接收某种 AI 用途的模型选择、提示词、图片权限和相似度阈值设置。
+ */
 public record AiUseCaseRequest(
         Long providerId,
         String model,

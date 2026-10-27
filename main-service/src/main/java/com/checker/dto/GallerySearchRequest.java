@@ -2,7 +2,10 @@ package com.checker.dto;
 
 import lombok.Data;
 
-/** Query-only fields; raw tags are JSON arrays so tag values may safely contain commas. */
+/**
+ * 承接画廊列表的分页、排序和组合检索条件，不负责执行查询。
+ * 标签列表使用 JSON 数组传递，避免把标签名称自身包含的逗号误认为分隔符。
+ */
 @Data
 public class GallerySearchRequest {
     private int page = 1;

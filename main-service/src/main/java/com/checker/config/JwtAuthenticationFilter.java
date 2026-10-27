@@ -18,6 +18,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 
+/**
+ * 检查每个请求携带的登录令牌，并把有效的管理员身份交给后续权限校验。
+ */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -33,6 +36,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.credentials = credentials;
     }
 
+    /**
+     * 依次检查令牌签名和过期时间、注销黑名单，以及账号当前的密码版本。
+     * 修改密码后旧版本令牌不能继续认证；账号存储不可用时返回服务暂不可用，不绕过验证。
+     * 验证通过后才把用户名和角色放入当前请求的安全上下文，无效令牌由后续权限规则处理。
+     */
     @Override
     protected void doFilterInternal(@NotNull HttpServletRequest request,
                                     @NotNull HttpServletResponse response,
@@ -72,6 +80,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    /**
+     * 从请求的认证头中提取 Bearer 令牌，没有符合格式的请求头时返回空值。
+     */
     private String resolveToken(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {

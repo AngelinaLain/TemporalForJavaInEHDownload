@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 画廊业务服务实现类
+ * 实现画廊业务维护：后台补全缺失文件大小，复用群晖批量查询结果更新记录。
  */
 @Slf4j
 @Service
@@ -28,6 +28,7 @@ public class EhGalleriesServiceImpl extends ServiceImpl<EhGalleriesMapper, EhGal
     @Autowired
     @Qualifier("backgroundTaskExecutor")
     private TaskExecutor backgroundTaskExecutor;
+    /** 后台批量读取群晖文件大小并更新缺失记录，避免逐本建立 SSH 连接。 */
     @Override
     public void batchUpdateFileSizes() {
         log.info("🚀 开始后台批量获取并补全画廊文件大小...");

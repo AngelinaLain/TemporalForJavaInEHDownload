@@ -21,6 +21,9 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * 配置接口访问权限、登录令牌过滤、密码哈希和跨域规则，决定哪些请求需要管理员身份。
+ */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
@@ -35,6 +38,10 @@ public class SecurityConfig {
         this.securityProperties = securityProperties;
     }
 
+    /**
+     * 建立无会话的接口鉴权链，开放登录和必要的健康检查，其他业务请求检查登录身份。
+     * 仅放行容器内部的错误分发，让图片不存在等错误保留原状态；直接访问业务接口仍需认证。
+     */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
@@ -42,9 +49,9 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // A container error dispatch must preserve the original 4xx/5xx response.
-                        // JwtAuthenticationFilter skips ERROR; authenticating /error again turns missing images into 401.
-                        // Ordinary REQUESTs, including a direct /error request, retain the rules below.
+                        // 保留原请求产生的错误状态，例如封面不存在仍应返回“未找到”。
+                        // 令牌过滤器会跳过内部错误分发，再次认证 /error 会把普通图片错误误变成未登录。
+                        // 这里只放行容器内部错误分发；直接请求 /error 仍按下面的规则校验身份。
                         .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         .requestMatchers("/api/auth/login", "/api/auth/logout").permitAll()
                         .requestMatchers("/api/auth/change-password").hasRole("ADMIN")
@@ -72,11 +79,17 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /**
+     * 创建密码哈希工具，用于验证登录密码和保存修改后的密码，数据库不保存明文密码。
+     */
     @Bean
     public static PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(12);
     }
 
+    /**
+     * 按配置明确允许的浏览器来源开放跨域访问；令牌放在请求头中，因此不启用跨域 Cookie。
+     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();

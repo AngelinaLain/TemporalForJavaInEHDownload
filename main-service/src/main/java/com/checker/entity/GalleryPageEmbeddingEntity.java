@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存画廊抽样页的图像向量及模型版本，供视觉相似度比较时复用。
+ */
 @Data
 @TableName("eh_gallery_page_embeddings")
 public class GalleryPageEmbeddingEntity {

@@ -35,13 +35,8 @@ import java.util.Optional;
 import static io.temporal.internal.sync.AsyncInternal.procedure;
 
 /**
- * 单本画廊下载子工作流实现。
- * <p>
- * 每个子工作流拥有独立的 Temporal 事件历史，sleep 轮询事件被隔离在子工作流内部，
- * 从而避免主工作流历史记录爆炸（突破 50,000 条限制）。
- * <p>
- * 惰性提取 (Lazy Extraction)：只有当画廊真正获得并发令牌、轮到执行时，
- * 才会去请求 archiver.php 获取直链，避免直链因排队过久而过期。
+ * 处理单个画廊的直链提取、下载恢复、完整性检查和 Komga 入库等待。
+ * 下载失败可重新取得直链；补偿模式复用已有文件，不重复下载。
  */
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadWorkflow {
@@ -57,7 +52,9 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
     private final LocalImportActivity localImportActivity = Workflow.newActivityStub(LocalImportActivity.class, WorkflowSteps.LOCAL_IMPORT_OPTIONS);
 
     @Override
+    /** 区分入库补偿与完整下载，在取得执行机会后提取直链，失败时按错误类别决定重试或阻断。 */
     public void processSingleGallery(EhGalleriesEntity gallery, boolean compensateOnly, WorkflowSettings settings) {
+        // 旧历史保留独立通知和异步入库步骤，新流程等待完整结果后交给父流程汇总。
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
         boolean waitForBatchCompletion = batchNotificationVersion != Workflow.DEFAULT_VERSION;
@@ -65,13 +62,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
         if (compensateOnly) {
             log.info("🚀 [补偿] 画廊已下载但未入库，GID: {}", gallery.getGid());
             try {
-                /*WorkflowSteps.postDownloadKomgaProcess(komgaActivity, databaseActivity, synologyActivity,
-                        gallery.getGid(), gallery.getToken());
-                WorkflowSteps.buildKomgaImportTask(
-                        komgaActivity, notificationActivity, gallery, log,
-                        "⚠️ Komga 补偿入库超时", "尝试补偿入库依然失败: " + gallery.getTitle(), 
-                        settings.getKomgaImportMaxRetries(), settings.getKomgaImportPollIntervalSeconds()
-                ).get();*/
+                // 已有归档只做入库确认，不重新提取下载地址或再次下载。
                 runKomgaImport(gallery, settings,
                         "⚠️ Komga 入库超时",
                         "未识别或尝试补偿入库失败: " + gallery.getTitle(),
@@ -86,8 +77,8 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
         RetryOptions retryOptions = RetryOptions.newBuilder()
                 .setMaximumAttempts(3)
                 .setInitialInterval(Duration.ofSeconds(15)) // 每次重试前缓冲 15 秒
-                .setBackoffCoefficient(1.0) // 线性重试，不使用指数退避
-                // 将账号限额、IP被封、Cookie失效等致命错误标记为”不重试”，一旦抛出立即宣告彻底失败
+                .setBackoffCoefficient(1.0) // 保持固定重试间隔，不随次数增加等待时间。
+                // 配额、封禁和登录凭据问题需要人工处理，不持续请求源站。
                 .setDoNotRetry(
                         ErrorType.QUOTA_EXCEEDED.getCode(),
                         ErrorType.IP_BANNED.getCode(),
@@ -97,10 +88,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                 .build();
 
         try {
-            /*
-            惰性提取直链和文件大小
-            使用 Workflow.retry 包装整个“获取直链 -> 推送 -> 轮询”的过程
-            */
+            // 每轮重试都重新提取直链和大小，避免一直复用已经过期的下载地址。
             Workflow.retry(retryOptions, Optional.empty(), () -> {
                 long jitterSeconds = (gallery.getGid() % 10) + 1;
                 Workflow.sleep(Duration.ofSeconds(jitterSeconds));
@@ -176,7 +164,7 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
                     return; // 直接 return 结束当前子工作流，释放并发槽位
                 }
             }
-            // 无论是 3 次 SYNOLOGY_DOWNLOAD_ERROR 还是 Activity 的网络异常耗尽了次数，都在此处兜底
+            // 其余重试耗尽的故障记录为下载失败，便于后续批量恢复。
             log.error("❌ 经过最大次数重试后仍然失败，GID: {}", gallery.getGid());
             databaseActivity.updateGalleryStatus(gallery.getGid(), DownloadStatus.DOWNLOAD_FAILED.getValue());
             if (!waitForBatchCompletion) {

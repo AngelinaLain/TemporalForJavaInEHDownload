@@ -45,17 +45,20 @@ public class MountedArchiveStorage {
         this.config = config;
     }
 
+    /** 检查配置的归档根目录是否存在且可读。 */
     public boolean isReadable() {
         Optional<Path> root = configuredRoot();
         return root.isPresent() && Files.isDirectory(root.get()) && Files.isReadable(root.get());
     }
 
+    /** 检查归档根目录是否同时具备读取与写入条件。 */
     public boolean isWritable() {
         Optional<Path> root = configuredRoot();
         return root.isPresent() && Files.isDirectory(root.get()) && Files.isReadable(root.get())
                 && Files.isWritable(root.get());
     }
 
+    /** 在挂载目录中打开已定位的归档，并在处理结束时关闭输入流。 */
     public <T> T read(String relativeDirectory, String filename,
                       SynologyArchiveReader.ArchiveInputFunction<T> function) throws Exception {
         Path archive = resolveExistingArchive(relativeDirectory, filename);
@@ -64,7 +67,7 @@ public class MountedArchiveStorage {
         }
     }
 
-    /** Read-only random access for paged previews; does not copy or extract the archive. */
+    /** 为分页预览定位可读归档，只返回文件位置，不复制整本归档或解压到磁盘。 */
     public Optional<Path> findReadableArchive(String relativeDirectory, String filename) throws Exception {
         if (!isReadable() || filename == null || filename.isBlank()) return Optional.empty();
         try {
@@ -78,7 +81,7 @@ public class MountedArchiveStorage {
         }
     }
 
-    /** Read-only preview lookup; legacy placement metadata may lag a collection move or rename. */
+    /** 按记录路径和稳定 GID 查找预览归档，兼容合集移动、改名后数据库位置尚未更新的旧记录。 */
     public Optional<Path> findReadableArchive(String relativeDirectory, String filename, Long gid) throws Exception {
         if (gid == null || gid <= 0) throw new IllegalArgumentException("画廊 GID 必须为正整数");
         Path configured = configuredRoot().orElseThrow(() -> new PreviewLookupException(
@@ -95,21 +98,20 @@ public class MountedArchiveStorage {
             if (prefix.find() && !prefix.group(1).equals(gid.toString()))
                 throw new IllegalArgumentException("归档文件名与画廊 GID 不一致");
             if (isSupportedArchive(filename) && Files.isRegularFile(exact)) return checkedPreviewPath(root, exact);
-            // Pre-series libraries kept unprefixed database filenames directly in their root.
+            // 兼容还没有系列目录时的布局：未带 GID 前缀的历史文件可能仍放在图库根目录。
             if (!prefix.reset().find() && !recordedDirectory.equals(configured)) {
                 Path legacy = resolveFilename(configured, filename);
                 if (isSupportedArchive(filename) && Files.isRegularFile(legacy)) return checkedPreviewPath(root, legacy);
             }
         }
-        // A global unique match covers same-directory renames, root archives and migrated series.
-        // Never choose an arbitrary historical version when the same GID exists in multiple folders.
+        // 缓存全库 GID 索引，兼顾同目录改名、旧根目录和系列迁移；多个目录同 GID 时不随意挑一个版本。
         List<Path> matches = previewIndex(root).byGid().getOrDefault(gid.toString(), List.of());
         if (matches.size() > 1) throw new PreviewLookupException(
                 "AMBIGUOUS", "同一 GID 匹配到多个本地归档，请在归档同步中核查后重试");
         if (matches.isEmpty()) return Optional.empty();
         Optional<Path> result = checkedPreviewPath(root, matches.get(0));
         if (result.isPresent()) return result;
-        // A previously indexed file was moved after the scan; refresh once instead of serving stale paths.
+        // 索引中的文件可能刚被移动，重新建立一次索引，而不是继续返回已经失效的位置。
         invalidatePreviewIndex();
         matches = previewIndex(root).byGid().getOrDefault(gid.toString(), List.of());
         if (matches.size() > 1) throw new PreviewLookupException(
@@ -117,9 +119,10 @@ public class MountedArchiveStorage {
         return matches.isEmpty() ? Optional.empty() : checkedPreviewPath(root, matches.get(0));
     }
 
-    /** Explicit retries may invalidate the bounded directory snapshot without changing library files. */
+    /** 主动重试时丢弃目录快照，仅重新检测，不改动图库文件。 */
     public synchronized void invalidatePreviewIndex() { previewIndex = null; previewIndexFailure = null; }
 
+    /** 再次核对真实文件仍位于挂载根目录内且可读，防止符号链接越界。 */
     private Optional<Path> checkedPreviewPath(Path root, Path file) throws IOException {
         if (!Files.isRegularFile(file)) return Optional.empty();
         Path real = file.toRealPath();
@@ -128,6 +131,7 @@ public class MountedArchiveStorage {
         return Optional.of(real);
     }
 
+    /** 合并并发的目录索引请求，限制扫描时间、层级和条目数，完整成功后才缓存结果。 */
     private synchronized PreviewIndex previewIndex(Path root) throws IOException {
         long now = System.nanoTime();
         if (previewIndex != null && previewIndex.root().equals(root) && now - previewIndex.createdAt() < PREVIEW_INDEX_TTL)
@@ -150,14 +154,14 @@ public class MountedArchiveStorage {
             }
             @Override public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
                 checkBudget();
-                // No FOLLOW_LINKS: neither directory cycles nor files outside the mount enter the index.
+                // 扫描不跟随符号链接，避免目录循环以及把挂载根目录以外的文件加入索引。
                 if (!attributes.isRegularFile() || !isSupportedArchive(file.getFileName().toString())) return FileVisitResult.CONTINUE;
                 if (++archives[0] > PREVIEW_MAX_ARCHIVES) throw new PreviewLookupException(
                         "SCAN_LIMIT", "本地归档数量超过索引预算，请修正画廊目录或使用 Komga 图库");
                 var gid = PREVIEW_GID.matcher(file.getFileName().toString());
                 if (gid.find()) {
                     List<Path> paths = matches.computeIfAbsent(gid.group(1), ignored -> new ArrayList<>(2));
-                    if (paths.size() < 2) paths.add(file); // Two are enough to prove ambiguity; memory remains bounded.
+                    if (paths.size() < 2) paths.add(file); // 两条路径已足够证明有歧义，无需为重复版本继续占用内存。
                 }
                 return FileVisitResult.CONTINUE;
             }
@@ -180,12 +184,14 @@ public class MountedArchiveStorage {
     private record PreviewIndex(Path root, long createdAt, Map<String, List<Path>> byGid) {}
     private record PreviewIndexFailure(Path root, long createdAt, String code, String message) {}
 
+    /** 携带可供界面分类展示的定位失败代码，不把实际服务器路径暴露给前端。 */
     public static final class PreviewLookupException extends IOException {
         private final String code;
         public PreviewLookupException(String code, String message) { super(message); this.code = code; }
         public String code() { return code; }
     }
 
+    /** 先上传到临时文件，再切换为正式文件名，完成后清理同 GID 旧归档。 */
     public void upload(Path localFile, String relativeDirectory, String filename,
                        LongConsumer progress) throws Exception {
         Path directory = resolveDirectory(relativeDirectory);
@@ -213,10 +219,12 @@ public class MountedArchiveStorage {
         }
     }
 
+    /** 列出指定目录中的受支持归档文件，不返回上传中的临时文件。 */
     public List<String> listArchives() throws Exception {
         return listArchives("");
     }
 
+    /** 列出指定目录中的受支持归档文件，不返回上传中的临时文件。 */
     public List<String> listArchives(String relativeDirectory) throws Exception {
         Path directory = resolveDirectory(relativeDirectory);
         if (Files.notExists(directory)) return List.of();
@@ -226,19 +234,23 @@ public class MountedArchiveStorage {
         }
     }
 
+    /** 在挂载根目录中改名，路径仍通过文件名检查。 */
     public void rename(String sourceFilename, String targetFilename) throws Exception {
         Path root = requireRoot();
         moveReplacing(resolveFilename(root, sourceFilename), resolveFilename(root, targetFilename));
     }
 
+    /** 定位指定归档后删除，兼容同 GID 的历史改名。 */
     public void delete(String relativeDirectory, String filename) throws Exception {
         Files.delete(resolveExistingArchive(relativeDirectory, filename));
     }
 
+    /** 只删除记录指定的确切文件名，不按 GID 扩大删除范围。 */
     public void deleteExact(String relativeDirectory, String filename) throws Exception {
         Files.deleteIfExists(resolveFilename(resolveDirectory(relativeDirectory), filename));
     }
 
+    /** 优先使用准确路径，缺失时只接受同 GID 的唯一历史归档。 */
     private Path resolveExistingArchive(String relativeDirectory, String filename) throws Exception {
         Path directory = resolveDirectory(relativeDirectory);
         if (!Files.isDirectory(directory)) {
@@ -272,6 +284,7 @@ public class MountedArchiveStorage {
         }
     }
 
+    /** 把相对目录限制在配置根目录内，拒绝目录穿越。 */
     private Path resolveDirectory(String relativeDirectory) {
         Path root = requireRoot();
         String relative = relativeDirectory == null ? "" : relativeDirectory.replace('\\', '/');
@@ -303,6 +316,7 @@ public class MountedArchiveStorage {
         return configuredRoot().orElseThrow(() -> new IllegalStateException("未配置 ARCHIVE_MOUNT_PATH"));
     }
 
+    /** 优先原子切换文件；文件系统不支持时才使用普通替换。 */
     private static void moveReplacing(Path source, Path target) throws Exception {
         try {
             Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

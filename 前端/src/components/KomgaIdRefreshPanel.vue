@@ -32,6 +32,7 @@
 </template>
 
 <script setup>
+// 启动并跟踪数据库 Komga ID 刷新任务，展示更新明细并允许停止当前任务。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Refresh, RefreshRight, WarningFilled } from '@element-plus/icons-vue'
 import api from '../api'
@@ -56,13 +57,16 @@ let disposed = false, timer, statusController, actionController
 function formatCount(value) { return new Intl.NumberFormat('zh-CN').format(Number(value) || 0) }
 function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false }) }
 function resultMeta(status) { return ({ UPDATED: { label: '已更新', type: 'success' }, UNCHANGED: { label: '关联有效', type: 'info' }, NOT_FOUND: { label: '未找到', type: 'warning' }, AMBIGUOUS: { label: '多个候选', type: 'warning' }, CONFLICT: { label: '关联冲突', type: 'warning' }, FAILED: { label: '失败', type: 'danger' } })[status] || { label: status || '—', type: 'info' } }
+// 合并完整任务默认值，避免刚启动或空结果时出现缺失字段。
 function applyJob(value) { job.value = { ...initialJob(), ...(value || {}), results: Array.isArray(value?.results) ? value.results : [] } }
 function clearPolling() { window.clearTimeout(timer); timer = undefined }
+// 只在任务运行时安排下一次进度请求，避免重叠轮询和空闲请求。
 function schedulePolling() {
   clearPolling()
   if (!disposed && job.value.running) timer = window.setTimeout(() => { void loadStatus() }, 2000)
 }
 function stopStatusRequest() { statusController?.abort(); statusController = null; checking.value = false }
+// 解析用户输入并去重，拒绝不安全整数、非法字符和过大的指定范围。
 function parseGids() {
   const text = gidInput.value.trim()
   if (!text) return []
@@ -72,6 +76,7 @@ function parseGids() {
   if (gids.length > 1000) throw new Error('一次最多指定 1000 个 GID，请分批处理。')
   return gids
 }
+// 读取当前后台任务，进入页面时可恢复其他标签页已启动的任务。
 async function loadStatus() {
   if (disposed || statusController || actionBusy.value) return
   const request = new AbortController()
@@ -85,6 +90,7 @@ async function loadStatus() {
     if (statusController === request) { statusController = null; checking.value = false; schedulePolling() }
   }
 }
+// 校验范围后启动一次刷新；启动响应不确定时读取现有任务，避免盲目重复提交。
 async function start() {
   if (disposed || actionBusy.value || checking.value || job.value.running) return
   let gids
@@ -101,9 +107,10 @@ async function start() {
   } finally {
     if (actionController === request) { actionController = null; starting.value = false; schedulePolling() }
   }
-  // A lost start response or another tab may already have started a job; recover its status.
+  // 启动响应丢失或其他标签页已经启动任务时，重新读取进度，避免重复启动。
   if (failed && !disposed && localStorage.getItem('token')) { const message = error.value; await loadStatus(); if (!error.value) error.value = message }
 }
+// 携带当前任务 ID 请求停止；任务已换成新任务时只更新进度，避免误停其他任务。
 async function cancel() {
   if (disposed || actionBusy.value || !job.value.running || job.value.cancelRequested) return
   const jobId = job.value.jobId

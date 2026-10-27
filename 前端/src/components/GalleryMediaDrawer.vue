@@ -27,6 +27,7 @@
 </template>
 
 <script setup>
+// 展示画廊的本地图片分页、检测结果和大图预览，关闭时清理未完成的请求。
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { Refresh, ZoomIn } from '@element-plus/icons-vue'
 import api from '../api'
@@ -41,6 +42,7 @@ const sourceLabel = computed(() => ({ KOMGA: 'Komga 本地图库', ARCHIVE: '本
 const diagnostics = computed(() => Array.isArray(data.value.diagnostics) ? data.value.diagnostics.filter(issue => issue && typeof issue.message === 'string' && issue.message.trim()) : [])
 const sourceUrl = computed(() => { try { const url = new URL(props.gallery?.galleryUrl); return ['http:', 'https:'].includes(url.protocol) ? url.href : '' } catch { return '' } })
 const viewerTitle = computed(() => '第 ' + (viewerImage.value?.index || '') + ' 张图片')
+// 取消上一轮索引请求后读取当前页；只有主动重新检测才要求后端清除来源缓存。
 async function load(refresh = false) {
   controller?.abort()
   if (!props.modelValue || !props.gallery?.gid) return
@@ -56,8 +58,10 @@ async function load(refresh = false) {
   } catch (failure) { if (controller === request && failure.code !== 'ERR_CANCELED') error.value = '本地图片索引加载失败，请检查归档挂载或 Komga 状态后重试。' }
   finally { if (controller === request) loading.value = false }
 }
+// 翻页前关闭大图，防止旧页图片与新页索引同时显示。
 function changePage(value) { if (page.value !== value) { closeViewer(); page.value = value; load() } }
 function changeSize(value) { if (size.value !== value) { closeViewer(); size.value = value; page.value = 1; load() } }
+// 用户点击后才读取原图；只接收当前请求的结果，避免快速切图时显示旧图片。
 async function openImage(image) {
   if (!image) return
   releaseViewer()
@@ -70,6 +74,7 @@ async function openImage(image) {
   } catch (failure) { if (viewerController === request && failure.code !== 'ERR_CANCELED') viewerError.value = '这张图片暂时无法加载。' }
   finally { if (viewerController === request) viewerLoading.value = false }
 }
+// 取消原图请求并释放浏览器临时地址，避免重复查看占用越来越多内存。
 function releaseViewer() {
   viewerController?.abort(); viewerController = null; viewerLoading.value = false
   if (viewerUrl.value) URL.revokeObjectURL(viewerUrl.value)
@@ -78,6 +83,7 @@ function releaseViewer() {
 function closeViewer() { releaseViewer(); viewerVisible.value = false }
 function onViewerClosed() { if (!viewerVisible.value) releaseViewer() }
 function onDrawerClosed() { if (!props.modelValue) dispose() }
+// 抽屉关闭或画廊切换时取消请求、关闭大图并清空本次预览。
 function dispose() { controller?.abort(); controller = null; closeViewer(); data.value = { images: [], total: 0 }; loading.value = false }
 watch(() => [props.modelValue, props.gallery?.gid], ([visible]) => {
   dispose()

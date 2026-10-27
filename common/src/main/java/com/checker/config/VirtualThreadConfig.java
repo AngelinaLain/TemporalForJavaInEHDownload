@@ -17,13 +17,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 虚拟线程支持配置（Java 21+）：
- * <ul>
- *   <li>运行于 Java 21+ 时启用虚拟线程执行器与 Tomcat 虚拟线程协议处理器；</li>
- *   <li>运行于 Java 17 时自动回退为平台线程池，保证旧环境兼容。</li>
- * </ul>
- * 全部通过反射调用 {@code Executors.newVirtualThreadPerTaskExecutor}，保证项目在
- * Java 17 下也能正常编译。
+ * 为支持的 Java 版本启用虚拟线程；环境不支持时使用有容量限制的普通线程池。
  */
 @Slf4j
 @Configuration
@@ -32,8 +26,7 @@ public class VirtualThreadConfig {
     static final boolean VIRTUAL_THREADS_SUPPORTED = Runtime.version().feature() >= 21;
 
     /**
-     * 网络 I/O 密集型任务使用的虚拟线程执行器（Java 21+ 生效）。
-     * 组件通过 @Qualifier("virtualThreadExecutor") 注入即可。
+     * 优先创建适合网络等待任务的虚拟线程执行器，运行环境不支持或创建失败时回退到普通线程池。
      */
     @Bean("virtualThreadExecutor")
     @ConditionalOnMissingBean(name = "virtualThreadExecutor")
@@ -61,7 +54,7 @@ public class VirtualThreadConfig {
     }
 
     /**
-     * Tomcat 协议处理器虚拟线程定制器，仅 Java 21+ 生效（通过反射设置 Executor）。
+     * 在支持的运行环境中把 Tomcat 请求执行器切换为虚拟线程，切换失败时保留原执行方式。
      */
     @Bean
     @ConditionalOnJava(JavaVersion.TWENTY_ONE)

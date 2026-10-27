@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+/** 保存和读取画廊页面指纹，比较两本画廊后持久化可复用的视觉匹配证据。 */
 @Service
 public class VisualFingerprintService {
     private final GalleryPageHashMapper pageHashMapper;
@@ -25,10 +26,12 @@ public class VisualFingerprintService {
         this.visualMatchMapper = visualMatchMapper;
     }
 
+    /** 在事务中替换某画廊当前算法版本的页面指纹；已有归档指纹时不让预览指纹覆盖它。 */
     @Transactional
     public int replace(Long gid, List<GalleryPageFingerprint> fingerprints) {
         if (gid == null || fingerprints == null || fingerprints.isEmpty()) return 0;
         boolean incomingPreview = fingerprints.stream().allMatch(item -> "PREVIEW".equals(item.getSource()));
+        // 归档页来自实际文件，比源站预览页更完整，因此已有归档证据时保留它。
         if (incomingPreview && hasArchiveFingerprints(gid)) return 0;
         QueryWrapper<GalleryPageHashEntity> delete = new QueryWrapper<>();
         delete.eq("gid", gid).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION);
@@ -44,12 +47,14 @@ public class VisualFingerprintService {
         return inserted;
     }
 
+    /** 检查画廊是否已有当前算法版本的指纹。 */
     public boolean isCurrent(Long gid) {
         QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
         query.eq("gid", gid).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION).last("LIMIT 1");
         return pageHashMapper.selectCount(query) > 0;
     }
 
+    /** 检查是否已从真实归档提取过页面指纹，避免把源站预览指纹混用。 */
     public boolean hasArchiveFingerprints(Long gid) {
         QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
         query.eq("gid", gid).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION)
@@ -57,6 +62,7 @@ public class VisualFingerprintService {
         return pageHashMapper.selectCount(query) > 0;
     }
 
+    /** 按页顺序读取已保存的指纹，并转换为比较用数据。 */
     public List<GalleryPageFingerprint> find(Long gid) {
         QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
         query.eq("gid", gid).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION)
@@ -64,6 +70,7 @@ public class VisualFingerprintService {
         return pageHashMapper.selectList(query).stream().map(this::toDto).toList();
     }
 
+    /** 比较两个画廊的页面指纹并保存匹配证据，供选优和人工审核复用。 */
     @Transactional
     public GalleryVisualMatch matchAndPersist(Long firstGid, Long secondGid) {
         long leftGid = Math.min(firstGid, secondGid);
@@ -87,6 +94,7 @@ public class VisualFingerprintService {
         return match;
     }
 
+    /** 统计具有当前算法版本指纹的画廊数量。 */
     public long countCurrentGalleries() {
         QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
         query.select("DISTINCT gid").eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION);

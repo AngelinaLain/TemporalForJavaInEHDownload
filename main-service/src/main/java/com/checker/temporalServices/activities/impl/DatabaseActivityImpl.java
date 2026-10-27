@@ -31,7 +31,7 @@ import java.util.Set;
 import java.util.function.Function;
 
 /**
- * 数据库 Activity 实现：负责画廊数据的增删改查操作
+ * 执行工作流中的数据库操作，并在事务内协调候选分组、人工审核和下载认领。
  */
 @Slf4j
 @Component
@@ -52,6 +52,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     @Autowired
     private VisualFingerprintService visualFingerprintService;
 
+    /**
+     * 补齐插入所需默认值后保存单条画廊。
+     * */
     @Override
     public void saveToDatabase(EhGalleriesEntity gallery) {
         normalizeInsertDefaults(gallery);
@@ -63,6 +66,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
     }
 
+    /**
+     * 先区分新增和已有记录，再分开批量插入或更新，减少数据库往返。
+     * */
     @Override
     public void saveGalleriesBatch(List<EhGalleriesEntity> galleries) {
         if (galleries == null || galleries.isEmpty()) return;
@@ -110,9 +116,8 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     }
 
     /**
-     * Custom batch inserts include every mapped column, unlike normal MyBatis-Plus inserts.
-     * Supply Java-side defaults as well as SQL defaults so existing schemas that predate V9
-     * cannot receive an explicit NULL for a NOT NULL column.
+     * 自定义批量插入会显式写入映射列，不能只依赖数据库默认值。
+     * 插入前补齐时间和确认次数，兼容尚未更新默认约束的历史数据库。
      */
     private void normalizeInsertDefaults(EhGalleriesEntity gallery) {
         normalizeInsertDefaults(gallery, new Date());
@@ -131,6 +136,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
     }
 
+    /**
+     * 只为可识别的历史记录回填标题、标签及去重特征，保留其他业务字段。
+     * */
     @Override
     public void updateGalleryDeduplicationMetadata(List<EhGalleriesEntity> galleries) {
         if (galleries == null || galleries.isEmpty()) return;
@@ -158,10 +166,14 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
     }
 
+    /**
+     * 持有专用锁后分批补齐旧版候选特征，避免多个采集流程同时执行历史回填。
+     * */
     @Override
     @Transactional
     public void backfillGalleryDeduplicationMetadata() {
-        // 多个父流程可能同时启动；用专用锁确保历史回填只由一个事务执行。
+        /* 多个父流程可能同时启动；用专用锁确保历史回填只由一个事务执行。 */
+        /* 确保候选锁记录存在并获取行锁，让同组判断和状态修改串行执行。 */
         lockCandidateKey(DEDUPE_BACKFILL_LOCK_KEY);
         int updated = 0;
         while (true) {
@@ -191,6 +203,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
     }
 
+    /**
+     * 只找本轮涉及且确有多个版本的候选组，并过滤已有当前版本指纹的记录。
+     * */
     @Override
     public List<EhGalleriesEntity> findGalleriesNeedingVisualFingerprint(List<Long> gids) {
         if (gids == null || gids.isEmpty()) return List.of();
@@ -212,6 +227,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .toList();
     }
 
+    /**
+     * 将采样结果交给指纹服务保存，统一处理新旧指纹的替换规则。
+     * */
     @Override
     public void saveGalleryVisualFingerprints(Map<Long, List<GalleryPageFingerprint>> fingerprints) {
         if (fingerprints == null || fingerprints.isEmpty()) return;
@@ -222,6 +240,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         log.info("🖼️ 已保存 {} 个画廊页面视觉指纹", pages);
     }
 
+    /**
+     * 对旧版去重键去重后分批读取首选记录，供旧历史分支继续执行。
+     * */
     @Override
     public List<EhGalleriesEntity> findPreferredGalleriesByDedupeKeys(List<String> dedupeKeys) {
         if (dedupeKeys == null || dedupeKeys.isEmpty()) {
@@ -246,6 +267,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         return results;
     }
 
+    /**
+     * 锁住候选组后结合人工审核结果选择首选版本，并在同一事务中认领下载，防止并发重复派发。
+     * */
     @Override
     @Transactional
     public boolean claimGalleryForDownload(Long gid) {
@@ -255,6 +279,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
 
         String candidateKey = requested.getCandidateKey();
         if (candidateKey == null || candidateKey.isBlank()) {
+            /* 没有可靠候选特征时只认领当前画廊，并避免覆盖正在处理或已完成的记录。 */
             return markUnidentifiedGalleryDownloading(requested);
         }
 
@@ -264,6 +289,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         List<DedupeReviewEntity> reviews = dedupeReviewService.findByCandidateKey(candidateKey);
         Set<Long> heldGids = dedupeReviewService.heldGids(bucket, reviews);
         if (heldGids.contains(gid)) {
+            /* 将灰区候选置为待人工审核，已下载或正在下载的健康版本不回退。 */
             markReviewRequired(requested, reviews);
             log.info("🧑‍⚖️ GID {} 存在 65-84 分的灰区匹配，等待人工审核", gid);
             return false;
@@ -281,7 +307,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .max(Comparator.comparingLong(EhGalleriesEntity::getGid))
                 .orElse(null);
         if (active != null) {
+            /* 统一更新组内首选关系、匹配证据和当前认领状态。 */
             applyDecision(component, active, null);
+            /* 记录当前画廊被已有首选替代的原因，并保留其重复版本关系。 */
             markRejectedCandidate(requested, active);
             log.info("🔒 GID {} 与正在下载的 GID {} 匹配，本次不重复派发", gid, active.getGid());
             return false;
@@ -304,6 +332,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         return true;
     }
 
+    /**
+     * 任务结束后重新选择健康的首选版本，优先保留正在下载或已完成的记录。
+     * */
     @Override
     @Transactional
     public void reconcileGalleryDeduplication(List<String> candidateKeys) {
@@ -383,12 +414,18 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         galleriesMapper.lockDedupeCandidate(candidateKey);
     }
 
+    /**
+     * 按稳定顺序读取一个候选组，供分组与首选决策使用。
+     * */
     private List<EhGalleriesEntity> selectByCandidateKey(String candidateKey) {
         QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
         query.eq("candidate_key", candidateKey).orderByAsc("gid");
         return galleriesMapper.selectList(query);
     }
 
+    /**
+     * 结合自动匹配和人工结论，找出目标画廊所属的同作品分组。
+     * */
     private List<EhGalleriesEntity> componentContaining(List<EhGalleriesEntity> bucket, Long gid,
                                                         List<DedupeReviewEntity> reviews) {
         return dedupeReviewService.cluster(bucket, reviews).stream()
@@ -446,6 +483,10 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         return gallery != null && (status.getValue().equals(gallery.getDownloadStatus())
                 || status.name().equals(gallery.getDownloadStatus()));
     }
+
+    /**
+     * 只更新指定画廊的处理状态。
+     * */
     @Override
     public void updateGalleryStatus(Long gid, String status) {
         EhGalleriesEntity updateEntity = new EhGalleriesEntity();
@@ -455,6 +496,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         log.info("📝 状态更新完成, GID: {}, 新状态: {}", gid, status);
     }
 
+    /**
+     * 保存一次入库确认的状态、次数、时间和候选原因，并限制说明长度。
+     * */
     @Override
     public void recordKomgaConfirmation(Long gid, String status, String reason, String candidateBookIds) {
         if (gid == null) return;
@@ -474,6 +518,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         return value.substring(0, maxLength);
     }
 
+    /**
+     * 读取需要重新下载或补偿入库的记录，供批量重试流程使用。
+     * */
     @Override
     public List<EhGalleriesEntity> getFailedGalleries() {
         QueryWrapper<EhGalleriesEntity> queryWrapper = new QueryWrapper<>();
@@ -483,17 +530,26 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         return galleriesMapper.selectList(queryWrapper);
     }
 
+    /**
+     * 读取单条画廊的最新信息，供后续步骤使用。
+     * */
     @Override
     public EhGalleriesEntity getGalleryById(Long gid) {
         return galleriesMapper.selectById(gid);
     }
 
+    /**
+     * 批量读取指定画廊，空范围直接返回，避免无条件查询。
+     * */
     @Override
     public List<EhGalleriesEntity> getGalleriesByIds(List<Long> gids) {
         if (gids == null || gids.isEmpty()) return Collections.emptyList();
         return galleriesMapper.selectBatchIds(gids);
     }
 
+    /**
+     * 把当前运行配置作为活动结果交给工作流，使重放时仍使用历史中记录的设置。
+     * */
     @Override
     public WorkflowSettings loadWorkflowSettings() {
         return WorkflowSettings.builder()
@@ -506,6 +562,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .build();
     }
 
+    /**
+     * 保存源站估算的归档大小，空参数不覆盖已有值。
+     * */
     @Override
     public void updateGallerySize(Long gid, Double sizeMb) {
         if (gid == null || sizeMb == null) return;
@@ -516,6 +575,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         log.info("💾 大小更新完成, GID: {}, 预估大小: {} MB", gid, sizeMb);
     }
 
+    /**
+     * 保存有效的生成摘要，空正文不覆盖已有简介。
+     * */
     @Override
     public void updateGallerySummary(Long gid, String summary) {
         if (gid == null || summary == null || summary.isBlank()) return;

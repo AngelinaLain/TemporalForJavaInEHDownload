@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/** 在后台为历史画廊补算归档页面指纹，记录每项结果并支持失败记录重试。 */
 @Service
 @Slf4j
 public class VisualHistoryRefreshService {
@@ -54,6 +55,7 @@ public class VisualHistoryRefreshService {
         this.executor = executor;
     }
 
+    /** 创建历史指纹刷新任务；已有任务运行时不再重复启动。 */
     public VisualRefreshJobEntity start(boolean force) {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("已有视觉指纹刷新任务正在运行");
@@ -64,6 +66,7 @@ public class VisualHistoryRefreshService {
         return jobMapper.selectById(job.getId());
     }
 
+    /** 为指定画廊重新创建指纹刷新任务，常用于重试页面中选出的失败项。 */
     public VisualRefreshJobEntity retry(List<Long> gids) {
         if (gids == null || gids.isEmpty()) {
             throw new IllegalArgumentException("请至少选择一个失败画廊");
@@ -84,6 +87,7 @@ public class VisualHistoryRefreshService {
         return jobMapper.selectById(job.getId());
     }
 
+    /** 读取最近一次刷新任务状态。 */
     public VisualRefreshJobEntity latest() {
         QueryWrapper<VisualRefreshJobEntity> query = new QueryWrapper<>();
         query.orderByDesc("created_at").last("LIMIT 1");
@@ -98,10 +102,12 @@ public class VisualHistoryRefreshService {
         return latest;
     }
 
+    /** 统计已生成有效指纹的画廊数量。 */
     public long fingerprintedGalleries() {
         return fingerprintService.countCurrentGalleries();
     }
 
+    /** 按 GID 顺序读取指定刷新任务的失败记录，供界面说明原因或继续重试。 */
     public List<VisualRefreshFailureEntity> failures(String jobId) {
         if (jobId == null) return List.of();
         QueryWrapper<VisualRefreshFailureEntity> query = new QueryWrapper<>();
@@ -109,6 +115,7 @@ public class VisualHistoryRefreshService {
         return failureMapper.selectList(query);
     }
 
+    /** 逐本处理任务范围内的画廊，记录成功或失败，并在结束时汇总状态。 */
     private void run(String jobId, boolean force, Set<Long> selectedGids) {
         VisualRefreshJobEntity job = jobMapper.selectById(jobId);
         try {
@@ -171,6 +178,7 @@ public class VisualHistoryRefreshService {
         }
     }
 
+    /** 定位归档、计算采样指纹并保存；单本失败不阻止其余记录继续处理。 */
     private int refreshGallery(SynologyArchiveReader.ArchiveSession archiveSession,
                                EhGalleriesEntity gallery) throws Exception {
         String primaryDirectory = normalizeDirectory(gallery.getStoragePath());
@@ -206,6 +214,7 @@ public class VisualHistoryRefreshService {
         }
     }
 
+    /** 复用任务级归档连接读取指纹，减少批量刷新时的反复建连。 */
     private int readFingerprints(SynologyArchiveReader.ArchiveSession archiveSession,
                                  String directory, String filename,
                                  EhGalleriesEntity gallery) throws Exception {

@@ -24,7 +24,7 @@ import java.util.concurrent.CancellationException;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
-/** Read-only preview client, independent from synchronization writes and their timeouts. */
+/** 只读访问 Komga 的书籍信息和图片，预览请求与同步写入流程分别控制超时。 */
 @Component
 public class KomgaMediaClient {
     private static final int MAX_BYTES = 25 * 1024 * 1024;
@@ -43,18 +43,20 @@ public class KomgaMediaClient {
         this.mapper = mapper;
     }
 
+    /** 检查是否具备访问 Komga 所需的地址和 API Key。 */
     public boolean configured() {
         return config.getKomga() != null && config.getKomga().getUrl() != null
                 && !config.getKomga().getUrl().isBlank() && config.getKomga().getApiKey() != null
                 && !config.getKomga().getApiKey().isBlank();
     }
 
+    /** 读取指定书籍当前可用页数，判断关联是否仍能用于预览。 */
     public int pageCount(String bookId) throws IOException {
         JsonNode book = mapper.readTree(read(bookId, "", 1024 * 1024));
         return book == null ? 0 : Math.max(0, book.path("media").path("pagesCount").asInt(0));
     }
 
-    /** Complete, bounded physical inventory for a database reconciliation job; never reads images. */
+    /** 完整读取有容量上限的物理书籍目录，供数据库关联修复使用；不读取图片内容。 */
     public LibrarySnapshot librarySnapshot(BooleanSupplier cancelled) throws IOException {
         if (!configured()) throw new IOException("Komga 图片服务未配置");
         String library = config.getKomga().getLibraryId();
@@ -118,7 +120,7 @@ public class KomgaMediaClient {
         }
     }
 
-    /** A rescan may replace Book IDs; rediscover only a unique physical archive, never a similar title. */
+    /** Komga 重扫可能更换书籍 ID；只在物理归档唯一匹配时重新定位，不把相似标题当作同一本书。 */
     public Optional<PreviewBook> findBook(long gid, String filename) throws IOException {
         if (!configured()) throw new IOException("Komga 图片服务未配置");
         if (gid <= 0) throw new IOException("画廊 GID 无效");
@@ -130,8 +132,7 @@ public class KomgaMediaClient {
         String titleTerms = titleTerms(expected);
         if (!titleTerms.isBlank()) terms.add(titleTerms);
         if (!expected.isBlank()) terms.add(stem(expected).substring(0, Math.min(120, stem(expected).length())));
-        // Komga full-text search may index metadata titles but omit physical GID prefixes.
-        // Titles retrieve candidates only; physical identity is still checked below.
+        // Komga 全文索引可能只有作品标题，没有文件名中的 GID；标题仅用于召回候选，后面仍核对物理文件。
         for (String term : terms) {
             search(term, gid, expected, matches, remainingPages);
             if (!matches.isEmpty()) break;
@@ -144,6 +145,7 @@ public class KomgaMediaClient {
         return Optional.of(new PreviewBook(match.getKey(), Math.max(0, count)));
     }
 
+    /** 分页召回候选并校验分页完整性，超出预算或无法确认唯一性时明确失败。 */
     private void search(String term, long gid, String expected, Map<String, JsonNode> matches,
                         int[] remainingPages) throws IOException {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -197,6 +199,7 @@ public class KomgaMediaClient {
         }
     }
 
+    /** 只按物理文件 GID 或完整文件名核对身份，不采用元数据标题的模糊命中。 */
     private static boolean matchesPhysicalFile(JsonNode book, long gid, String expected) {
         String prefix = "[" + gid + "]";
         for (String field : List.of("name", "fileName", "url")) {
@@ -211,7 +214,7 @@ public class KomgaMediaClient {
     private static String basename(String value) {
         if (value == null || value.isBlank()) return "";
         String decoded;
-        // URLDecoder's '+' handling is only appropriate for encoded URLs, not ordinary physical names.
+        // 只对地址做 URL 解码，并保留文件名中的加号，避免把普通名称里的“+”误变为空格。
         try { decoded = value.contains("%") || value.contains("://") ? URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8) : value; }
         catch (IllegalArgumentException malformed) { decoded = value; }
         decoded = decoded.replace('\\', '/');
@@ -231,12 +234,14 @@ public class KomgaMediaClient {
         return result.substring(0, Math.min(64, result.length()));
     }
 
+    /** 读取指定书籍的一页原图或缩略图，不读取整本归档。 */
     public byte[] image(String bookId, int index, boolean thumbnail) throws IOException {
-        // Komga's thumbnail endpoint resizes the longest side to 300px.
+        // Komga 缩略图接口会把最长边缩到 300 像素，适合列表和分页预览。
         // https://komga.org/docs/openapi/get-book-page-thumbnail-by-number/
         return read(bookId, "/pages/" + index + (thumbnail ? "/thumbnail" : ""), MAX_BYTES);
     }
 
+    /** 读取 Komga 生成的封面缩略图。 */
     public byte[] cover(String bookId) throws IOException {
         return read(bookId, "/thumbnail", 4 * 1024 * 1024);
     }
@@ -259,6 +264,7 @@ public class KomgaMediaClient {
         return new Request.Builder().url(url).header("X-API-Key", config.getKomga().getApiKey());
     }
 
+    /** 执行受超时和响应大小限制的 HTTP 请求，把图库权限错误与本系统登录错误分开。 */
     private byte[] execute(Request request, int limit) throws IOException {
         try (Response response = client.newCall(request).execute()) {
             if (!response.isSuccessful()) throw new KomgaHttpException(response.code());
@@ -270,10 +276,14 @@ public class KomgaMediaClient {
         }
     }
 
+    /** 唯一定位到的预览书籍，以及当前可读页数。 */
     public record PreviewBook(String bookId, int pageCount) {}
+    /** 只保留书籍 ID 和物理文件名，不把图库绝对路径带到匹配结果中。 */
     public record LibraryBook(String bookId, List<String> filenames) {}
+    /** 全部分页已校验完成的图库目录，未完整读取时不会创建此结果。 */
     public record LibrarySnapshot(List<LibraryBook> books, int total) {}
 
+    /** 保留 Komga 的响应状态，让调用方区分旧书籍 ID、图库权限和普通连接错误。 */
     public static final class KomgaHttpException extends IOException {
         private final int statusCode;
         public KomgaHttpException(int statusCode) {

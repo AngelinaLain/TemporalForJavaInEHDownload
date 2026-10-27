@@ -21,6 +21,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+/** 统一调用内部 AI 服务，按供应商限制并发，并把模型配置和图片整理成约定的请求格式。 */
 @Service
 public class AiInternalClient {
     private final RestTemplate restTemplate;
@@ -32,6 +33,7 @@ public class AiInternalClient {
         this.cipher = cipher;
     }
 
+    /** 查询指定供应商可用模型，并受该供应商的并发限额约束。 */
     public List<String> models(AiProviderConfigEntity provider) {
         return withPermit(provider, () -> {
             Map<String, Object> request = Map.of(
@@ -46,6 +48,7 @@ public class AiInternalClient {
         });
     }
 
+    /** 把一张采样图片提交给内部向量服务，保留文件名以便识别图片格式。 */
     public VisualEmbedding embed(byte[] image, String filename) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -60,6 +63,7 @@ public class AiInternalClient {
                 new HttpEntity<>(parts, headers), VisualEmbedding.class);
     }
 
+    /** 读取本地向量模型状态，用于界面展示和任务启动前检查。 */
     public Map<String, Object> embeddingStatus() {
         @SuppressWarnings("unchecked")
         Map<String, Object> status = restTemplate.getForObject(
@@ -67,6 +71,7 @@ public class AiInternalClient {
         return status == null ? Map.of() : status;
     }
 
+    /** 整理文本和可选图片，调用指定供应商模型并拒绝空回复。 */
     public String chat(AiProviderConfigEntity provider, String model, String prompt,
                        List<ImagePayload> images) {
         return withPermit(provider, () -> {
@@ -99,6 +104,7 @@ public class AiInternalClient {
         return value == null ? "" : value;
     }
 
+    /** 先申请供应商并发名额，结束后无论成功失败都归还，避免单个服务被请求压满。 */
     private <T> T withPermit(AiProviderConfigEntity provider, Supplier<T> action) {
         int permits = Math.max(1, Math.min(32,
                 provider.getMaxConcurrency() == null ? 2 : provider.getMaxConcurrency()));
@@ -122,6 +128,7 @@ public class AiInternalClient {
                 provider.getRequestTimeoutSeconds() == null ? 120 : provider.getRequestTimeoutSeconds()));
     }
 
+    /** 一张待发送给模型的图片及实际格式，避免请求构造阶段丢失内容类型。 */
     public record ImagePayload(String mimeType, byte[] bytes) {
     }
 }

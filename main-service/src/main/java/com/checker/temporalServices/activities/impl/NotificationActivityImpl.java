@@ -10,9 +10,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 /**
- * 通知 Activity 实现：通过 Spring ApplicationEvent 解耦。
- * 本 Activity 只负责发布 {@link NotificationEvent} 事件（快速返回，不阻塞工作流），
- * 实际邮件发送由 NotificationEventListener 在后台线程池异步消费。
+ * 将工作流通知发布为应用事件；后台监听器负责发邮件，工作流无需等待实际发送。
  */
 @Slf4j
 @Component
@@ -23,6 +21,7 @@ public class NotificationActivityImpl implements NotificationActivity {
     private ApplicationEventPublisher eventPublisher;
 
     @Override
+    /** 发布一条带主题和正文的通知事件，由后台监听器完成邮件发送。 */
     public void sendEmailAlert(String subject, String content) {
         log.info("📢 发布通知事件（异步发送邮件）: {}", subject);
         eventPublisher.publishEvent(new NotificationEvent(this, subject, content));

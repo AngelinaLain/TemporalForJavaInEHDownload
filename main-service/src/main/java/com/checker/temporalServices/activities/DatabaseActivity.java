@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 数据库域 Activity：负责所有对 eh_galleries 表的读写操作
+ * 定义工作流可调用的数据读写操作，包括去重认领、状态更新和运行参数读取。
  */
 @ActivityInterface
 public interface DatabaseActivity {

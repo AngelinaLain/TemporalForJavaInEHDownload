@@ -142,6 +142,7 @@
 </template>
 
 <script setup>
+// 组织标签筛选、关系探索和详情侧栏；高频标签用 SVG，全部标签用画布分页加载。
 import { computed, onMounted, onUnmounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Back, Close, Compass, FolderOpened, FullScreen, Grid, Minus, Plus, Pointer, Refresh, Search, Share, Warning } from '@element-plus/icons-vue'
@@ -261,13 +262,14 @@ function truncate(value, length) { return [...value].length > length ? [...value
 function formatCount(value) { return new Intl.NumberFormat('zh-CN').format(value) }
 function gradientId(name) { return 'tag-color-' + namespaces.value.findIndex(group => group.name === name) }
 function position(name) { return graphLayout.value.positions[name] || { x: 550, y: 370 } }
-// Counteract the viewport scale: zooming in spreads nodes apart while making the circles slightly smaller.
+// 抵消画布放大对圆半径的影响：放大时拉开节点间距，同时让节点略微缩小。
 function radius(node) { return nodeRadius(node.value, maxValue.value) / Math.max(1, fitScale.value) / Math.pow(view.zoom, 1.18) }
 function isDimmed(name) { return !!activeName.value && !activeNames.value.has(name) }
 function edgeActive(edge) { return !!activeName.value && (edge.source === activeName.value || edge.target === activeName.value) }
 function edgeOpacity(edge) { return activeName.value ? edgeActive(edge) ? .72 : .055 : layout.value === 'clusters' ? .15 : .27 }
 function lineWidth(edge) { return Math.min(edgeActive(edge) ? 1.25 : .8, (.3 + Math.log1p(edge.value) * .09) / Math.sqrt(view.zoom)) }
 
+// 高频模式重新计算节点位置；全部模式交给画布处理，避免运行两两力计算。
 function rebuildLayout() {
   if (allMode.value) { fitView(); return }
   graphLayout.value = layoutNetwork(filteredNodes.value, filteredLinks.value, layout.value)
@@ -276,17 +278,20 @@ function rebuildLayout() {
 function changeLayout(value) { if (layout.value !== value) { layout.value = value; rebuildLayout() } }
 function chooseNamespace(value) { namespace.value = value; clearSelection(); rebuildLayout() }
 function showAllNeighborNamespaces() { namespace.value = ''; rebuildLayout() }
+// 选中标签后更新侧栏；全部模式此时才查询该标签的直接关联。
 function selectNode(name) {
   if (!filteredNames.value.has(name)) return
   selectedName.value = name; hoveredName.value = ''; locator.value = ''
   if (allMode.value) loadNeighbors(name)
 }
+// 取消尚未完成的关联查询并清空选择，避免旧标签的连接迟到后重新点亮。
 function clearSelection() {
   neighborController?.abort(); neighborController = null
   neighborPayload.value = { nodes: [], links: [] }; neighborError.value = ''; neighborLoading.value = false; neighborTotal.value = 0; neighborTruncated.value = false
   selectedName.value = ''; hoveredName.value = ''; onlyNeighbors.value = false
 }
 function returnToOverview() { namespace.value = ''; clearSelection(); rebuildLayout() }
+// 计算当前图谱边界并恢复全景，全部模式则调用画布的适配方法。
 function fitView() {
   if (allMode.value) { largeCanvasRef.value?.resetView(); view.zoom = 1; return }
   const circles = layout.value === 'clusters' ? graphLayout.value.clusters : filteredNodes.value.map(node => ({ ...position(node.name), r: nodeRadius(node.value, maxValue.value) + 8 }))
@@ -297,6 +302,7 @@ function fitView() {
   }
   view.x = 0; view.y = 0; view.zoom = 1
 }
+// 将选中节点移到视图中央，方便从侧栏回到画布中的具体位置。
 function focusNode() {
   if (!selected.value) return
   if (allMode.value) { largeCanvasRef.value?.focus(selectedName.value); return }
@@ -310,6 +316,7 @@ function openGallery() {
 }
 function resetQuery() { Object.assign(draft, { keyword: '', limit: 36, minWeight: 2 }); load() }
 
+// 重新读取图谱；全部标签逐页使用同一个快照，并校验总数、游标和去重结果后才替换旧图谱。
 async function load() {
   controller?.abort()
   const request = new AbortController()
@@ -327,6 +334,7 @@ async function load() {
         const response = await api.get('/dashboard/tag-network', { params: { ...params, offset, pageSize: 500, snapshotId: snapshotId || undefined }, signal: request.signal, silent: true })
         if (controller !== request || request.signal.aborted) return
         const page = response.data || {}
+        // 分页期间始终使用同一个目录快照，防止数据重排造成漏项或重复项。
         if (!page.snapshotId || (snapshotId && snapshotId !== page.snapshotId)) throw new Error('标签快照已失效，请重新加载')
         snapshotId = page.snapshotId
         const pageTotal = Number(page.total)
@@ -338,9 +346,10 @@ async function load() {
         const next = Number(page.nextOffset)
         if (!Number.isSafeInteger(next) || next <= offset || next !== rows.length || next > total) throw new Error('标签分页游标无效，请重新加载')
         offset = next
-        // Yield between pages so progress and cancel controls remain responsive.
+        // 每读完一页让浏览器先绘制进度并处理取消操作，避免连续加载阻塞交互。
         await new Promise(resolve => requestAnimationFrame(resolve))
       } while (!request.signal.aborted)
+      // 只有数量与唯一标签数都完整时才替换旧图谱；失败时旧数据仍可继续浏览。
       if (rows.length !== total || new Set(rows.map(node => node.name)).size !== total) throw new Error('标签快照不完整，请重新加载')
       data = { nodes: rows, links: [] }
     } else {
@@ -364,7 +373,9 @@ async function load() {
     if (controller === request) loading.value = false
   }
 }
+// 只取消正在读取的标签目录，保留上一次完整加载的数据供继续浏览。
 function cancelCatalog() { controller?.abort(); controller = null; loading.value = false }
+// 只请求选中标签的有限条关联，切换标签时取消旧请求，避免侧栏数据串位。
 async function loadNeighbors(name) {
   neighborController?.abort()
   const request = new AbortController(); neighborController = request
@@ -381,6 +392,7 @@ async function loadNeighbors(name) {
   } finally { if (neighborController === request) neighborLoading.value = false }
 }
 
+// 将浏览器坐标转为 SVG 内部坐标，保证页面缩放后拖动位置仍准确。
 function localPoint(event) {
   const point = svgRef.value.createSVGPoint()
   point.x = event.clientX
@@ -388,6 +400,7 @@ function localPoint(event) {
   return point.matrixTransform(svgRef.value.getScreenCTM().inverse())
 }
 function worldPoint(point) { return { x: (point.x - viewport.width / 2 - view.x) / worldScale.value + scene.centerX, y: (point.y - viewport.height / 2 - view.y) / worldScale.value + scene.centerY } }
+// 围绕指定屏幕位置缩放，并同步平移，避免滚轮放大时图谱突然跳走。
 function zoomAt(nextZoom, anchor) {
   const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom))
   const ratio = next / view.zoom
@@ -400,6 +413,7 @@ function onWheel(event) {
   const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.height : 1)
   zoomAt(view.zoom * Math.exp(-Math.max(-160, Math.min(160, delta)) * .0025), localPoint(event))
 }
+// 记录点击目标和手势起点，双指输入优先切换成缩放。
 function startGesture(event, name = '', group = '') {
   if (event.button !== 0 || loading.value) return
   const point = localPoint(event)
@@ -415,6 +429,7 @@ function startGesture(event, name = '', group = '') {
   if (pointers.size > 2) return
   gesture = { id: event.pointerId, name, group, start: point, last: point, moved: false }
 }
+// 根据指针数量处理拖动或双指缩放，超过移动阈值后不再当成点击。
 function moveGesture(event) {
   if (!pointers.has(event.pointerId)) return
   const point = localPoint(event)
@@ -443,6 +458,7 @@ function moveGesture(event) {
   }
   gesture.last = point
 }
+// 手势结束后仅对未拖动的指针执行节点或分类选择。
 function endGesture(event) {
   const finished = gesture
   const wasPinching = !!pinch
@@ -456,6 +472,7 @@ function endGesture(event) {
   else if (finished.group) chooseNamespace(finished.group)
   else clearSelection()
 }
+// 指针取消或捕获丢失时重置状态，防止松手后画布仍继续移动。
 function cancelGesture(event) {
   pointers.delete(event.pointerId)
   gesture = null

@@ -3,6 +3,9 @@ package com.checker.dto;
 import lombok.Builder;
 import lombok.Data;
 
+/**
+ * 返回建议加入合集的画廊及推荐理由，包含标题、封面和元数据的匹配分数。
+ */
 @Data
 @Builder
 public class GalleryCollectionCandidate {

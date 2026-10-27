@@ -10,9 +10,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 /**
- * 通知事件监听器：异步消费 {@link NotificationEvent}，在后台线程池执行邮件发送，
- * 使 Temporal 通知 Activity 只负责发布事件、立即返回，降低编排耦合。
- * 若配置了 Redis，同时向 Pub/Sub 频道发布一份，供其他实例/未来消费者扩展。
+ * 在后台消费邮件通知事件并发送邮件，同时在 Redis 可用时发布通知副本。
  */
 @Slf4j
 @Component
@@ -30,6 +28,9 @@ public class NotificationEventListener {
         this.redisTemplate = redisTemplateProvider.getIfAvailable();
     }
 
+    /**
+     * 异步发送事件中的邮件，发送失败记录错误，再尝试向 Redis 发布通知，不阻塞原工作流。
+     */
     @Async("backgroundTaskExecutor")
     @EventListener
     public void onNotification(NotificationEvent event) {
@@ -42,6 +43,9 @@ public class NotificationEventListener {
         publishToRedisIfAvailable(event);
     }
 
+    /**
+     * 仅在 Redis 可用时发布通知副本，发布失败不影响已执行的邮件发送。
+     */
     private void publishToRedisIfAvailable(NotificationEvent event) {
         if (redisTemplate == null) return;
         try {

@@ -1,3 +1,4 @@
+/* 统一管理画廊状态的名称、颜色和旧中文状态兼容规则。 */
 export const STATUS_OPTIONS = Object.freeze([
   { value: 'PENDING', label: '未下载', type: 'info', color: '#909399' },
   { value: 'DOWNLOADING', label: '下载中', type: 'primary', color: '#409EFF' },

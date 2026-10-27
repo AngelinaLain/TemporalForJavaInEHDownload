@@ -22,6 +22,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
+/** 在后台按检查点同步 Komga 标签和元数据，跳过远端内容已一致的记录。 */
 @Slf4j
 @Service
 public class KomgaSyncServiceImpl implements KomgaSyncService {
@@ -47,6 +48,7 @@ public class KomgaSyncServiceImpl implements KomgaSyncService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 把标签同步放到后台执行，避免接口等待全部图库处理。 */
     @Override
     public void startTagSync() {
         backgroundTaskExecutor.execute(this::syncTagsToKomga);
@@ -124,6 +126,7 @@ public class KomgaSyncServiceImpl implements KomgaSyncService {
         return existing.equals(desiredTags);
     }
 
+    /** 后台刷新已关联书籍的元数据，限制同时写入数量，并在成功结束后记录同步时间。 */
     @Override
     public void batchRefreshAllKomgaMetadata() {
         backgroundTaskExecutor.execute(() -> {
@@ -149,6 +152,7 @@ public class KomgaSyncServiceImpl implements KomgaSyncService {
         });
     }
 
+    /** 读取上次已完成的同步位置，用于下一次增量维护。 */
     private Date getCheckpoint(String syncKey) {
         try {
             List<Date> rows = jdbcTemplate.query(
@@ -162,6 +166,7 @@ public class KomgaSyncServiceImpl implements KomgaSyncService {
         }
     }
 
+    /** 保存已完成的位置，避免重启后从头处理未变化记录。 */
     private void saveCheckpoint(String syncKey) {
         try {
             jdbcTemplate.update(

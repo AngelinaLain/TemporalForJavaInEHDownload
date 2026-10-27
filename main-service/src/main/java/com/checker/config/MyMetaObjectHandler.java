@@ -7,12 +7,14 @@ import org.springframework.stereotype.Component;
 import java.util.Date;
 
 /**
- * MyBatis-Plus 字段自动填充：插入时补全 crawled_at / updated_at，更新时补全 updated_at。
- * 与数据库 DEFAULT CURRENT_TIMESTAMP 双保险，保证增量同步的时间戳可靠。
+ * 在数据库新增或更新记录时补齐时间字段，便于按更新时间做增量同步。
  */
 @Component
 public class MyMetaObjectHandler implements MetaObjectHandler {
 
+    /**
+     * 新建记录时填充抓取时间和更新时间，已明确提供的值按框架填充规则保留。
+     */
     @Override
     public void insertFill(MetaObject metaObject) {
         Date now = new Date();
@@ -20,6 +22,9 @@ public class MyMetaObjectHandler implements MetaObjectHandler {
         strictInsertFill(metaObject, "updatedAt", Date.class, now);
     }
 
+    /**
+     * 修改记录时补充更新时间，让后续同步能够识别本次变更。
+     */
     @Override
     public void updateFill(MetaObject metaObject) {
         strictUpdateFill(metaObject, "updatedAt", Date.class, new Date());

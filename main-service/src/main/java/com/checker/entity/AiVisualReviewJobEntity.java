@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存两本画廊进行 AI 视觉复核时的任务进度及配置快照，便于恢复和查询结果。
+ */
 @Data
 @TableName("ai_visual_review_jobs")
 public class AiVisualReviewJobEntity {

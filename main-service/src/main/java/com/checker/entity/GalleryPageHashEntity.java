@@ -7,6 +7,9 @@ import lombok.Data;
 
 import java.util.Date;
 
+/**
+ * 保存画廊抽样页的感知哈希、中心区域哈希和画质信息，避免重复读取归档计算。
+ */
 @Data
 @TableName("eh_gallery_page_hashes")
 public class GalleryPageHashEntity {

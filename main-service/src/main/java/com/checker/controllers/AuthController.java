@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 import java.util.OptionalLong;
 
+/**
+ * 提供登录、退出和修改管理员密码的接口，统一处理认证结果与失败次数限制。
+ */
 @RestController
 @RequestMapping("/api/auth")
 @Tag(name = "认证", description = "登录、登出与访问令牌管理")
@@ -44,6 +47,10 @@ public class AuthController {
         this.tokenBlacklistService = tokenBlacklistService;
     }
 
+    /**
+     * 先检查账号和来源地址的失败次数，再验证密码；成功后签发当前密码版本的令牌。
+     * 账号存储不可用时返回服务错误，密码错误则累计失败次数，避免把临时故障当成有效登录。
+     */
     @PostMapping("/login")
     public Result<Map<String, String>> login(@Valid @RequestBody LoginRequest loginRequest,
                                               HttpServletRequest request) {
@@ -72,6 +79,10 @@ public class AuthController {
         return Result.error(401, "用户名或密码错误");
     }
 
+    /**
+     * 验证当前登录身份和旧密码，再持久保存新密码并要求重新登录。
+     * 改密校验单独计数；旧密码输入错误返回参数错误，避免普通输入错误触发前端退出登录。
+     */
     @PostMapping("/change-password")
     @PreAuthorize("hasRole('ADMIN')")
     public Result<Map<String, Object>> changePassword(@Valid @RequestBody ChangePasswordRequest body,
@@ -100,8 +111,7 @@ public class AuthController {
     }
 
     /**
-     * 注销：将当前 Token 加入黑名单（Redis，降级为本地缓存），使其立即失效，
-     * 直到 Token 自然过期后黑名单条目自动清理。
+     * 把当前有效令牌加入黑名单，保留到自然过期，使退出后的令牌不能继续请求接口。
      */
     @PostMapping("/logout")
     public Result<String> logout(HttpServletRequest request) {
@@ -115,6 +125,9 @@ public class AuthController {
         return Result.error(400, "未携带有效 Token");
     }
 
+    /**
+     * 读取认证头中的令牌，供退出接口判断本次要失效的登录凭据。
+     */
     private String resolveToken(HttpServletRequest request) {
         String bearerToken = request.getHeader("Authorization");
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
@@ -123,6 +136,7 @@ public class AuthController {
         return null;
     }
 
+    /** 接收登录表单；密码不参与自动生成的文本输出。 */
     @Data
     public static class LoginRequest {
         @NotBlank(message = "用户名不能为空")
@@ -134,6 +148,7 @@ public class AuthController {
         private String password;
     }
 
+    /** 接收当前密码、新密码和确认输入，供服务端验证后修改凭据。 */
     @Data
     public static class ChangePasswordRequest {
         @NotBlank(message = "请输入当前密码")

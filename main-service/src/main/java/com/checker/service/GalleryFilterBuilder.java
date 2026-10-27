@@ -10,7 +10,7 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Shared, parameterized predicates for gallery queries and aggregate drilldowns. */
+/** 为画廊列表和统计钻取生成同一套参数化筛选条件，确保两个入口对记录范围的解释一致。 */
 public final class GalleryFilterBuilder {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern KEYWORDS = Pattern.compile("\"([^\"]+)\"|(\\S+)");
@@ -25,6 +25,7 @@ public final class GalleryFilterBuilder {
 
     private GalleryFilterBuilder() {}
 
+    /** 先校验请求字段，再生成带独立参数的 SQL 条件，避免直接拼入用户输入。 */
     public static SqlFilter build(GallerySearchRequest query) {
         List<String> clauses = new ArrayList<>();
         List<Object> args = new ArrayList<>();
@@ -122,6 +123,7 @@ public final class GalleryFilterBuilder {
         return new SqlFilter(clauses.isEmpty() ? "" : " WHERE " + String.join(" AND ", clauses), List.copyOf(args), from, to);
     }
 
+    /** 把界面标签和英文状态统一为查询使用的状态值。 */
     public static String normalizeStatus(String value) {
         if (!notBlank(value)) return null;
         String status = value.trim();
@@ -130,12 +132,14 @@ public final class GalleryFilterBuilder {
                 .orElseThrow(() -> new IllegalArgumentException("不支持的下载状态"));
     }
 
+    /** 生成统计和列表共用的状态转换表达式，让历史中文状态也能按同一维度聚合。 */
     public static String statusCase() {
         StringBuilder sql = new StringBuilder("CASE g.download_status ");
         STATUS_LABELS.forEach((value, label) -> sql.append("WHEN '").append(label).append("' THEN '").append(value).append("' "));
         return sql.append("ELSE COALESCE(NULLIF(g.download_status, ''), 'UNKNOWN') END").toString();
     }
 
+    /** 按日期格式读取筛选值，错误时使用对应字段名给出说明。 */
     public static LocalDate date(String value, String label) {
         if (!notBlank(value)) return null;
         try {
@@ -145,12 +149,14 @@ public final class GalleryFilterBuilder {
         }
         catch (DateTimeParseException failure) { throw new IllegalArgumentException(label + "必须使用 yyyy-MM-dd 格式"); }
     }
+    /** 对枚举筛选使用允许值清单，空值才回到默认值。 */
     public static String option(String value, String fallback, Set<String> options, String label) {
         String selected = notBlank(value) ? value.trim() : fallback;
         if (!options.contains(selected) && options.contains(selected.toLowerCase(Locale.ROOT))) selected = selected.toLowerCase(Locale.ROOT);
         if (!options.contains(selected)) throw new IllegalArgumentException("不支持的" + label);
         return selected;
     }
+    /** 按数量生成参数占位符，实际值由数据库驱动绑定。 */
     public static String placeholders(int count) { return String.join(",", Collections.nCopies(count, "?")); }
     private static boolean notBlank(String value) { return value != null && !value.isBlank(); }
     private static String escapeLike(String value) { return value.replace("=", "==").replace("%", "=%").replace("_", "=_"); }
@@ -163,6 +169,7 @@ public final class GalleryFilterBuilder {
         if (min != null) add(clauses, args, column + " >= ?", min);
         if (max != null) add(clauses, args, column + " <= ?", max);
     }
+    /** 解析请求中的标签数组，保留标签名称自身包含的逗号。 */
     private static List<String> readTags(String value) {
         if (!notBlank(value)) return List.of();
         try {
@@ -178,9 +185,11 @@ public final class GalleryFilterBuilder {
         } catch (IllegalArgumentException failure) { throw failure; }
         catch (Exception failure) { throw new IllegalArgumentException("标签必须是 JSON 字符串数组"); }
     }
+    /** 限制标签数量和长度，防止异常大的条件拖慢查询。 */
     private static void validateTags(Collection<String> tags) {
         if (tags.size() > 30 || tags.stream().anyMatch(tag -> tag.length() > 200)) throw new IllegalArgumentException("最多支持 30 个标签，单个标签最多 200 字符");
     }
+    /** 把统计分桶还原为与图表相同的边界条件，防止点击统计后重复或遗漏记录。 */
     private static void addBucket(List<String> clauses, String value, Map<String, String> options, String label) {
         if (!notBlank(value)) return;
         String predicate = options.get(value);
@@ -188,5 +197,6 @@ public final class GalleryFilterBuilder {
         clauses.add("(" + predicate + ")");
     }
 
+    /** 保存筛选条件、独立参数及日期范围，供列表与聚合查询复用。 */
     public record SqlFilter(String where, List<Object> args, LocalDate from, LocalDate to) {}
 }

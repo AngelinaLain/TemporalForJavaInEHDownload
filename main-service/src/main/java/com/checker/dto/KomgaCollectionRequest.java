@@ -5,7 +5,7 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * Komga 合集Dto
+ * 接收按标签建立 Komga 合集的条件，指定合集名称，以及标签按任意命中还是全部命中。
  */
 @Data
 public class KomgaCollectionRequest {

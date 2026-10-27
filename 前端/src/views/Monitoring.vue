@@ -38,6 +38,7 @@
 </template>
 
 <script setup>
+// 在系统内嵌入指标、日志和链路监控页面，并保留独立打开入口。
 import PageHeading from '../components/PageHeading.vue'
 import { ref, h } from 'vue'
 import { ElButton, ElSpace } from 'element-plus'

@@ -125,6 +125,7 @@
 </template>
 
 <script setup>
+// 展示重复画廊候选及比较证据，提交人工判断或启动 AI 视觉复核。
 import PageHeading from '../components/PageHeading.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -140,6 +141,7 @@ const pendingCount = ref(0)
 const filters = reactive({ decision: 'PENDING' })
 const pagination = reactive({ page: 1, size: 10, total: 0 })
 
+// 读取当前审核页和待处理数量，完成后结束首次加载占位。
 const loadData = async () => {
   loading.value = true
   try {
@@ -159,6 +161,7 @@ const loadData = async () => {
   }
 }
 
+// 整理一条审核记录的左右候选，供比较卡共用。
 const reviewCandidates = item => [
   { label: '左侧版本', gallery: item.left },
   { label: '右侧版本', gallery: item.right }
@@ -176,6 +179,7 @@ const confirmRecommended = item => {
   return resolveReview(item, 'MATCH', gallery?.gid, `确认系统推荐 GID ${gallery?.gid}`)
 }
 
+// 提交人工的同作、不同或版本判断，再刷新审核列表。
 const resolveReview = async (item, decision, preferredGid, actionLabel) => {
   if (decision === 'MATCH' && !preferredGid) return
   try {
@@ -198,6 +202,7 @@ const resolveReview = async (item, decision, preferredGid, actionLabel) => {
   }
 }
 
+// 将当前候选交给后台 AI 视觉复核，人工审核关系仍由用户决定。
 const startAiReview = async item => {
   aiReviewId.value = item.id
   try {

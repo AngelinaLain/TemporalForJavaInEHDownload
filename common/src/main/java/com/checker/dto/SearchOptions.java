@@ -11,8 +11,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * EHentai 搜索选项（对标 JHenTai SearchConfig）
- * 包装所有搜索参数，通过单一对象传递给 Workflow/Activity
+ * 把关键词、标签分类、评分、页数和指定画廊链接等采集条件一起传给工作流和爬虫。
  */
 @Data
 @Builder

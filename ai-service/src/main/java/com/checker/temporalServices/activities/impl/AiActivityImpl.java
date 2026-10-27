@@ -15,10 +15,8 @@ import org.springframework.web.client.RestClientException;
 import java.util.List;
 
 /**
- * AI 推理的 Temporal Worker。
- *
- * <p>它必须运行在 eh-ai-service：该服务拥有模型/GPU 端点配置。main-service 仅创建
- * Activity Stub，因此 GPU 节点的运行时异常和重试日志会归属到本服务。</p>
+ * 执行任务队列中的 AI 摘要生成工作。
+ * 本类运行在拥有模型配置的 AI 服务中，主服务只负责派发任务；连接失败由任务引擎重试。
  */
 @Slf4j
 @Component
@@ -34,6 +32,7 @@ public class AiActivityImpl implements AiActivity {
         this.chatClient = chatClient;
     }
 
+    /** 整理缺失的标题和标签后请求摘要，将网络故障转换成任务引擎可识别的失败原因。 */
     @Override
     public String generateGallerySummary(String title, List<String> tags) {
         String prompt = "你是一个专门为漫画编写剧情概要的助手。请为画廊生成150字左右的中文简介。标题: {title}, 标签: {tags}";

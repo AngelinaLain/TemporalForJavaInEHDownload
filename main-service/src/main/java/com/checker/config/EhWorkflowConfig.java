@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * 工作流运行时配置：轮询间隔、并发度、重试次数等可在 application.yaml 中调整，无需重新编译
+ * 读取下载流程的并发、轮询、重试和下载模式设置，再由活动传给工作流使用。
  */
 @Data
 @Component

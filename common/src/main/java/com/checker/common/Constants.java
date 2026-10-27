@@ -1,7 +1,7 @@
 package com.checker.common;
 
 /**
- * 全局常量类：集中管理魔术字符串，防止分散硬编码导致拼写错误
+ * 集中保存跨服务共用的任务队列名称和源站接口地址，保证工作流与执行节点使用同一约定。
  */
 public final class Constants {
 

@@ -15,6 +15,7 @@
 </template>
 
 <script setup>
+// 校验登录表单并取得登录凭据，成功后进入管理系统。
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowRight, Collection, Lock, User } from '@element-plus/icons-vue'
@@ -24,6 +25,7 @@ import api from '../api'
 const router = useRouter(), formRef = ref(), loading = ref(false)
 const form = reactive({ username: '', password: '' })
 const rules = { username: [{ required: true, message: '请输入用户名', trigger: 'blur' }], password: [{ required: true, message: '请输入密码', trigger: 'blur' }] }
+// 先校验必填项，再保存服务端签发的凭据并进入首页；请求期间禁止重复提交。
 async function handleLogin() {
   if (loading.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -37,7 +39,7 @@ async function handleLogin() {
     ElMessage.success('登录成功')
     router.replace('/dashboard')
   } catch {
-    // Validation/authentication feedback is handled by the API interceptor.
+    // 表单与登录错误已由组件或统一接口处理显示，这里只恢复按钮状态。
   } finally { loading.value = false }
 }
 </script>

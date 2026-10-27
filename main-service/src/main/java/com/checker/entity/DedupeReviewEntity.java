@@ -10,6 +10,9 @@ import lombok.Data;
 import java.io.Serializable;
 import java.util.Date;
 
+/**
+ * 保存两条疑似重复画廊的比较证据和人工结论，记录最终保留哪个版本。
+ */
 @Data
 @TableName("eh_dedupe_reviews")
 public class DedupeReviewEntity implements Serializable {

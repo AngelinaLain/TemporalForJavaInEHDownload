@@ -10,6 +10,7 @@
 </template>
 
 <script setup>
+// 统一页面标题、简介和操作区的布局，兼容大字号与窄屏换行。
 defineProps({ title: { type: String, required: true }, eyebrow: { type: String, default: '' }, description: { type: String, default: '' } })
 </script>
 

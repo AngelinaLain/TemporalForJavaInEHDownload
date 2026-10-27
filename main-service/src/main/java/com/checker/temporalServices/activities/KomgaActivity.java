@@ -5,7 +5,7 @@ import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 /**
- * Komga 域 Activity：负责 Komga 图书馆扫描与元数据管理
+ * 定义元数据补全、Komga 书籍确认、元数据推送和图库扫描操作。
  */
 @ActivityInterface
 public interface KomgaActivity {

@@ -150,6 +150,7 @@
 </template>
 
 <script setup>
+// 查看已有归档扫描与匹配进度，人工确认归档、封面匹配或重新下载。
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -175,11 +176,13 @@ const coverPercent = computed(() => scanStatus.coverTotal
   ? Math.min(100, Math.round((scanStatus.coverProcessed || 0) * 100 / scanStatus.coverTotal))
   : 0)
 
+// 读取归档扫描和封面匹配的后台进度。
 const loadStatus = async () => {
   const res = await api.get('/archive-sync/status')
   Object.assign(scanStatus, res.data || {})
 }
 
+// 按当前页和筛选读取待核查归档，不一次加载所有记录。
 const loadReviews = async () => {
   loading.value = true
   try {
@@ -198,6 +201,7 @@ const loadReviews = async () => {
   }
 }
 
+// 启动现有归档目录扫描，并在启动后更新任务状态。
 const startScan = async () => {
   await api.post('/archive-sync/scan')
   ElMessage.success('群晖归档扫描已启动')
@@ -205,12 +209,14 @@ const startScan = async () => {
   await loadStatus()
 }
 
+// 将指定记录交给后台封面匹配，不在浏览器中下载和比较整本归档。
 const startCoverMatch = async (gids, label) => {
   await api.post('/archive-sync/cover-match', { gids })
   ElMessage.success(`${label}封面比对已启动`)
   await loadStatus()
 }
 
+// 说明批量封面匹配的影响后启动任务。
 const startAllCoverMatch = async () => {
   try {
     await ElMessageBox.confirm(
@@ -227,6 +233,7 @@ const reloadFromFirstPage = () => {
   void loadReviews()
 }
 
+// 根据用户选定候选同步归档关系，完成后刷新列表与进度。
 const synchronize = async item => {
   const filename = drafts[item.gid]?.trim()
   if (!filename) return
@@ -249,6 +256,7 @@ const synchronize = async item => {
   }
 }
 
+// 确认重新下载请求，交给后台执行并更新列表状态。
 const redownload = async item => {
   try {
     await ElMessageBox.confirm(
@@ -295,6 +303,7 @@ const statusType = value => ({
   COMPLETED: 'success', REDOWNLOAD_STARTING: 'primary', REDOWNLOAD_STARTED: 'primary'
 }[value] || 'info')
 
+// 定时更新后台状态；任务进行中同时刷新核查结果，失败提示交给统一接口处理。
 const poll = async () => {
   try {
     const wasRunning = scanStatus.running
@@ -304,7 +313,7 @@ const poll = async () => {
       await loadReviews()
     }
   } catch {
-    // Global interceptor already reports actionable failures.
+    // 统一接口处理已显示失败原因；本次轮询失败后等待下一次更新。
   }
 }
 

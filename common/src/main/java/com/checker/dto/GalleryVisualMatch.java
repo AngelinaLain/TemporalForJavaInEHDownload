@@ -7,7 +7,9 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 
-/** Explainable gallery-level result produced by monotonic page-hash alignment. */
+/**
+ * 返回两本画廊的页面匹配分数、覆盖率和推荐版本，并附上可供人工理解的判断理由。
+ */
 @Data
 @Builder
 @NoArgsConstructor

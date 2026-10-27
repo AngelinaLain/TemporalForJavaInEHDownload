@@ -4,8 +4,7 @@ import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 /**
- * 本地导入 Activity：本地下载 EHentai 归档 → 注入 ComicInfo.xml → 上传群晖 Komga 库目录。
- * 超时/心跳策略由工作流侧 ActivityOptions（WorkflowSteps.LOCAL_IMPORT_OPTIONS）指定。
+ * 定义本地归档下载、写入阅读元数据并发布到目标图库的后台操作。
  */
 @ActivityInterface
 public interface LocalImportActivity {
@@ -15,7 +14,7 @@ public interface LocalImportActivity {
      *
      * @param downloadUrl EHentai 归档直链
      * @param gid         画廊 ID（用于加载标题/标签/简介等元数据）
-     * @param sizeMb      预估文件大小（仅日志用）
+     * @param sizeMb      预估文件大小，用于日志和进度说明
      */
     @ActivityMethod
     void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb);

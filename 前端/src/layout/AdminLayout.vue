@@ -38,6 +38,7 @@
 </template>
 
 <script setup>
+// 管理系统的导航与页面容器，提供移动端菜单、显示设置和账户操作入口。
 import { computed, markRaw, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, Collection, Connection, DataAnalysis, Expand, Finished, Fold, FolderChecked, List, Lock, Monitor, Operation, Picture, Refresh, Setting, Share, SwitchButton } from '@element-plus/icons-vue'
@@ -58,15 +59,18 @@ const navigation = [
   { label: '自动化与系统', items: [item('/operations', '工作流操作', Operation), item('/workflows', '流程监控', Connection), item('/monitoring', '监控大盘', Monitor), item('/ai-settings', 'AI 设置', Setting)] }
 ]
 let mediaQuery
+// 根据屏幕宽度切换侧栏模式，并收起可能残留的移动端抽屉。
 function checkScreen() { isMobile.value = mediaQuery.matches; mobileOpen.value = false }
 function toggleNavigation() { if (isMobile.value) mobileOpen.value = !mobileOpen.value; else isCollapse.value = !isCollapse.value }
+// 从统一入口打开显示或密码设置，同时收起移动导航。
 function openPreferences(tab) { preferencesTab.value = tab; preferencesVisible.value = true; mobileOpen.value = false }
+// 处理账户菜单；退出时通知服务端注销，再清除本地会话。
 async function handleCommand(command) {
   if (command === 'appearance' || command === 'password') return openPreferences(command)
   if (command !== 'logout' || loggingOut.value) return
   loggingOut.value = true
   try { await api.post('/auth/logout', null, { silent: true, timeout: 5000 }) }
-  catch { /* Clear the local session even if the logout endpoint is temporarily unreachable. */ }
+  catch { /* 退出接口暂不可达时也清除本地凭据，完成用户要求的退出操作。 */ }
   finally {
     localStorage.removeItem('token')
     localStorage.removeItem('username')
@@ -74,6 +78,7 @@ async function handleCommand(command) {
     router.replace('/login')
   }
 }
+// 其他标签页修改字号时同步恢复，让同一浏览器内的页面保持一致。
 function onStorage(event) { if (event.key === 'gallery-ui-preferences-v1') preferences.restore() }
 onMounted(() => {
   mediaQuery = window.matchMedia('(max-width: 900px)')

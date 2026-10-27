@@ -1,3 +1,4 @@
+/* 集中定义页面地址和菜单信息；没有登录凭据时引导用户登录。 */
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [

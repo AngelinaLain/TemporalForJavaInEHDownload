@@ -1,10 +1,15 @@
 package com.checker.common;
 
-/** Numerical helpers shared by the visual review pipeline. */
+/**
+ * 为视觉复核计算两组图片特征向量的相似程度，并排除无效向量。
+ */
 public final class VectorSimilarity {
     private VectorSimilarity() {
     }
 
+    /**
+     * 校验向量维度和数值后计算余弦相似度，零向量不能比较，结果限制在合法范围以消除浮点误差。
+     */
     public static double cosine(float[] left, float[] right) {
         if (left == null || right == null || left.length == 0 || left.length != right.length) {
             throw new IllegalArgumentException("向量不能为空且维度必须一致");

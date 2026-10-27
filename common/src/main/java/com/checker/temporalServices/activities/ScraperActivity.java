@@ -12,13 +12,13 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 爬虫域 Activity：负责从 EHentai 检索/抓取数据
+ * 定义爬虫节点提供的搜索、画廊详情、下载地址与预览指纹采集任务。
  */
 @ActivityInterface
 public interface ScraperActivity {
 
     /**
-     * 根据搜索条件抓取画廊列表（最多 10 页）
+     * 根据搜索条件抓取画廊列表，供兼容旧工作流的调用使用。
      */
     @ActivityMethod
     List<EhGalleriesEntity> scrapeGalleries(SearchOptions searchOptions);

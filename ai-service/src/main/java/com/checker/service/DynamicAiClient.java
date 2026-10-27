@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.time.Duration;
 
+/** 根据每次请求的供应商配置调用兼容接口，支持纯文字和少量图片输入。 */
 @Service
 public class DynamicAiClient {
     private static final int MAX_IMAGES = 8;
@@ -24,6 +25,7 @@ public class DynamicAiClient {
         this.restClientBuilder = restClientBuilder;
     }
 
+    /** 读取目标服务的模型列表，去掉空项和重复项后排序返回。 */
     public List<String> models(String baseUrl, String apiKey, Integer timeoutSeconds) {
         @SuppressWarnings("unchecked")
         Map<String, Object> response = request(baseUrl, apiKey, timeoutSeconds).get()
@@ -39,6 +41,7 @@ public class DynamicAiClient {
                 .distinct().sorted().toList();
     }
 
+    /** 校验模型和提示词，组装聊天请求，并提取模型返回的正文。 */
     public String chat(DynamicAiRequest input) {
         if (input == null || input.model() == null || input.model().isBlank()) {
             throw new IllegalArgumentException("模型名称不能为空");
@@ -60,6 +63,7 @@ public class DynamicAiClient {
         return extractContent(response);
     }
 
+    /** 没有图片时直接发送文字；有图片时限制数量和大小，再组装文字与图片内容。 */
     private Object content(DynamicAiRequest input) {
         List<DynamicAiRequest.ImageInput> images = input.images() == null ? List.of() : input.images();
         if (images.isEmpty()) return input.prompt();
@@ -78,6 +82,7 @@ public class DynamicAiClient {
         return parts;
     }
 
+    /** 每次复制独立的请求配置，设置超时和凭据，避免不同供应商之间互相污染。 */
     private RestClient request(String baseUrl, String apiKey, Integer timeoutSeconds) {
         validateBaseUrl(baseUrl);
         int seconds = Math.max(5, Math.min(600, timeoutSeconds == null ? 120 : timeoutSeconds));
@@ -91,6 +96,7 @@ public class DynamicAiClient {
         return builder.build();
     }
 
+    /** 统一处理末尾斜杠和版本路径，再拼接具体接口地址。 */
     private static URI endpoint(String baseUrl, String resource) {
         validateBaseUrl(baseUrl);
         String normalized = baseUrl.trim().replaceAll("/+$", "");
@@ -98,6 +104,7 @@ public class DynamicAiClient {
         return URI.create(normalized + "/" + resource);
     }
 
+    /** 只接受带主机名的 HTTP 地址，并拒绝把用户名或密码直接放在地址中。 */
     private static void validateBaseUrl(String value) {
         if (value == null || value.isBlank()) throw new IllegalArgumentException("Base URL 不能为空");
         URI uri = URI.create(value.trim());
@@ -107,6 +114,7 @@ public class DynamicAiClient {
         }
     }
 
+    /** 检查聊天响应的层级并读取首个结果正文，缺失或空正文时明确报错。 */
     private static String extractContent(Map<String, Object> response) {
         if (response == null || !(response.get("choices") instanceof List<?> choices) || choices.isEmpty()) {
             throw new IllegalStateException("模型没有返回 choices");

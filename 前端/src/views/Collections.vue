@@ -114,6 +114,7 @@
 </template>
 
 <script setup>
+// 管理合集与成员，提供候选建议、人工归组和向 Komga 同步系列的操作。
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, Plus, Search } from '@element-plus/icons-vue'
 import { ElButton, ElEmpty, ElMessage, ElMessageBox, ElTag, ElTooltip } from 'element-plus'
@@ -174,11 +175,13 @@ const syncPercent = computed(() => syncStatus.total ? Math.min(100, Math.round(s
 const selected = computed(() => collections.value.find(item => item.id === selectedId.value))
 let syncTimer
 
+// 读取系列同步任务进度，供页面状态卡和运行中轮询共用。
 async function loadSyncStatus() {
   const res = await api.get('/collections/komga-series-sync/status')
   Object.assign(syncStatus, res.data || {})
 }
 
+// 启动已归组合集向 Komga 系列的同步，并显示后台进度。
 async function startKomgaSync() {
   try {
     await ElMessageBox.confirm(
@@ -192,6 +195,7 @@ async function startKomgaSync() {
   await loadSyncStatus()
 }
 
+// 重新载入合集，并尽量保留用户当前选择。
 async function loadCollections(preferredId) {
   loadingCollections.value = true
   try {
@@ -203,6 +207,7 @@ async function loadCollections(preferredId) {
   } finally { loadingCollections.value = false }
 }
 
+// 切换当前合集后读取成员，清除上一合集的候选状态。
 async function selectCollection(id) {
   selectedId.value = id
   activeTab.value = 'members'
@@ -211,6 +216,7 @@ async function selectCollection(id) {
   await loadMembers()
 }
 
+// 读取选中合集成员及相关信息，不在合集未选中时请求。
 async function loadMembers() {
   if (!selectedId.value) return
   loadingDetail.value = true
@@ -227,6 +233,7 @@ function openEditor(item) {
   editorVisible.value = true
 }
 
+// 校验并保存合集信息，完成后重新选中保存的合集。
 async function saveCollection() {
   if (!form.name.trim()) return ElMessage.warning('请输入合集名称')
   saving.value = true
@@ -242,6 +249,7 @@ async function saveCollection() {
   } finally { saving.value = false }
 }
 
+// 经用户确认后删除当前合集，再刷新合集和成员列表。
 async function deleteCollection() {
   await api.delete(`/collections/${selectedId.value}`)
   selectedId.value = null
@@ -251,6 +259,7 @@ async function deleteCollection() {
   ElMessage.success('合集已删除，画廊未受影响')
 }
 
+// 将候选或手工检索结果加入合集，并记录其来源以便后续区分。
 async function add(row, source) {
   await api.post(`/collections/${selectedId.value}/items`, { gids: [row.gid], source })
   await Promise.all([loadMembers(), loadCollections(selectedId.value)])
@@ -262,12 +271,14 @@ async function add(row, source) {
 const addSuggested = row => add(row, 'SUGGESTED')
 const addManual = row => add(row, 'MANUAL')
 
+// 从当前合集移除成员，并刷新相关列表。
 async function removeGallery(row) {
   await api.delete(`/collections/${selectedId.value}/items/${row.gid}`)
   await Promise.all([loadMembers(), loadCollections(selectedId.value)])
   ElMessage.success('已移出合集')
 }
 
+// 按当前合集获取归组建议，不直接替用户决定成员关系。
 async function loadSuggestions() {
   if (!selectedId.value) return
   loadingSuggestions.value = true
@@ -277,6 +288,7 @@ async function loadSuggestions() {
   } finally { loadingSuggestions.value = false }
 }
 
+// 检索可供人工加入合集的画廊。
 async function searchGalleries() {
   searching.value = true
   try {

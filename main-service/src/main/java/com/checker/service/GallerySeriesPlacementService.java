@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 
+/** 根据本地合集关系计算书籍在 Komga 中的系列名称、相对目录和排序编号。 */
 @Service
 public class GallerySeriesPlacementService {
     private final JdbcTemplate jdbcTemplate;
@@ -14,6 +15,7 @@ public class GallerySeriesPlacementService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    /** 读取画廊的合集关系，计算目标系列目录、编号及用于判断是否需要同步的签名。 */
     public SeriesPlacement resolve(Long gid) {
         List<SeriesPlacement> rows = jdbcTemplate.query("""
                 SELECT c.id, c.name, i.sort_order
@@ -29,6 +31,7 @@ public class GallerySeriesPlacementService {
                 : rows.get(0);
     }
 
+    /** 拒绝路径分隔符、越界名称和不兼容字符，使合集名称可安全用作单个目录名。 */
     public static String safeDirectory(String name) {
         if (name == null || name.isBlank()) throw new IllegalArgumentException("合集名称不能为空");
         String value = name.trim();
@@ -40,6 +43,7 @@ public class GallerySeriesPlacementService {
         return value;
     }
 
+    /** 记录一次系列定位结果；签名用来识别合集名称、顺序或成员关系是否变化。 */
     public record SeriesPlacement(Long collectionId, String seriesName, String relativeDirectory,
                                   Integer number, String signature) {
     }

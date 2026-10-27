@@ -105,6 +105,7 @@
 </template>
 
 <script setup>
+// 管理视觉指纹补全与失败重试，并查看两部画廊的 AI 视觉复核结果。
 import PageHeading from '../components/PageHeading.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -144,6 +145,7 @@ const reviewTag = computed(() => ({
 }[reviewState.job?.status] || { label: reviewState.job?.status || '-', type: 'info' }))
 
 let timer
+// 读取指纹版本、后台任务和失败记录，供进度区及重试选择使用。
 const loadStatus = async () => {
   loading.value = true
   try {
@@ -154,6 +156,7 @@ const loadStatus = async () => {
   }
 }
 
+// 启动缺失指纹补全或全量重算，然后重新读取后台状态。
 const startRefresh = async force => {
   loading.value = true
   try {
@@ -165,6 +168,7 @@ const startRefresh = async force => {
   }
 }
 
+// 全量重算会覆盖现有指纹，先说明影响并取得用户确认。
 const confirmForceRefresh = async () => {
   try {
     await ElMessageBox.confirm('将重新读取所有已有画廊归档并覆盖当前版本指纹，是否继续？', '确认全量重算', {
@@ -176,6 +180,7 @@ const confirmForceRefresh = async () => {
   await startRefresh(true)
 }
 
+// 只提交用户选中的失败 GID，避免重复处理全部画廊。
 const retrySelected = async () => {
   const gids = selectedFailures.value.map(failure => failure.gid)
   if (!gids.length) return
@@ -190,6 +195,7 @@ const retrySelected = async () => {
   }
 }
 
+// 校验两侧 GID 后启动复核，并保存任务 ID 以便刷新页面后继续查看。
 const startAiReview = async () => {
   if (!reviewForm.leftGid || !reviewForm.rightGid) return ElMessage.warning('请输入两个画廊 GID')
   reviewLoading.value = true
@@ -200,6 +206,7 @@ const startAiReview = async () => {
     await loadAiReview(response.data.jobId)
   } finally { reviewLoading.value = false }
 }
+// 按任务 ID 读取 AI 复核进度和证据。
 const loadAiReview = async id => {
   if (!id) return
   const response = await api.get(`/visual-dedup/ai-review/${id}`)

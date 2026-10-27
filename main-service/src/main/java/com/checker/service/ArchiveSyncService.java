@@ -46,6 +46,7 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
+/** 扫描群晖归档与数据库的差异，生成待审核候选，并执行改名、元数据修复或重新下载补偿。 */
 @Service
 public class ArchiveSyncService {
     private static final Pattern LEADING_GID = Pattern.compile("^\\[(\\d+)](?:\\s|$)");
@@ -100,6 +101,7 @@ public class ArchiveSyncService {
         this.executor = executor;
     }
 
+    /** 启动差异扫描；与封面比对和文件修复互斥，避免扫描到操作中的半成品。 */
     public synchronized Map<String, Object> startScan() {
         if (!scanning.compareAndSet(false, true)) {
             throw new IllegalStateException("已有群晖归档同步扫描正在运行");
@@ -126,6 +128,7 @@ public class ArchiveSyncService {
         return scanStatus();
     }
 
+    /** 汇总扫描、封面比对和当前修复数量，供界面轮询任务进度。 */
     public Map<String, Object> scanStatus() {
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("running", scanning.get());
@@ -147,6 +150,7 @@ public class ArchiveSyncService {
         return status;
     }
 
+    /** 比较数据库文件名与归档目录，为无法直接确认的记录保存可人工选择的候选。 */
     private void scan() {
         try {
             List<String> archives = archiveReader.listArchives().stream()
@@ -195,6 +199,7 @@ public class ArchiveSyncService {
         }
     }
 
+    /** 先校验用户选中的归档，再认领审核记录并启动后台修复，避免重复操作同一文件。 */
     public synchronized ArchiveSyncReviewEntity synchronize(Long gid, String requestedFilename) {
         if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再处理");
         if (coverMatching.get()) throw new IllegalStateException("封面比对进行中，请等待完成后再处理");
@@ -235,6 +240,7 @@ public class ArchiveSyncService {
         return reviewMapper.selectById(gid);
     }
 
+    /** 为已选归档补齐内容说明和规范名称，成功发布后更新画廊与审核记录。 */
     private void repairArchive(Long gid, String actualFilename) {
         Path local = null;
         try {
@@ -281,12 +287,13 @@ public class ArchiveSyncService {
                     Files.deleteIfExists(local);
                     Files.deleteIfExists(local.resolveSibling(local.getFileName() + ".inject.tmp"));
                 } catch (IOException ignored) {
-                    // Temporary files are safe to clean up on the next OS maintenance pass.
+                // 临时文件清理失败不影响已完成的修复，后续维护时仍可清理残留。
                 }
             }
         }
     }
 
+    /** 保存已启动的重下工作流标识，让审核页面能说明记录当前交给谁处理。 */
     public void markRedownloadStarted(Long gid, String workflowId) {
         requireReview(gid);
         ArchiveSyncReviewEntity update = new ArchiveSyncReviewEntity();
@@ -296,6 +303,7 @@ public class ArchiveSyncService {
         reviewMapper.updateById(update);
     }
 
+    /** 用状态条件原子认领重下记录，防止多次点击或并发任务同时启动同一画廊。 */
     public synchronized ArchiveSyncReviewEntity claimRedownload(Long gid) {
         if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再处理");
         if (coverMatching.get()) throw new IllegalStateException("封面比对进行中，请等待完成后再处理");
@@ -309,6 +317,7 @@ public class ArchiveSyncService {
         return review;
     }
 
+    /** 重下任务未能启动时恢复失败说明，允许之后重新操作。 */
     public void markRedownloadFailed(Long gid, Throwable failure) {
         ArchiveSyncReviewEntity update = new ArchiveSyncReviewEntity();
         update.setGid(gid);
@@ -317,12 +326,14 @@ public class ArchiveSyncService {
         reviewMapper.updateById(update);
     }
 
+    /** 读取必须存在的同步审核记录，避免对未扫描的画廊直接修复文件。 */
     public ArchiveSyncReviewEntity requireReview(Long gid) {
         ArchiveSyncReviewEntity review = gid == null ? null : reviewMapper.selectById(gid);
         if (review == null) throw new IllegalArgumentException("同步审核记录不存在，请先重新扫描");
         return review;
     }
 
+    /** 建立数据库文件名到 GID 的归属表，避免把其他记录已有的文件误当作候选。 */
     public Map<String, Long> databaseFilenameOwners() {
         QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
         query.select("gid", "filename").isNotNull("filename").ne("filename", "");
@@ -333,6 +344,7 @@ public class ArchiveSyncService {
         return owners;
     }
 
+    /** 为尚未确认的归档候选启动封面比对，与扫描和文件修复互斥。 */
     public synchronized Map<String, Object> startCoverMatch(List<Long> gids) {
         if (scanning.get()) throw new IllegalStateException("扫描进行中，请等待扫描完成后再比对封面");
         if (!activeRepairs.isEmpty()) throw new IllegalStateException("仍有归档正在同步，请等待完成后再比对封面");
@@ -360,6 +372,7 @@ public class ArchiveSyncService {
         return scanStatus();
     }
 
+    /** 复用同一个归档访问会话逐条比对封面，单条失败只影响该记录的结果。 */
     private void runCoverMatch(List<Long> gids) {
         try (SynologyArchiveReader.ArchiveSession session = archiveReader.openSession()) {
             for (Long gid : gids) {
@@ -386,6 +399,7 @@ public class ArchiveSyncService {
         }
     }
 
+    /** 比较源封面与候选归档封面，只在分数和领先差距都足够时给出明确推荐。 */
     private void matchCovers(Long gid, SynologyArchiveReader.ArchiveSession session) throws Exception {
         ArchiveSyncReviewEntity review = requireReview(gid);
         EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
@@ -481,7 +495,7 @@ public class ArchiveSyncService {
         try {
             if (!document.baseUri().isBlank()) resolved = URI.create(document.baseUri()).resolve(resolved).toString();
         } catch (IllegalArgumentException ignored) {
-            // Keep the original absolute value; the network client will report malformed URLs clearly.
+            // 地址无法规范化时保留原值，由网络客户端给出具体的地址错误。
         }
         if (resolved.startsWith("http://") || resolved.startsWith("https://")) urls.add(resolved);
     }
@@ -606,7 +620,7 @@ public class ArchiveSyncService {
             archiveReader.rename(source, target);
             return;
         }
-        // Case-insensitive SMB shares may treat a case-only rename as an existing target.
+        // SMB 共享可能不区分大小写，仅改变大小写时先用中间名，避免被当作目标已存在。
         String temporary = ".archive-sync-" + gid + "-" + UUID.randomUUID() + ".cbz";
         archiveReader.rename(source, temporary);
         try {
@@ -668,7 +682,7 @@ public class ArchiveSyncService {
                 try {
                     archiveGids.add(Long.parseLong(matcher.group(1)));
                 } catch (NumberFormatException ignored) {
-                    // An out-of-range filename prefix cannot represent a database GID.
+            // 超出整数范围的文件名前缀不能作为数据库中的 GID。
                 }
             }
         }

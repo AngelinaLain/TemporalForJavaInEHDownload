@@ -21,12 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Temporal 流程监控接口：
- * <ul>
- *   <li>{@code GET /workflows}：主流程 + 子流程树；</li>
- *   <li>{@code GET /workflows/{id}/history}：流程历史事件（即运行日志）；</li>
- *   <li>{@code POST /workflows/{id}/terminate}：终止流程。</li>
- * </ul>
+ * 查询工作流执行树和事件历史，并提供人工终止流程的管理入口。
  */
 @RestController
 @RequestMapping("/api/temporal/monitor")
@@ -40,6 +35,9 @@ public class TemporalMonitorController {
     @Autowired
     private WorkflowClient workflowClient;
 
+    /**
+     * 读取工作流运行信息并按父子关系整理成树，方便查看整批采集及其子任务。
+     */
     @GetMapping("/workflows")
     public Result<List<Map<String, Object>>> listWorkflows() {
         List<WorkflowExecutionMetadata> metas;
@@ -90,6 +88,9 @@ public class TemporalMonitorController {
         return Result.success(roots);
     }
 
+    /**
+     * 按同一规则递归排列父子节点，让流程监控中的顺序稳定。
+     */
     private static void sortTree(List<Map<String, Object>> nodes, Comparator<Map<String, Object>> comparator) {
         for (Map<String, Object> node : nodes) {
             @SuppressWarnings("unchecked")
@@ -99,6 +100,9 @@ public class TemporalMonitorController {
         }
     }
 
+    /**
+     * 读取指定工作流的完整事件历史，并整理成页面可读的事件描述。
+     */
     @GetMapping("/workflows/{workflowId}/history")
     public Result<List<Map<String, Object>>> getHistory(@PathVariable String workflowId,
                                                         @RequestParam(required = false) String runId) {
@@ -120,6 +124,9 @@ public class TemporalMonitorController {
         }
     }
 
+    /**
+     * 根据用户提供的原因终止指定工作流，供人工处理卡住或不再需要的任务。
+     */
     @PostMapping("/workflows/{workflowId}/terminate")
     public Result<String> terminate(@PathVariable String workflowId,
                                     @RequestParam(required = false) String runId,
@@ -136,7 +143,9 @@ public class TemporalMonitorController {
         }
     }
 
-    /** 将历史事件映射为可读日志行 */
+    /**
+     * 按事件类型提取活动名称、状态和错误等重点信息，减少前端理解原始事件的负担。
+     */
     private Map<String, Object> describeEvent(HistoryEvent event, Map<Long, HistoryEvent> eventsById) {
         Map<String, Object> line = new LinkedHashMap<>();
         line.put("eventId", event.getEventId());
@@ -148,8 +157,7 @@ public class TemporalMonitorController {
     }
 
     /**
-     * 新版本 proto 中 Started/Completed/Failed/TimedOut 事件不再携带 activityType，
-     * 需要根据 scheduledEventId 反查对应的 Scheduled 事件获取活动名称。
+     * 从不同历史事件中读取对应活动名称。
      */
     private static String activityTypeName(HistoryEvent event, Map<Long, HistoryEvent> eventsById) {
         long scheduledEventId = 0;
@@ -169,6 +177,9 @@ public class TemporalMonitorController {
         return "UnknownActivity";
     }
 
+    /**
+     * 按事件性质标记日志级别，帮助前端区分正常进度、警告和失败。
+     */
     private static String levelOf(HistoryEvent event) {
         if (event.hasActivityTaskFailedEventAttributes()
                 || event.hasWorkflowTaskFailedEventAttributes()
@@ -185,6 +196,9 @@ public class TemporalMonitorController {
         return "info";
     }
 
+    /**
+     * 把事件的主要信息组合成可读说明。
+     */
     private static String buildMessage(HistoryEvent event, Map<Long, HistoryEvent> eventsById) {
         if (event.hasWorkflowExecutionStartedEventAttributes()) {
             return "🚀 工作流启动";
@@ -259,6 +273,9 @@ public class TemporalMonitorController {
         return event.getEventType().name();
     }
 
+    /**
+     * 限制事件说明的展示长度，避免超长异常信息撑大接口响应。
+     */
     private static String shortMessage(String message) {
         if (message == null || message.isBlank()) {
             return "(无详情)";

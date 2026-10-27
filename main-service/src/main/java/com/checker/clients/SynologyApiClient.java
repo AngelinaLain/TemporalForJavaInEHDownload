@@ -32,7 +32,7 @@ public class SynologyApiClient {
     @Autowired
     private EhNetworkConfig netConfig;
 
-    // ─── HTTP API ───────────────────────────────────────────────
+    // 群晖接口调用：统一登录会话和表单提交。
 
     /**
      * 登录群晖 DSM 获取会话 SID

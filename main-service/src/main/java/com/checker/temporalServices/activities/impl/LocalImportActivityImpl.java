@@ -47,7 +47,8 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 
 /**
- * 本地导入实现：下载 → ComicInfo 注入 → 重命名 .cbz → 上传群晖 → 更新库记录。
+ * 在独立缓存目录中下载和校验归档，写入 ComicInfo 后发布到目标图库。
+ * 同一画廊使用文件锁，失败保留可恢复缓存，成功写库后再清理临时文件。
  */
 @Slf4j
 @Component
@@ -84,6 +85,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
     private GallerySeriesPlacementService placementService;
 
     @Override
+    /** 锁定当前画廊工作目录后复用或续传归档，校验并注入元数据，上传成功再更新位置和清理缓存。 */
     public void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb) {
         ActivityExecutionContext ctx = Activity.getExecutionContext();
         ctx.heartbeat("加载画廊元数据: " + gid);
@@ -111,6 +113,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         try (FileChannel lockChannel = FileChannel.open(lockFile,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = acquireWorkLock(lockChannel, ctx, gid)) {
+            // 同一 GID 的活动共用缓存目录，取得锁后才能续传、注入或清理，避免互相覆盖。
             GallerySeriesPlacementService.SeriesPlacement placement = placementService.resolve(gid);
             ComicInfo comicInfo = buildComicInfo(gallery, placement);
             String metadataFingerprint = sha256(comicInfo.toXml());
@@ -194,6 +197,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
                         ErrorType.SYNOLOGY_API_ERROR.getCode());
             }
 
+            // 上传发布成功才保存实际位置；写库也成功后，最终清理阶段才删除可恢复缓存。
             EhGalleriesEntity update = new EhGalleriesEntity();
             update.setGid(gid);
             update.setFilename(targetFilename);
@@ -272,6 +276,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         };
     }
 
+    /** 尽力更新页面展示进度，展示写库失败不影响正在进行的下载。 */
     private void updateDownloadedBytesBestEffort(Long gid, long bytes) {
         try {
             EhGalleriesEntity update = new EhGalleriesEntity();
@@ -283,6 +288,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
     }
 
+    /** 等待同一画廊的旧活动释放文件锁，期间持续心跳，并响应取消或中断。 */
     private FileLock acquireWorkLock(FileChannel channel, ActivityExecutionContext ctx, Long gid) throws IOException {
         long deadline = System.currentTimeMillis() + LOCK_WAIT_TIMEOUT_MS;
         while (System.currentTimeMillis() < deadline) {
@@ -313,11 +319,12 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
         // 先校验中央目录可读，再顺序读完所有条目以触发 CRC 检查。
         try (ZipFile ignored = new ZipFile(archive.toFile())) {
-            // constructor validates the central directory
+            // 打开 ZipFile 时会校验中央目录，先排除结构不完整的归档。
         }
 
         long ratioLimit = archiveSize > Long.MAX_VALUE / 200 ? Long.MAX_VALUE : archiveSize * 200;
         long expandedLimit = Math.min(MAX_UNCOMPRESSED_ARCHIVE_BYTES, Math.max(512L * 1024 * 1024, ratioLimit));
+        // 同时限制解压总量和压缩倍率，避免校验消耗异常大的磁盘与处理时间。
         long expandedBytes = 0;
         int entries = 0;
         int images = 0;
@@ -358,6 +365,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
                 entries, images, expandedBytes);
     }
 
+    /** 根据文件扩展名统计归档图片条目，供完整性校验使用。 */
     private static boolean isImageEntry(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
@@ -366,6 +374,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
                 || lower.endsWith(".tif") || lower.endsWith(".tiff");
     }
 
+    /** 计算阅读元数据指纹，判断缓存归档是否需要重新注入 ComicInfo。 */
     private static String sha256(String value) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
@@ -375,6 +384,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
     }
 
+    /** 读取上次注入的元数据指纹，缺失或不可读时让当前流程重新注入。 */
     private static String readFingerprint(Path file) {
         try {
             return Files.isRegularFile(file) ? Files.readString(file, StandardCharsets.US_ASCII).trim() : null;
@@ -383,6 +393,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
     }
 
+    /** 优先原子替换归档，文件系统不支持时退回普通替换。 */
     private static void moveAtomically(Path source, Path target) throws IOException {
         try {
             Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -391,6 +402,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
     }
 
+    /** 清除损坏原包及续传、注入辅助文件，避免下次复用坏缓存。 */
     private void cleanupDownloadCache(Path zipFile) throws IOException {
         Files.deleteIfExists(zipFile);
         Files.deleteIfExists(zipFile.resolveSibling(zipFile.getFileName() + ".part"));
@@ -409,6 +421,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         return "[" + gid + "] " + safeTitle + ".cbz";
     }
 
+    /** 按完整字符限制 UTF-8 字节数，避免中文文件名被截成半个字符。 */
     private static String truncateUtf8(String value, int maxBytes) {
         StringBuilder result = new StringBuilder();
         int used = 0;
@@ -424,6 +437,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         return result.toString();
     }
 
+    /** 优先使用配置的持久缓存目录，无法创建时退回系统临时目录。 */
     private Path resolveTempDir() {
         String dir = netConfig.getDownload() != null ? netConfig.getDownload().getTempDir() : null;
         Path path = StrUtil.isNotBlank(dir) ? Path.of(dir) : Path.of(System.getProperty("java.io.tmpdir"));
@@ -436,6 +450,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         return path;
     }
 
+    /** 尽力清理单个临时文件，失败不覆盖主流程的成功或失败结果。 */
     private void cleanupQuietly(Path file) {
         try {
             if (file != null) {
@@ -447,6 +462,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
         }
     }
 
+    /** 发布和写库均成功后清理缓存、指纹和锁文件，再尝试移除空工作目录。 */
     private void cleanupWorkDirectory(Path workDir, Path zipFile, Path cbzFile,
                                       Path metadataFingerprintFile, Path lockFile) {
         cleanupQuietly(zipFile);

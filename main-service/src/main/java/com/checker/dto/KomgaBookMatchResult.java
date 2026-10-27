@@ -7,7 +7,7 @@ import lombok.NoArgsConstructor;
 import java.util.List;
 
 /**
- * Komga 扫描匹配结果。只有 FOUND 才允许进入元数据更新和 IMPORTED 状态。
+ * 表示 Komga 查找书籍的结果，区分唯一找到、未找到和多个候选，防止把不确定结果当成入库成功。
  */
 @Data
 @NoArgsConstructor
@@ -22,18 +22,30 @@ public class KomgaBookMatchResult {
     private String reason;
     private List<String> candidateBookIds;
 
+    /**
+     * 生成唯一找到书籍的结果，携带后续更新元数据所需的书籍 ID。
+     */
     public static KomgaBookMatchResult found(String bookId, String reason) {
         return new KomgaBookMatchResult(FOUND, bookId, reason, List.of(bookId));
     }
 
+    /**
+     * 生成尚未找到书籍的结果，保留原因，供工作流决定是否继续等待扫描。
+     */
     public static KomgaBookMatchResult notFound(String reason) {
         return new KomgaBookMatchResult(NOT_FOUND, null, reason, List.of());
     }
 
+    /**
+     * 生成多个候选的结果，阻止自动选取第一本书，并保留可供人工核对的信息。
+     */
     public static KomgaBookMatchResult ambiguous(String reason) {
         return new KomgaBookMatchResult(AMBIGUOUS, null, reason, List.of());
     }
 
+    /**
+     * 生成多个候选的结果，阻止自动选取第一本书，并保留可供人工核对的信息。
+     */
     public static KomgaBookMatchResult ambiguous(String reason, List<String> candidateBookIds) {
         return new KomgaBookMatchResult(AMBIGUOUS, null, reason,
                 candidateBookIds == null ? List.of() : List.copyOf(candidateBookIds));

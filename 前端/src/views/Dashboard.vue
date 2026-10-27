@@ -154,6 +154,7 @@
 </template>
 
 <script setup>
+// 展示多维度画廊统计、服务状态和图表，支持按当前统计范围跳转到画廊列表。
 import { computed, markRaw, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts/core'
@@ -243,6 +244,7 @@ function languageLabel(name) { return ({ chinese: '中文', japanese: '日文', 
 function canDrill(row) { return !!row?.filter && Object.keys(row.filter).length > 0 }
 function drill(row) { if (canDrill(row)) openGalleries(row.filter) }
 function padDate(date) { return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0') }
+// 把当前统计范围转换成列表查询参数，保留时间、状态和合集限制。
 function listScope() {
   const query = { page: '1', size: '20', dedupe: applied.dedupe }
   if (applied.status) query.status = applied.status
@@ -262,15 +264,18 @@ function listScope() {
   }
   return query
 }
+// 合并图表选中的条件与统计范围，让钻取结果和当前图表对应。
 function openGalleries(extra = {}, withScope = true) {
   const query = { ...(withScope ? listScope() : { page: '1', size: '20', dedupe: 'all' }), ...extra }
   Object.keys(query).forEach(key => { if (query[key] === undefined || query[key] === null || query[key] === '') delete query[key]; else query[key] = String(query[key]) })
   router.push({ path: '/galleries', query })
 }
 function selectPreset(days) { draft.days = days; draft.from = ''; draft.to = '' }
+// 统一时间和合集字段的默认值，保证界面与请求使用相同条件。
 function normalizeFilters(values) {
   return { days: Number(values.days) || 0, from: values.from || '', to: values.to || '', status: values.status || '', dedupe: values.dedupe || 'all', collectionScope: values.collectionScope || 'all', collectionId: values.collectionScope === 'unassigned' ? '' : String(values.collectionId || ''), grain: values.grain || 'day' }
 }
+// 校验时间范围后提交统计查询，编辑中的条件不会提前影响已有图表。
 function applyFilters() {
   filterValidation.value = ''
   if (draft.from && draft.to && draft.from > draft.to) { filterValidation.value = '开始日期不能晚于结束日期'; return }
@@ -278,6 +283,7 @@ function applyFilters() {
 }
 function resetFilters() { Object.assign(draft, defaults); filterValidation.value = ''; void loadAnalytics({ ...defaults }) }
 
+// 读取数据库聚合结果；取消旧请求并核对请求身份，避免快速筛选后被旧数据覆盖。
 async function loadAnalytics(values, background = false) {
   if (background && loading.value) return
   analyticsController?.abort()
@@ -302,6 +308,7 @@ async function loadAnalytics(values, background = false) {
     if (request === analyticsController) loading.value = false
   }
 }
+// 分别读取下载与数据库状态，部分失败时保留此前成功的服务信息。
 async function loadServices() {
   if (servicesBusy || disposed) return
   servicesBusy = true
@@ -316,7 +323,9 @@ async function loadServices() {
   } finally { servicesBusy = false }
 }
 function refresh() { void loadAnalytics({ ...applied }); void loadServices() }
+// 页面重新可见时按用户开关更新数据，后台隐藏期间不主动刷新统计。
 function onVisibilityChange() { if (!document.hidden && autoRefresh.value) { void loadAnalytics({ ...applied }, true); void loadServices() } }
+// 切换浏览器全屏，并在浏览器拒绝时保留现有分析范围。
 async function toggleFullscreen() {
   displayHint.value = ''
   try {
@@ -335,11 +344,13 @@ const chartStyle = {
 }
 function categoryAxis(labels) { return { type: 'category', data: labels, axisLine: { lineStyle: { color: '#e9edf4' } }, axisTick: { show: false }, axisLabel: { color: '#8c99ad', fontSize: 10, interval: 'auto', hideOverlap: true } } }
 function valueAxis(name) { return { type: 'value', name, nameTextStyle: { color: '#9ba7ba', fontSize: 9 }, splitLine: { lineStyle: { color: '#eff2f7', type: 'dashed' } }, axisLabel: { color: '#96a3b6', fontSize: 10 }, minInterval: name === 'GB' ? undefined : 1 } }
+// 把排名数据转成横向柱状图，并保留每项的列表钻取条件。
 function renderRanking(chart, rows, color, label = row => row.name) {
   if (!chart) return
   const data = [...rows].reverse()
   updateChart(chart, { ...chartStyle, grid: { top: 12, left: 15, right: 32, bottom: 14, containLabel: true }, xAxis: { ...valueAxis(), splitNumber: 3 }, yAxis: { ...categoryAxis(data.map(label)), inverse: false, axisLabel: { fontSize: 10, color: '#7f8fa7', width: 110, overflow: 'truncate' }, axisLine: { show: false } }, series: [{ type: 'bar', barMaxWidth: 13, data: data.map(row => ({ value: row.value, name: label(row), filter: row.filter })), itemStyle: { color, borderRadius: [0, 4, 4, 0] }, label: { show: true, position: 'right', fontSize: 9, color: '#94a2b6' } }] })
 }
+// 根据当前指标和统计结果重建各图表，统一保留筛选条件与点击入口。
 function renderCharts() {
   if (disposed) return
   const count = trendMetric.value === 'count'
@@ -351,6 +362,7 @@ function renderCharts() {
   renderRanking(charts.get('queries'), queryRows.value, '#9a87d7')
 }
 function resizeCharts() { if (!disposed) charts.forEach(chart => chart.resize()) }
+// 先按系统字号调整文字，再替换图表配置，避免切换字号后残留旧样式。
 function updateChart(chart, option) { chart?.setOption(scaleChartFonts(option), true) }
 function onFontScaleChange() { nextTick(() => { renderCharts(); resizeCharts() }) }
 watch([dimension, trendMetric], () => nextTick(renderCharts))

@@ -17,6 +17,10 @@ import org.slf4j.Logger;
 
 import java.time.Duration;
 
+/**
+ * 等待 Komga 扫描并按物理文件唯一确认入库，记录查询失败、歧义或等待超时的原因。
+ * 旧工作流沿用历史分支，新工作流按当前设置轮询并交由父流程汇总通知。
+ */
 @WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
 public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
     private static final Logger log = Workflow.getLogger(KomgaImportWorkflowImpl.class);
@@ -25,11 +29,13 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
     private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
     private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
     private final SynologyActivity synologyActivity = Workflow.newActivityStub(SynologyActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
-    // AI_OPTIONS 显式指定 EH_TASK_QUEUE，与 AiActivityImpl 注册的队列保持一致
+    // AI 调用使用专用推理队列，主要为旧工作流历史保留原调用次序。
     private final AiActivity aiActivity = Workflow.newActivityStub(AiActivity.class, WorkflowSteps.AI_OPTIONS);
 
     @Override
+    /** 准备文件与扫描后按配置轮询，唯一命中才写入库状态；歧义、访问失败和超时分别留痕。 */
     public void waitForImport(EhGalleriesEntity gallery, int maxRetries, int pollIntervalSeconds, String timeoutSubject, String timeoutContent) {
+        // 重放时按历史中的版本进入原分支，避免升级后新增或删除已经记录的活动调用。
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
         int exactConfirmationVersion = Workflow.getVersion(
@@ -37,9 +43,7 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
         int skipAiOnKomgaRetryVersion = Workflow.getVersion(
                 "komga-retry-skip-ai-enrichment", Workflow.DEFAULT_VERSION, 1);
 
-        // ==========================================
-        // 1. 核心修复：执行原来的 postDownloadKomgaProcess 逻辑
-        // ==========================================
+        // 先补齐元数据和归档准备步骤，再触发图库扫描；新流程不在此重复生成 AI 简介。
         try {
             // 拉取 EHentai 标签并存库
             komgaActivity.fetchAndSaveMetadata(gallery.getGid(), gallery.getToken());
@@ -71,7 +75,7 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
             }
 
             if (exactConfirmationVersion == Workflow.DEFAULT_VERSION) {
-                // 旧历史保留原来的异常吞吐行为和 Activity 顺序。
+                // 旧历史保留原来的异常处理和活动顺序，避免重放出现命令不一致。
                 komgaActivity.triggerKomgaLibraryScan();
             }
         } catch (Exception e) {
@@ -92,9 +96,7 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
             }
         }
 
-        // ==========================================
-        // 2. 开始轮询等待 Komga 扫描完成并入库
-        // ==========================================
+        // 按传入设置等待扫描结果，不使用固定次数；只有唯一物理文件匹配才确认入库。
         boolean isImportedToKomga = false;
         int currentTry = 0;
 
@@ -144,6 +146,7 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
                     return;
                 }
             } else if (KomgaBookMatchResult.AMBIGUOUS.equals(match.getStatus())) {
+                // 多个候选不能随意选第一本，停止本轮确认并保留候选供人工核对。
                 log.error("[❌ Komga 匹配冲突] GID: {}, 原因: {}", gallery.getGid(), match.getReason());
                 databaseActivity.recordKomgaConfirmation(gallery.getGid(),
                         DownloadStatus.KOMGA_IMPORT_FAILED.getValue(), match.getReason(), candidateBookIds);
@@ -153,6 +156,7 @@ public class KomgaImportWorkflowImpl implements KomgaImportWorkflow {
                         DownloadStatus.WAITING_KOMGA.getValue(), match.getReason(), candidateBookIds);
                 int safeInterval = Math.max(1, pollIntervalSeconds);
                 int rescanAttempt = Math.max(1, 120 / safeInterval);
+                // 等待一段时间仍未识别时再触发一次扫描，避免每次轮询都重复扫描图库。
                 if (currentTry == rescanAttempt && currentTry < maxRetries) {
                     try {
                         komgaActivity.triggerKomgaLibraryScan();

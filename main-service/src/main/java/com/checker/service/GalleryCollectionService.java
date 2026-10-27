@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/** 管理本地画廊合集及成员顺序，并结合标签和页面指纹给出加入合集的候选建议。 */
 @Service
 public class GalleryCollectionService {
     private static final int SUGGESTION_SCAN_BATCH_SIZE = 500;
@@ -54,6 +55,7 @@ public class GalleryCollectionService {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    /** 汇总合集及成员数量，按最近更新时间展示。 */
     public List<GalleryCollectionSummary> listCollections() {
         return jdbcTemplate.query("""
                 SELECT c.id, c.name, c.description, c.updated_at, COUNT(i.gid) item_count
@@ -67,6 +69,7 @@ public class GalleryCollectionService {
                 .updatedAt(rs.getTimestamp("updated_at")).build());
     }
 
+    /** 清理名称和说明后创建合集，避免同名合集。 */
     @Transactional
     public GalleryCollectionEntity create(GalleryCollectionRequest request) {
         GalleryCollectionEntity entity = new GalleryCollectionEntity();
@@ -80,6 +83,7 @@ public class GalleryCollectionService {
         return entity;
     }
 
+    /** 更新合集基本信息，同时检查名称冲突。 */
     @Transactional
     public GalleryCollectionEntity update(long id, GalleryCollectionRequest request) {
         GalleryCollectionEntity entity = requireCollection(id);
@@ -93,12 +97,14 @@ public class GalleryCollectionService {
         return entity;
     }
 
+    /** 删除合集记录，由数据库关系约束处理对应成员关系。 */
     @Transactional
     public void delete(long id) {
         requireCollection(id);
         collectionMapper.deleteById(id);
     }
 
+    /** 按合集内顺序读取成员，并补齐用于列表展示的画廊信息。 */
     public List<GalleryCollectionCandidate> listItems(long collectionId) {
         requireCollection(collectionId);
         List<Long> gids = jdbcTemplate.queryForList(
@@ -111,6 +117,7 @@ public class GalleryCollectionService {
                 .map(item -> toCandidate(item, collectionId, null)).toList();
     }
 
+    /** 按关键词和归组范围查找可加入合集的首选画廊。 */
     public List<GalleryCollectionCandidate> searchGalleries(String keyword, String scope, int limit) {
         int safeLimit = Math.min(Math.max(limit, 1), 100);
         QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
@@ -133,6 +140,7 @@ public class GalleryCollectionService {
                 }).toList();
     }
 
+    /** 在事务中添加或调整成员，保持合集关系和成员顺序一致。 */
     @Transactional
     public void addItems(long collectionId, List<Long> gids, String source) {
         requireCollection(collectionId);
@@ -156,6 +164,7 @@ public class GalleryCollectionService {
         jdbcTemplate.update("UPDATE eh_gallery_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", collectionId);
     }
 
+    /** 从指定合集中移除画廊，不删除画廊本身。 */
     @Transactional
     public void removeItem(long collectionId, long gid) {
         requireCollection(collectionId);
@@ -164,6 +173,7 @@ public class GalleryCollectionService {
         jdbcTemplate.update("UPDATE eh_gallery_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", collectionId);
     }
 
+    /** 综合同作者、标签和视觉证据，给出可继续加入合集的候选。 */
     public List<GalleryCollectionCandidate> suggestions(long collectionId, int limit) {
         List<GalleryCollectionCandidate> current = listItems(collectionId);
         if (current.isEmpty()) return List.of();
@@ -203,6 +213,7 @@ public class GalleryCollectionService {
         return bestSuggestions.stream().sorted(BEST_SUGGESTION_FIRST).toList();
     }
 
+    /** 按已有成员与候选的共同信息累积分数，并保留推荐原因。 */
     private GalleryCollectionCandidate scoreCandidate(EhGalleriesEntity candidate,
                                                        List<EhGalleriesEntity> members,
                                                        Map<Long, String> memberCoverHashes,
@@ -222,6 +233,7 @@ public class GalleryCollectionService {
                 .reason(best.reason()).build();
     }
 
+    /** 批量读取封面或首页指纹，减少建议计算时的重复查询。 */
     private Map<Long, String> firstPageHashes(List<Long> gids) {
         if (gids.isEmpty()) return Map.of();
         QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
@@ -241,6 +253,7 @@ public class GalleryCollectionService {
         return result;
     }
 
+    /** 批量读取候选已所属的合集，供界面说明归组关系。 */
     private Map<Long, Membership> memberships(List<Long> gids) {
         if (gids.isEmpty()) return Map.of();
         String placeholders = gids.stream().map(id -> "?").collect(Collectors.joining(","));

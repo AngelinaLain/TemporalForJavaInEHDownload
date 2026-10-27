@@ -6,13 +6,19 @@ import com.checker.dto.GalleryVisualMatch;
 import java.util.Comparator;
 import java.util.List;
 
-/** Monotonic page-sequence alignment tolerant of inserted ads and missing pages. */
+/**
+ * 按页面先后顺序比较两本画廊的抽样指纹，允许中间多出广告页或缺页，输出相似度与推荐版本。
+ */
 public final class GalleryVisualMatching {
     private static final int PAGE_DISTANCE_THRESHOLD = 18;
 
     private GalleryVisualMatching() {
     }
 
+    /**
+     * 先整理两侧有效页面，再用动态规划寻找保持阅读顺序的最多相似页。
+     * 回溯匹配后综合页面覆盖率和哈希距离计算分数；只有画质差距足够明显时才推荐某个版本。
+     */
     public static GalleryVisualMatch match(Long leftGid, List<GalleryPageFingerprint> leftInput,
                                            Long rightGid, List<GalleryPageFingerprint> rightInput) {
         List<GalleryPageFingerprint> left = ordered(leftInput);
@@ -80,11 +86,17 @@ public final class GalleryVisualMatching {
                 .build();
     }
 
+    /**
+     * 比较整页和中心区域的感知哈希，取更接近的结果，减少边框或页面边缘变化的影响。
+     */
     private static int pageDistance(GalleryPageFingerprint left, GalleryPageFingerprint right) {
         return Math.min(PerceptualHash.distance(left.getPerceptualHash(), right.getPerceptualHash()),
                 PerceptualHash.distance(left.getCenterHash(), right.getCenterHash()));
     }
 
+    /**
+     * 排除空记录及缺少页码的页面，并按页码排序，为后续顺序匹配准备数据。
+     */
     private static List<GalleryPageFingerprint> ordered(List<GalleryPageFingerprint> input) {
         if (input == null) return List.of();
         return input.stream().filter(item -> item != null && item.getPageIndex() != null)
@@ -95,6 +107,9 @@ public final class GalleryVisualMatching {
         return Math.max(0, value(item.getWidth())) * (long) Math.max(0, value(item.getHeight()));
     }
 
+    /**
+     * 结合匹配页的像素数量和画质指标，估计该版本的阅读质量。
+     */
     private static double qualityScore(long pixels, int quality, int count) {
         if (count == 0) return 0;
         double averagePixels = Math.max(1, pixels / (double) count);
@@ -106,6 +121,9 @@ public final class GalleryVisualMatching {
         return value == null ? 0 : value;
     }
 
+    /**
+     * 在缺少可比较样本时返回明确的空匹配结果，保留双方样本数量。
+     */
     private static GalleryVisualMatch empty(Long leftGid, Long rightGid, int leftSamples, int rightSamples) {
         return GalleryVisualMatch.builder()
                 .leftGid(leftGid).rightGid(rightGid).similarity(0).matchedPages(0)

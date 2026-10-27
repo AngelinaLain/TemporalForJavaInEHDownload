@@ -1,3 +1,4 @@
+/* 前端启动入口：先恢复字号偏好，再安装路由、状态管理和组件库。 */
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'

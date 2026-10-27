@@ -1,7 +1,7 @@
 package com.checker.common;
 
 /**
- * 画廊下载状态枚举
+ * 列出画廊从待下载、下载中到入库或失败的各个状态，并提供数据库使用的中文名称。
  */
 public enum DownloadStatus {
     PENDING("未下载"),

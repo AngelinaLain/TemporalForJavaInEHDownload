@@ -4,7 +4,7 @@ import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;
 
 /**
- * 通知域 Activity：负责通过 Microsoft Graph API 发送邮件通知
+ * 定义工作流发送结果通知的入口，实际发送由服务端通知处理完成。
  */
 @ActivityInterface
 public interface NotificationActivity {

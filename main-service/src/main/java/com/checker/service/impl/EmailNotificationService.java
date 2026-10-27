@@ -39,7 +39,7 @@ public class EmailNotificationService {
     /**
      * 发送邮件；未配置通知参数时静默跳过（返回 false）。
      *
-     * @return true 表示已发送或成功跳过；抛异常表示发送失败
+     * @return true 表示邮件已发送；配置或令牌不完整时返回 false，请求发送失败则抛异常
      */
     public boolean sendEmail(String subject, String content) {
         EhNetworkConfig.Notification notifConfig = netConfig.getNotification();
@@ -77,7 +77,7 @@ public class EmailNotificationService {
     }
 
     /**
-     * 构建 Graph API sendMail 请求体（含精美 HTML 模板）
+     * 转义标题和正文中的 HTML 特殊字符，再构建 Graph 邮件请求体。
      */
     private static JSONObject buildMailPayload(String subject, String content,
                                                EhNetworkConfig.Notification notifConfig) {

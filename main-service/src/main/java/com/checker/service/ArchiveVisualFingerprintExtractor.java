@@ -21,6 +21,7 @@ import java.util.concurrent.CompletionException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
+/** 从归档选取分散页面和封面，在专用线程池计算视觉指纹，并保留可用采样结果。 */
 @Component
 public class ArchiveVisualFingerprintExtractor {
     private static final Logger log = LoggerFactory.getLogger(ArchiveVisualFingerprintExtractor.class);
@@ -32,6 +33,7 @@ public class ArchiveVisualFingerprintExtractor {
         this.fingerprintExecutor = fingerprintExecutor;
     }
 
+    /** 边扫描归档边提交选中页的计算任务，最后汇总成功指纹并报告全部失败的情况。 */
     public List<GalleryPageFingerprint> extract(InputStream archive, Long gid, Integer expectedPages) throws IOException {
         Set<Integer> selected = sampleIndexes(expectedPages, SAMPLE_COUNT);
         List<PendingFingerprint> pending = new ArrayList<>();
@@ -83,6 +85,7 @@ public class ArchiveVisualFingerprintExtractor {
         return result;
     }
 
+    /** 在已知页数范围内均匀选页，兼顾开头、结尾和中间内容。 */
     private Set<Integer> sampleIndexes(Integer pageCount, int limit) {
         if (pageCount == null || pageCount <= 0) return Set.of();
         int count = Math.min(pageCount, limit);
@@ -104,6 +107,7 @@ public class ArchiveVisualFingerprintExtractor {
                 || lower.endsWith(".jfif") || lower.endsWith(".tif") || lower.endsWith(".tiff");
     }
 
+    /** 按常见封面文件名补充采样，避免均匀抽样恰好漏掉封面。 */
     static boolean isLikelyCover(String name) {
         if (name == null) return false;
         String normalized = name.replace('\\', '/').toLowerCase(Locale.ROOT);

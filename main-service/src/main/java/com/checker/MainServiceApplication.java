@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
- * Spring Boot 启动类，EHentai 自动化下载工作流应用程序入口
+ * 启动主服务，提供管理接口、下载与入库编排，并启用后台任务和定时调度。
  */
 @SpringBootApplication
 @EnableAsync

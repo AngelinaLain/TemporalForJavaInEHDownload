@@ -50,6 +50,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
     @Autowired
     private MountedArchiveStorage mountedStorage;
 
+    /** 优先直接写入挂载目录；不可用时尝试 SMB，再回退到 SFTP。 */
     @Override
     public void upload(Path localFile, String relativeDirectory, String targetFilename,
                        LongConsumer progress) throws Exception {
@@ -76,6 +77,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         uploadViaSftp(localFile, safeDirectory, targetFilename, progress);
     }
 
+    /** 通过 SMB 上传临时文件，完成后发布正式文件并清理同 GID 旧副本。 */
     private void uploadViaSmb(Path localFile, String relativeDirectory, String targetFilename, EhNetworkConfig.Smb smb,
                               LongConsumer progress) throws Exception {
         long localSize = Files.size(localFile);
@@ -159,6 +161,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         return normalized;
     }
 
+    /** 通过 SFTP 上传并回报进度，目标发布完成后再清理历史副本。 */
     private void uploadViaSftp(Path localFile, String relativeDirectory, String targetFilename,
                                LongConsumer progress) throws Exception {
         EhNetworkConfig.Synology synology = netConfig.getSynology();
@@ -237,6 +240,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         };
     }
 
+    /** 边复制文件边回报累计字节数，不把整本归档读进内存。 */
     private static void copyWithProgress(InputStream in, OutputStream out, LongConsumer progress) throws Exception {
         byte[] buffer = new byte[128 * 1024];
         long copied = 0;
@@ -285,6 +289,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         return host;
     }
 
+    /** 只清理同目录、同 GID 且不同于当前正式文件的归档。 */
     private void cleanupSmbGidDuplicates(DiskShare share, String directory, String keepFilename) {
         for (FileIdBothDirectoryInformation entry : share.list(directory, "*")) {
             String candidate = entry.getFileName();
@@ -296,6 +301,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         }
     }
 
+    /** 在 SFTP 目标目录中清理同 GID 旧归档，保留刚发布的文件。 */
     private void cleanupSftpGidDuplicates(ChannelSftp sftp, String keepFilename) throws SftpException {
         Vector<ChannelSftp.LsEntry> entries = sftp.ls("*");
         for (ChannelSftp.LsEntry entry : entries) {
@@ -308,6 +314,7 @@ public class SynologyUploadServiceImpl implements SynologyUploadService {
         }
     }
 
+    /** 检查系列相对目录，拒绝绝对路径和越界分段。 */
     private static String validateRelativeDirectory(String value) {
         if (value == null || value.isBlank()) return "";
         String normalized = value.replace('\\', '/');

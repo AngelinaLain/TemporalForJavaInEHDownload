@@ -13,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 
+/** 提供本地视觉模型状态查询和单张图片的向量生成接口。 */
 @RestController
 @RequestMapping("/api/ai/embedding")
 public class VisualEmbeddingController {
@@ -22,11 +23,13 @@ public class VisualEmbeddingController {
         this.embeddingService = embeddingService;
     }
 
+    /** 返回模型开关及文件可用情况，不在查询状态时加载模型。 */
     @GetMapping("/status")
     public Map<String, Object> status() {
         return embeddingService.status();
     }
 
+    /** 接收图片并交给本地模型，分别报告参数错误、模型未就绪和推理异常。 */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> embed(@RequestPart("image") MultipartFile image) {
         try {

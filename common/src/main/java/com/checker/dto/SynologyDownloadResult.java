@@ -6,8 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * 群晖下载等待结果：由长轮询 Activity（waitForDownloadComplete）返回，
- * 携带最终任务状态与物理文件实际大小（MB），供工作流做 PARTIAL 完整性校验。
+ * 返回群晖下载等待的最终状态、实际文件体积和文件名，供工作流检查下载是否完整。
  */
 @Data
 @NoArgsConstructor

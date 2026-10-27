@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+/** 使用应用默认模型提供画廊摘要和批量标签翻译接口。 */
 @RestController
 @RequestMapping("/api/ai")
 public class AiController {
@@ -31,6 +32,7 @@ public class AiController {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** 用标题和标签生成中文摘要；网络失败与内部异常分别返回对应状态。 */
     @PostMapping("/generate-summary")
     public ResponseEntity<String> generateSummary(@RequestBody Map<String, Object> request) {
         String prompt = "你是一个专门为漫画编写剧情概要的助手。请为画廊生成150字左右的中文简介。标题: {title}, 标签: {tags}";
@@ -43,20 +45,19 @@ public class AiController {
             return ResponseEntity.ok(response);
         } catch (RestClientException | org.springframework.web.reactive.function.client.WebClientRequestException |
                  TransientAiException e) {
-            // 捕获网络异常及 Spring AI 包装的远端 500 异常
+            // 模型节点连接失败或远端暂不可用时，调用方可以稍后重试。
             log.warn("GPU节点调用失败 (网络或远端服务异常): {}", e.getMessage());
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body("GPU节点离线或未响应");
         } catch (Exception e) {
-            // 兜底捕获其他未知异常，防止穿透
+            // 其他异常记录在服务日志中，接口只返回统一错误说明。
             log.error("AI 摘要生成发生未知内部错误", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("内部服务错误");
         }
     }
 
     /**
-     * 批量标签翻译：将多个 Tag 合并为单个 Prompt 批量请求，节约 Token 并降低延迟。
-     * 请求体: {"tags": ["artist:aaa", "language:chinese", ...]}
-     * 响应:   {"artist:aaa": "艺术家:某某", ...}
+     * 把多个标签合并成一次模型请求，减少网络往返和重复提示词。
+     * 模型结果会按输入顺序还原成“原标签到中文译名”的对应关系。
      */
     @PostMapping("/batch-translate-tags")
     public ResponseEntity<Map<String, String>> batchTranslateTags(@RequestBody Map<String, Object> request) {
@@ -91,7 +92,8 @@ public class AiController {
     }
 
     /**
-     * 将模型输出按行对应回输入标签；行数不匹配时尝试按 JSON 解析，最终兜底返回空映射。
+     * 优先将每行译文对应到同一位置的输入标签；行数不一致时再尝试解析为 JSON。
+     * 两种方式都无法解析时返回空结果，避免把错位译文写到其他标签上。
      */
     private Map<String, String> parseLinesToMap(List<String> tags, String output) {
         Map<String, String> result = new LinkedHashMap<>();
@@ -108,7 +110,7 @@ public class AiController {
             return result;
         }
 
-        // 模型可能返回 JSON，尝试兜底解析
+        // 有些模型会忽略逐行输出要求而返回 JSON，这里兼容这种响应。
         try {
             @SuppressWarnings("unchecked")
             Map<String, String> parsed = objectMapper.readValue(output, Map.class);

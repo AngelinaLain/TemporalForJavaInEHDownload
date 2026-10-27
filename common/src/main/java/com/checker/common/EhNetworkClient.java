@@ -33,16 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongConsumer;
 
 /**
- * EHentai 网络客户端：使用 OkHttp 重构，完美解决 HTTPS 代理隧道 (CONNECT) 407 问题，
- * 且代理认证仅对当前 OkHttpClient 实例生效，不污染 JVM 全局环境。
- * <p>
- * 增强能力：
- * <ul>
- *   <li><b>智能限流</b>：Resilience4j 令牌桶对 e-hentai API 做全局请求速率控制，防封禁；</li>
- *   <li><b>动态代理池</b>：支持多代理轮换，遭遇 403/502 自动冷却当前代理并切换；</li>
- *   <li><b>Cookie 账号轮转</b>：多账号 Cookie 池轮询分散单账号频率，Cookie 失效自动切换；</li>
- *   <li><b>断点续传</b>：{@link #downloadWithResume(String, Path)} 支持 HTTP Range 分块续传。</li>
- * </ul>
+ * 封装源站请求和大文件下载，统一处理 Cookie、代理切换、限流及网络重试。
+ * 下载使用磁盘分片和校验信息续传，普通网页请求与长时间文件下载分别控制超时。
  */
 @Slf4j
 @Component
@@ -67,6 +59,9 @@ public class EhNetworkClient {
     private static final int DOWNLOAD_BUFFER_BYTES = 128 * 1024;
     private static final long PROGRESS_CALLBACK_INTERVAL_MS = 1_000;
 
+    /**
+     * 读取代理与账号池并创建客户端，配置全局限流器，供之后的请求共享。
+     */
     @PostConstruct
     public void init() {
         // 1. 构建代理客户端池
@@ -113,6 +108,9 @@ public class EhNetworkClient {
         }
     }
 
+    /**
+     * 整理可用代理配置，优先使用多代理池，没有时兼容单代理设置。
+     */
     private List<EhNetworkConfig.Proxy> buildProxyPool() {
         List<EhNetworkConfig.Proxy> result = new ArrayList<>();
         List<EhNetworkConfig.Proxy> pool = netConfig.getProxyPool();
@@ -125,6 +123,9 @@ public class EhNetworkClient {
         return result;
     }
 
+    /**
+     * 按代理地址和认证信息创建普通请求客户端，并设置连接与读取超时。
+     */
     private OkHttpClient buildClient(EhNetworkConfig.Proxy proxyConfig) {
         OkHttpClient.Builder builder = new OkHttpClient.Builder()
                 .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -148,12 +149,17 @@ public class EhNetworkClient {
         return builder.build();
     }
 
+    /**
+     * 通过统一限流和故障切换逻辑读取网页内容。
+     */
     public String getHtml(String url) {
         log.info("正在请求 EHentai 页面: {}", url);
         return executeWithFailover(url, requestBuilder -> requestBuilder.get().build());
     }
 
-    /** 下载受限大小的图片等二进制资源，沿用 EH Cookie、代理轮换与全局限流。 */
+    /**
+     * 按大小上限读取二进制响应，超出限制或源站返回错误时终止，避免无限占用内存。
+     */
     public byte[] getBytes(String url, long maxBytes) {
         if (maxBytes <= 0 || maxBytes > 100L * 1024 * 1024) {
             throw new IllegalArgumentException("二进制响应大小上限必须在 1-100MB 之间");
@@ -201,6 +207,9 @@ public class EhNetworkClient {
                 ErrorType.NETWORK_ERROR.getCode());
     }
 
+    /**
+     * 发送表单请求，并复用账号、代理与错误处理规则。
+     */
     public String postForm(String url, Map<String, Object> formParams) {
         log.info("正在提交 EHentai 表单: {}", url);
         FormBody.Builder formBuilder = new FormBody.Builder();
@@ -210,6 +219,9 @@ public class EhNetworkClient {
         return executeWithFailover(url, requestBuilder -> requestBuilder.post(formBuilder.build()).build());
     }
 
+    /**
+     * 发送 JSON 请求，供源站元数据等接口使用。
+     */
     public String postJson(String url, String jsonBody) {
         log.info("正在提交 JSON 请求: {}", url);
         RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json; charset=utf-8"));
@@ -217,14 +229,7 @@ public class EhNetworkClient {
     }
 
     /**
-     * 带代理/账号故障转移的请求执行：
-     * <ol>
-     *   <li>轮询选择一个可用代理客户端（冷却期内的代理被跳过）；</li>
-     *   <li>轮询选择一个 Cookie 账号；</li>
-     *   <li>从全局令牌桶获取许可（超时抛出 NETWORK_ERROR）；</li>
-     *   <li>403/502 → 冷却当前代理并切换重试；Cookie 失效 → 切换账号重试；</li>
-     *   <li>509 配额超限等致命错误直接上抛。</li>
-     * </ol>
+     * 轮流选择可用代理和账号；节点被阻止时冷却，账号失效时切换，配额等明确错误直接交给工作流。
      */
     private String executeWithFailover(String url, RequestFactory requestFactory) {
         Exception lastFailure = null;
@@ -273,6 +278,9 @@ public class EhNetworkClient {
                 ErrorType.NETWORK_ERROR.getCode());
     }
 
+    /**
+     * 等待源站全局请求额度，超时后停止本次请求，避免突破配置的访问频率。
+     */
     private void acquireRateLimitPermit(String url) {
         RateLimiter limiter = this.rateLimiter;
         if (limiter == null) return;
@@ -283,6 +291,9 @@ public class EhNetworkClient {
         }
     }
 
+    /**
+     * 从代理池轮换选择当前可用的客户端，全部处于冷却期时使用现有备用选择逻辑。
+     */
     private ClientEntry pickAvailableClient() {
         int size = clientEntries.size();
         if (size == 1) return clientEntries.get(0);
@@ -301,6 +312,9 @@ public class EhNetworkClient {
         return fallback;
     }
 
+    /**
+     * 从有效账号池轮流取一个 Cookie，把请求分散到多个已配置账号。
+     */
     private String pickCookie() {
         List<EhNetworkConfig.Cookies> accounts = this.cookieAccounts;
         if (accounts.isEmpty()) return null;
@@ -308,6 +322,9 @@ public class EhNetworkClient {
         return accounts.get(index).getFullCookieString();
     }
 
+    /**
+     * 检查响应状态及登录页特征，把配额不足、凭据失效和普通网络故障区分开。
+     */
     private String handleResponse(String url, Response response) throws IOException {
         int status = response.code();
         if (status == 509) {
@@ -330,13 +347,9 @@ public class EhNetworkClient {
     }
 
     /**
-     * 带断点续传的流式下载：本地数据始终写入 {@code .part}，网络中断后根据实际文件长度
-     * 重新发起 Range 请求。ETag/Last-Modified 会写入旁路元数据，并通过 If-Range 避免把
-     * 不同版本的远端文件拼接在一起。
-     *
-     * @param url    下载直链
-     * @param target 目标文件路径（磁盘上会短暂存在 target.part 临时文件）
-     * @return 最终下载完成的文件大小（字节）
+     * 把下载内容流式写入磁盘分片，依据已保存的响应校验信息请求剩余字节，并报告进度。
+     * 源站不支持断点、响应范围不一致或文件已变化时重新开始，避免把不同内容拼成一个归档。
+     * 只有实际字节数符合预期才发布为完成文件；普通网络故障保留断点重试，真正取消立即退出。
      */
     public long downloadWithResume(String url, Path target) throws IOException {
         return downloadWithResume(url, target, bytes -> {
@@ -344,12 +357,9 @@ public class EhNetworkClient {
     }
 
     /**
-     * 带断点续传 + 进度回调的流式下载。
-     *
-     * @param url      下载直链
-     * @param target   目标文件路径
-     * @param progress 进度回调，参数为累计已下载字节数（下载期间约每秒触发一次）
-     * @return 最终下载完成的文件大小（字节）
+     * 把下载内容流式写入磁盘分片，依据已保存的响应校验信息请求剩余字节，并报告进度。
+     * 源站不支持断点、响应范围不一致或文件已变化时重新开始，避免把不同内容拼成一个归档。
+     * 只有实际字节数符合预期才发布为完成文件；普通网络故障保留断点重试，真正取消立即退出。
      */
     public long downloadWithResume(String url, Path target, LongConsumer progress) throws IOException {
         Path partFile = target.resolveSibling(target.getFileName() + ".part");
@@ -506,6 +516,9 @@ public class EhNetworkClient {
         throw lastIoFailure != null ? lastIoFailure : new IOException("下载失败，已耗尽重试次数");
     }
 
+    /**
+     * 为长文件下载单独设置超时，避免普通网页请求的限制过早打断下载。
+     */
     private OkHttpClient downloadClient(OkHttpClient baseClient) {
         EhNetworkConfig.Download config = netConfig.getDownload();
         return baseClient.newBuilder()
@@ -515,6 +528,9 @@ public class EhNetworkClient {
                 .build();
     }
 
+    /**
+     * 在仍有重试机会时按配置退避等待，并保持线程取消可以及时生效。
+     */
     private void waitBeforeDownloadRetry(int attempt, int maxAttempts) throws InterruptedIOException {
         if (attempt + 1 >= maxAttempts) return;
         EhNetworkConfig.Download config = netConfig.getDownload();
@@ -526,6 +542,9 @@ public class EhNetworkClient {
         sleepInterruptibly(waitMs);
     }
 
+    /**
+     * 把响应分块写入分片文件，按续传偏移累计已下载字节并定期回报进度。
+     */
     private long streamResponseToFile(ResponseBody body, Path partFile, boolean append, long initialOffset,
                                       long expectedTotal, LongConsumer progress) throws IOException {
         StandardOpenOption[] options = append
@@ -563,6 +582,9 @@ public class EhNetworkClient {
         }
     }
 
+    /**
+     * 把完整分片替换为最终文件，再清理续传元数据，只在成功下载后发布文件。
+     */
     private static long publishCompletedDownload(Path partFile, Path metadataFile, Path target, long totalBytes)
             throws IOException {
         try {
@@ -575,6 +597,9 @@ public class EhNetworkClient {
         return totalBytes;
     }
 
+    /**
+     * 解析源站返回的字节范围，供续传逻辑校验偏移和总长度。
+     */
     private static ContentRange parseContentRange(String value) {
         if (value == null || !value.startsWith("bytes ")) return null;
         try {
@@ -606,6 +631,9 @@ public class EhNetworkClient {
         return StrUtil.isNotBlank(etag) ? etag : response.header("Last-Modified");
     }
 
+    /**
+     * 读取上次保存的响应校验信息，缺失或无法解析时按没有可用续传信息处理。
+     */
     private static ResumeMetadata loadResumeMetadata(Path file) {
         if (!Files.isRegularFile(file)) return ResumeMetadata.EMPTY;
         Properties properties = new Properties();
@@ -619,6 +647,9 @@ public class EhNetworkClient {
         }
     }
 
+    /**
+     * 保存本次响应的校验标记和总长度，供下载中断后验证分片是否仍可复用。
+     */
     private static void saveResumeMetadata(Path file, ResumeMetadata metadata) throws IOException {
         Properties properties = new Properties();
         if (metadata.etag() != null) properties.setProperty("etag", metadata.etag());
@@ -630,6 +661,9 @@ public class EhNetworkClient {
         }
     }
 
+    /**
+     * 清除不再可信的下载分片及其元数据，准备从头重新下载。
+     */
     private static void resetPartialDownload(Path partFile, Path metadataFile) throws IOException {
         Files.deleteIfExists(partFile);
         Files.deleteIfExists(metadataFile);
@@ -663,6 +697,9 @@ public class EhNetworkClient {
         return Math.min(base, 60_000);
     }
 
+    /**
+     * 执行可被线程中断的等待，确保工作流取消不会被退避等待吞掉。
+     */
     private static void sleepInterruptibly(long millis) throws InterruptedIOException {
         try {
             Thread.sleep(millis);
@@ -678,6 +715,9 @@ public class EhNetworkClient {
         entry.coolDownUntil = System.currentTimeMillis() + cooldownMs;
     }
 
+    /**
+     * 添加源站请求共用的浏览器标识等请求头，供不同请求类型复用。
+     */
     private Request.Builder buildBaseRequest(String url) {
         return new Request.Builder()
                 .url(url)

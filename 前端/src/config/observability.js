@@ -1,8 +1,6 @@
-// 可观测性服务地址配置
-// 默认按当前访问主机名 + 端口推导（docker-compose 中已暴露 3000/9090/9411）。
-// 也可通过构建期环境变量 VITE_GRAFANA_URL / VITE_GRAFANA_DASHBOARD_URL /
-// VITE_PROMETHEUS_URL / VITE_ZIPKIN_URL 覆盖，
-// 例如指向独立域名或反向代理子路径。
+/* 集中配置监控服务地址，默认使用当前主机，也支持构建时指定独立地址。 */
+// 未指定地址时，按当前访问主机和监控端口生成链接。
+// 需要独立域名或代理子路径时，可通过对应的 VITE_* 构建变量覆盖。
 const hostname = typeof window !== 'undefined' ? window.location.hostname : '10.10.10.161'
 
 const grafana = (import.meta.env.VITE_GRAFANA_URL || `http://${hostname}:3000`).replace(/\/$/, '')
@@ -14,12 +12,12 @@ export const OBSERVABILITY = Object.freeze({
   grafanaUrl: grafana,
   // 预置的 GalleryImport 大盘。可单独覆盖，兼容独立域名或反向代理子路径。
   grafanaDashboardUrl: dashboard,
-  // iframe 使用 kiosk 模式，Monitoring 页面打开时直接呈现大盘内容。
+  // 内嵌页面隐藏监控系统外围导航，直接显示大盘内容。
   grafanaDashboardEmbedUrl: `${dashboard}${dashboard.includes('?') ? '&' : '?'}kiosk`,
   // Prometheus 指标查询界面
   prometheusUrl: import.meta.env.VITE_PROMETHEUS_URL || `http://${hostname}:9090`,
-  // Zipkin 链路追踪 UI
+  // Zipkin 链路追踪页面
   zipkinUrl: import.meta.env.VITE_ZIPKIN_URL || `http://${hostname}:9411`,
-  // 日志（Loki 无自带 UI，通过 Grafana Explore 查看）
+  // Loki 日志通过 Grafana 的查询页面查看。
   grafanaExploreUrl: `${grafana}/explore`
 })
