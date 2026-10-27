@@ -28,6 +28,10 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(String username) {
+        return generateToken(username, 0);
+    }
+
+    public String generateToken(String username, long credentialVersion) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);
 
@@ -39,6 +43,7 @@ public class JwtTokenProvider {
                 .id(UUID.randomUUID().toString())
                 // 角色声明：方法级 @PreAuthorize 权限校验依据
                 .claim("roles", List.of("ADMIN"))
+                .claim("credentialVersion", credentialVersion)
                 .signWith(key)
                 .compact();
     }
@@ -53,6 +58,12 @@ public class JwtTokenProvider {
 
     public Date getExpirationFromToken(String token) {
         return parseClaims(token).getExpiration();
+    }
+
+    /** Tokens issued before versioned credentials belong to the bootstrap generation. */
+    public long getCredentialVersionFromToken(String token) {
+        Object version = parseClaims(token).get("credentialVersion");
+        return version == null ? 0L : version instanceof Number number ? number.longValue() : -1L;
     }
 
     /**

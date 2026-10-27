@@ -122,6 +122,8 @@ public class EhNetworkConfig {
     @Data
     public static class Komga {
         private String url;
+        /** Browser-reachable URL; falls back to url when blank. Never contains API credentials. */
+        private String publicUrl;
         private String libraryId;
         private String apiKey;
     }

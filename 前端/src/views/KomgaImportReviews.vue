@@ -1,11 +1,7 @@
 <template>
   <div class="review-page">
-    <el-card shadow="hover" class="toolbar">
-      <div class="toolbar-content">
-        <div>
-          <h3>Komga 入库复核</h3>
-          <p>这里的补偿只重新触发 Komga 扫描和确认，不会重新下载已经上传到群晖的文件。</p>
-        </div>
+    <PageHeading title="Komga 入库复核" eyebrow="IMPORT REVIEW" description="检查等待与失败记录，重新触发 Komga 扫描和确认，继续完成入库。">
+      <template #actions>
         <div class="toolbar-actions">
           <el-tag type="danger">失败 {{ failedCount }}</el-tag>
           <el-tag type="primary">等待 {{ waitingCount }}</el-tag>
@@ -16,8 +12,10 @@
           </el-select>
           <el-button :loading="loading" @click="loadData">刷新</el-button>
         </div>
-      </div>
-    </el-card>
+      </template>
+    </PageHeading>
+
+    <KomgaIdRefreshPanel />
 
     <el-skeleton v-if="firstLoad" :rows="8" animated class="skeleton" />
     <el-empty v-else-if="!records.length" description="当前没有 Komga 复核记录" />
@@ -75,6 +73,8 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
+import KomgaIdRefreshPanel from '../components/KomgaIdRefreshPanel.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -136,20 +136,21 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.review-page { max-width: 1440px; margin: 0 auto; }
+.review-page { max-width: 1920px; margin: 0 auto; }
 .toolbar-content, .toolbar-actions, .case-header, .case-title { display: flex; align-items: center; }
 .toolbar-content { justify-content: space-between; gap: 24px; }
-.toolbar h3 { margin: 0 0 8px; color: #303133; }
-.toolbar p { margin: 0; color: #606266; font-size: 14px; }
+.toolbar h3 { margin: 0 0 8px; color: var(--app-text, #25354b); }
+.toolbar p { margin: 0; color: var(--app-text-secondary, #64748b); font-size: calc(14px * var(--app-font-scale, 1)); }
 .toolbar-actions { gap: 10px; flex-shrink: 0; }
 .skeleton, .review-card { margin-top: 16px; }
 .case-header { justify-content: space-between; gap: 16px; }
-.case-title { gap: 10px; min-width: 0; }
-.case-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gid { color: #909399; font-size: 13px; white-space: nowrap; }
+.case-title { gap: 10px; min-width: 0; max-width: 100%; }
+.case-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.case-title > .el-tag, .case-title > .gid { flex-shrink: 0; }
+.gid { color: var(--app-text-muted, #8492a8); font-size: calc(13px * var(--app-font-scale, 1)); white-space: nowrap; }
 .candidate-ids { font-family: monospace; word-break: break-all; }
-.reason { color: #606266; word-break: break-word; }
-.gallery-link { display: inline-block; margin-top: 14px; color: #409eff; text-decoration: none; }
+.reason { color: var(--app-text-secondary, #64748b); word-break: break-word; }
+.gallery-link { display: inline-block; margin-top: 14px; color: var(--app-accent, #4169e1); text-decoration: none; }
 .pagination-wrapper { display: flex; justify-content: flex-end; margin: 20px 0; }
 @media (max-width: 900px) {
   .toolbar-content { align-items: flex-start; flex-direction: column; }

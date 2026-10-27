@@ -42,6 +42,12 @@ const routes = [
         meta: { title: '视觉指纹' }
       },
       {
+        path: 'tag-network',
+        name: 'TagNetwork',
+        component: () => import('../views/TagNetwork.vue'),
+        meta: { title: '关系图谱' }
+      },
+      {
         path: 'ai-settings',
         name: 'AiSettings',
         component: () => import('../views/AiSettings.vue'),

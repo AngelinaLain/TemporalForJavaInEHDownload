@@ -1,5 +1,6 @@
 <template>
   <div class="ai-settings">
+    <PageHeading title="AI 设置" eyebrow="MODEL CONFIGURATION" description="管理模型供应商、分析策略和提示词，让自动化能力按需运行。" />
     <el-alert
       title="默认仅在本地生成视觉向量。只有选择“视觉 LLM”并同时开启供应商与任务的图片权限时，图片才会发送给模型服务。"
       type="info" :closable="false" show-icon class="notice"
@@ -111,6 +112,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -169,14 +171,14 @@ onMounted(load)
 .notice, .use-case-card { margin-bottom: 16px; }
 .header-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .header-row h3, .use-case-card h3 { margin: 0; }
-.header-row p { margin: 7px 0 0; color: #606266; font-size: 14px; }
+.header-row p { margin: 7px 0 0; color: var(--app-text-secondary, #64748b); font-size: calc(14px * var(--app-font-scale, 1)); }
 .tag-gap { margin-left: 6px; }
 .use-case-card { margin-top: 16px; }
 .use-case-form { max-width: 850px; padding-top: 12px; }
 .use-case-form .el-select { width: 360px; }
 .inline-button { margin-left: 10px; }
 .prompt-field { width: 100%; display: grid; gap: 8px; }
-.field-help { margin-left: 12px; color: #909399; font-size: 13px; }
-.danger-help { margin-left: 12px; color: #e6a23c; font-size: 13px; }
+.field-help { margin-left: 12px; color: var(--app-text-muted, #8492a8); font-size: calc(13px * var(--app-font-scale, 1)); }
+.danger-help { margin-left: 12px; color: #e6a23c; font-size: calc(13px * var(--app-font-scale, 1)); }
 @media (max-width: 700px) { .header-row { align-items: flex-start; flex-direction: column; } .use-case-form .el-select { width: 100%; } }
 </style>

@@ -1,16 +1,9 @@
 <template>
   <div class="visual-page">
-    <el-card shadow="hover">
-      <template #header>
-        <div class="header-row">
-          <div>
-            <h3>视觉指纹管理</h3>
-            <p>对新增和历史画廊生成采样页感知哈希；历史刷新按文件顺序单任务执行，避免压满 NAS。</p>
-          </div>
-          <el-button :loading="loading" @click="loadStatus">刷新状态</el-button>
-        </div>
-      </template>
-
+    <PageHeading title="视觉指纹管理" eyebrow="VISUAL MATCHING" description="生成画廊采样指纹，维护历史索引，并对候选作品进行视觉复核。">
+      <template #actions><el-button :loading="loading" @click="loadStatus">刷新状态</el-button></template>
+    </PageHeading>
+    <el-card shadow="never">
       <el-row :gutter="16">
         <el-col :xs="24" :sm="12">
           <el-statistic title="当前算法版本" :value="status.algorithmVersion || 0" />
@@ -112,6 +105,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -227,22 +221,22 @@ onBeforeUnmount(() => window.clearInterval(timer))
 </script>
 
 <style scoped>
-.visual-page { max-width: 1200px; margin: 0 auto; }
+.visual-page { max-width: 1920px; margin: 0 auto; }
 .header-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .header-row h3 { margin: 0 0 8px; }
-.header-row p { margin: 0; color: #606266; font-size: 14px; }
+.header-row p { margin: 0; color: var(--app-text-secondary, #64748b); font-size: calc(14px * var(--app-font-scale, 1)); }
 .actions { display: flex; gap: 10px; }
 .actions .el-button + .el-button { margin-left: 0; }
 .notice, .job-card, .failure-card { margin-top: 16px; }
-.failure-hint { margin-left: 12px; color: #909399; font-size: 13px; }
-.review-hint { margin: 6px 0 0; color: #909399; font-size: 13px; }
+.failure-hint { margin-left: 12px; color: var(--app-text-muted, #8492a8); font-size: calc(13px * var(--app-font-scale, 1)); }
+.review-hint { margin: 6px 0 0; color: var(--app-text-muted, #8492a8); font-size: calc(13px * var(--app-font-scale, 1)); }
 .review-form { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.review-status { display: flex; justify-content: space-between; align-items: center; color: #606266; }
+.review-status { display: flex; justify-content: space-between; align-items: center; color: var(--app-text-secondary, #64748b); }
 .review-result { margin-bottom: 12px; }
 .job-facts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: 18px 0; }
-.job-facts div { padding: 10px; border-radius: 6px; background: #f5f7fa; text-align: center; }
-.job-facts dt { color: #909399; font-size: 12px; }
-.job-facts dd { margin: 5px 0 0; color: #303133; font-weight: 600; }
+.job-facts div { padding: 10px; border-radius: 6px; background: var(--app-surface-muted, #f6f8fc); text-align: center; }
+.job-facts dt { color: var(--app-text-muted, #8492a8); font-size: calc(12px * var(--app-font-scale, 1)); }
+.job-facts dd { margin: 5px 0 0; color: var(--app-text, #25354b); font-weight: 600; }
 @media (max-width: 900px) {
   .header-row { align-items: flex-start; flex-direction: column; }
   .job-facts { grid-template-columns: repeat(2, 1fr); }

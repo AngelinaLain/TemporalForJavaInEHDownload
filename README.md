@@ -321,6 +321,8 @@ npm run build
 | V18 | 记录实际归档路径与 Series 同步签名 |
 | V19 | 记录 Komga Series 清理路径和文件名 |
 | V20 | 增加 AI 供应商、提示词版本、用例配置、页面向量与视觉复核任务表 |
+| V21 | 增加抓取时间与首选版本组合索引，支持画廊检索及范围统计 |
+| V22 | 持久化管理员密码覆盖值及凭据版本，支持改密后全部旧会话失效 |
 
 迁移文件位于 `main-service/src/main/resources/db/migration/`。
 

@@ -1,5 +1,6 @@
 <template>
   <div class="operations-page">
+    <PageHeading title="工作流操作" eyebrow="WORKFLOW OPERATIONS" description="配置采集范围、运行下载任务与元数据维护，在同一处管理自动化操作。" />
     <!-- 抓取工作流 -->
     <el-card shadow="hover" class="op-card">
       <template #header>
@@ -22,7 +23,7 @@
             :rows="3"
             placeholder="粘贴单个或多个完整画廊链接，或 GID/token；使用换行、逗号或分号分隔"
           />
-          <div style="color: #909399; font-size: 12px; margin-top: 4px">EH 画廊 token 必填；仅输入 GID 无法定位画廊。</div>
+          <div style="color: #909399; font-size: calc(12px * var(--app-font-scale, 1)); margin-top: 4px">EH 画廊 token 必填；仅输入 GID 无法定位画廊。</div>
         </el-form-item>
         <template v-else>
         <el-row :gutter="20">
@@ -256,6 +257,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { ref, reactive, nextTick, markRaw } from 'vue'
 import {
   Search, VideoPlay, Setting, Collection, Document, FolderAdd,
@@ -567,7 +569,7 @@ const buildCollection = async () => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  font-size: 16px;
+  font-size: calc(16px * var(--app-font-scale, 1));
 }
 
 .action-card {
@@ -587,15 +589,15 @@ const buildCollection = async () => {
 }
 
 .action-label {
-  font-size: 15px;
+  font-size: calc(15px * var(--app-font-scale, 1));
   font-weight: 600;
   margin-top: 10px;
-  color: #303133;
+  color: var(--app-text, #25354b);
 }
 
 .action-desc {
-  font-size: 12px;
-  color: #909399;
+  font-size: calc(12px * var(--app-font-scale, 1));
+  color: var(--app-text-muted, #8492a8);
   margin-top: 4px;
 }
 
@@ -608,8 +610,8 @@ const buildCollection = async () => {
 }
 
 .log-detail {
-  font-size: 12px;
-  color: #909399;
+  font-size: calc(12px * var(--app-font-scale, 1));
+  color: var(--app-text-muted, #8492a8);
   margin-top: 4px;
   word-break: break-all;
 }
@@ -632,7 +634,7 @@ const buildCollection = async () => {
 }
 .tag-suggest-row .tag-original {
   color: #999;
-  font-size: 12px;
+  font-size: calc(12px * var(--app-font-scale, 1));
   margin-left: 16px;
   white-space: nowrap;
 }

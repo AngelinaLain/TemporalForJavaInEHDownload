@@ -1,11 +1,7 @@
 <template>
   <div class="review-page">
-    <el-card shadow="hover" class="toolbar">
-      <div class="toolbar-content">
-        <div>
-          <h3>去重人工审核</h3>
-          <p>只有 65–84 分的灰区候选会暂停下载并出现在这里；人工结论不会被后续自动计算覆盖。</p>
-        </div>
+    <PageHeading title="去重人工审核" eyebrow="DUPLICATE REVIEW" description="审核灰区候选并确认版本关系，人工结论会保留用于后续处理。">
+      <template #actions>
         <div class="toolbar-actions">
           <el-tag type="warning" size="large">待处理 {{ pendingCount }}</el-tag>
           <el-select v-model="filters.decision" style="width: 150px" @change="reloadFromFirstPage">
@@ -17,8 +13,8 @@
           </el-select>
           <el-button :loading="loading" @click="loadData">刷新</el-button>
         </div>
-      </div>
-    </el-card>
+      </template>
+    </PageHeading>
 
     <el-skeleton v-if="firstLoad" :rows="10" animated class="review-skeleton" />
     <el-empty v-else-if="!records.length" description="当前没有需要处理的去重审核" />
@@ -129,6 +125,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -229,45 +226,45 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.review-page { max-width: 1440px; margin: 0 auto; }
+.review-page { max-width: 1920px; margin: 0 auto; }
 .toolbar-content, .case-header, .case-title, .toolbar-actions, .candidate-heading, .case-actions {
   display: flex; align-items: center;
 }
 .toolbar-content { justify-content: space-between; gap: 24px; }
-.toolbar h3 { margin: 0 0 8px; color: #303133; }
-.toolbar p { margin: 0; color: #606266; font-size: 14px; }
+.toolbar h3 { margin: 0 0 8px; color: var(--app-text, #25354b); }
+.toolbar p { margin: 0; color: var(--app-text-secondary, #64748b); font-size: calc(14px * var(--app-font-scale, 1)); }
 .toolbar-actions { gap: 10px; flex-shrink: 0; }
 .review-skeleton, .review-card { margin-top: 16px; }
 .case-header { justify-content: space-between; }
 .case-title { gap: 10px; }
-.created-at, .review-result { color: #909399; font-size: 13px; }
-.score { font-size: 18px; font-weight: 700; }
+.created-at, .review-result { color: var(--app-text-muted, #8492a8); font-size: calc(13px * var(--app-font-scale, 1)); }
+.score { font-size: calc(18px * var(--app-font-scale, 1)); font-weight: 700; }
 .score-high { color: #d97706; }
 .score-medium { color: #e6a23c; }
-.score-low { color: #909399; }
+.score-low { color: var(--app-text-muted, #8492a8); }
 .comparison { display: grid; grid-template-columns: minmax(0, 1fr) 48px minmax(0, 1fr); align-items: stretch; margin-top: 16px; }
 .visual-evidence { margin-top: 14px; padding: 14px; border: 1px solid #d9ecff; border-radius: 8px; background: #f4f9ff; }
 .visual-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
 .visual-summary div { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 6px; background: #fff; }
-.visual-summary span { color: #909399; font-size: 12px; }
-.visual-summary strong { color: #303133; font-size: 18px; }
-.visual-recommendation { margin: 10px 0 0; color: #606266; font-size: 13px; }
-.versus { display: flex; align-items: center; justify-content: center; color: #909399; font-weight: 700; }
-.candidate { border: 1px solid #dcdfe6; border-radius: 8px; padding: 18px; background: #fff; min-width: 0; }
-.candidate.recommended { border-color: #409eff; box-shadow: inset 0 0 0 1px #409eff; }
+.visual-summary span { color: var(--app-text-muted, #8492a8); font-size: calc(12px * var(--app-font-scale, 1)); }
+.visual-summary strong { color: var(--app-text, #25354b); font-size: calc(18px * var(--app-font-scale, 1)); }
+.visual-recommendation { margin: 10px 0 0; color: var(--app-text-secondary, #64748b); font-size: calc(13px * var(--app-font-scale, 1)); }
+.versus { display: flex; align-items: center; justify-content: center; color: var(--app-text-muted, #8492a8); font-weight: 700; }
+.candidate { border: 1px solid var(--app-border, #e0e7f1); border-radius: 8px; padding: 18px; background: #fff; min-width: 0; }
+.candidate.recommended { border-color: var(--app-accent, #4169e1); box-shadow: inset 0 0 0 1px var(--app-accent, #4169e1); }
 .candidate.selected { border-color: #67c23a; box-shadow: inset 0 0 0 1px #67c23a; }
-.candidate-heading { justify-content: space-between; color: #606266; font-size: 13px; gap: 8px; }
-.recommend-badge, .selected-badge { padding: 2px 8px; border-radius: 10px; color: #fff; background: #409eff; }
+.candidate-heading { justify-content: space-between; color: var(--app-text-secondary, #64748b); font-size: calc(13px * var(--app-font-scale, 1)); gap: 8px; }
+.recommend-badge, .selected-badge { padding: 2px 8px; border-radius: 10px; color: #fff; background: var(--app-accent, #4169e1); }
 .selected-badge { background: #67c23a; }
-.candidate-title { margin-top: 14px; font-size: 17px; font-weight: 600; color: #303133; line-height: 1.5; }
-.original-title { margin-top: 8px; color: #606266; font-size: 13px; word-break: break-all; }
+.candidate-title { margin-top: 14px; font-size: calc(17px * var(--app-font-scale, 1)); font-weight: 600; color: var(--app-text, #25354b); line-height: 1.5; }
+.original-title { margin-top: 8px; color: var(--app-text-secondary, #64748b); font-size: calc(13px * var(--app-font-scale, 1)); word-break: break-all; }
 .candidate-facts { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 16px 0; }
-.candidate-facts div { padding: 8px; background: #f5f7fa; border-radius: 6px; text-align: center; }
-.candidate-facts dt { color: #909399; font-size: 12px; }
-.candidate-facts dd { margin: 4px 0 0; color: #303133; font-weight: 600; }
+.candidate-facts div { padding: 8px; background: var(--app-surface-muted, #f6f8fc); border-radius: 6px; text-align: center; }
+.candidate-facts dt { color: var(--app-text-muted, #8492a8); font-size: calc(12px * var(--app-font-scale, 1)); }
+.candidate-facts dd { margin: 4px 0 0; color: var(--app-text, #25354b); font-weight: 600; }
 .candidate-tags { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; }
-.mini-tag { padding: 3px 7px; border-radius: 4px; background: #f0f2f5; color: #606266; font-size: 12px; }
-.gallery-link { display: inline-block; margin-top: 14px; color: #409eff; text-decoration: none; }
+.mini-tag { padding: 3px 7px; border-radius: 4px; background: var(--app-surface-muted, #f6f8fc); color: var(--app-text-secondary, #64748b); font-size: calc(12px * var(--app-font-scale, 1)); }
+.gallery-link { display: inline-block; margin-top: 14px; color: var(--app-accent, #4169e1); text-decoration: none; }
 .case-actions { justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; gap: 8px; }
 .case-actions .el-button + .el-button { margin-left: 0; }
 .review-result { margin-top: 16px; text-align: right; }

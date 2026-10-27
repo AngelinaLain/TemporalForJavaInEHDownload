@@ -100,6 +100,7 @@ eh-config:
     sender-email: ${GRAPH_SENDER_EMAIL}
   komga:
     url: ${KOMGA_URL}
+    public-url: ${KOMGA_PUBLIC_URL:}
     api-key: ${KOMGA_API_KEY}
     library-id: ${KOMGA_LIBRARY_ID}
   # 工作流运行时参数（可在线调整，无需重新编译）

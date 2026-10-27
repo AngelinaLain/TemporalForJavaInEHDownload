@@ -1,5 +1,6 @@
 <template>
   <div class="monitoring-page">
+    <PageHeading title="服务监控" eyebrow="SERVICE OBSERVABILITY" description="查看服务指标、运行日志与链路追踪，定位系统运行中的异常。" />
     <el-alert
       type="info"
       :closable="false"
@@ -37,6 +38,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { ref, h } from 'vue'
 import { ElButton, ElSpace } from 'element-plus'
 import { TopRight } from '@element-plus/icons-vue'
@@ -68,7 +70,7 @@ const toolbar = (props) =>
 
 <style scoped>
 .monitoring-page {
-  padding: 8px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -104,16 +106,16 @@ const toolbar = (props) =>
 }
 
 .toolbar-title {
-  font-size: 14px;
+  font-size: calc(14px * var(--app-font-scale, 1));
   font-weight: 500;
-  color: #303133;
+  color: var(--app-text, #25354b);
 }
 
 .monitor-frame {
   flex: 1;
   width: 100%;
-  border: 1px solid #e4e7ed;
-  border-radius: 4px;
+  border: 1px solid var(--app-border, #e0e7f1);
+  border-radius: 12px;
   background: #fff;
   min-height: 480px;
 }

@@ -1,5 +1,6 @@
 <template>
   <div class="workflows-page">
+    <PageHeading title="流程监控" eyebrow="WORKFLOW ACTIVITY" description="跟踪自动化任务及子流程，查看运行状态、历史事件与执行日志。" />
     <div class="toolbar">
       <span class="hint">每 5 秒自动刷新；点击行展开查看子流程；「日志」查看该流程的运行事件。</span>
       <el-button type="primary" :icon="Refresh" @click="loadWorkflows">刷新</el-button>
@@ -77,6 +78,7 @@
 </template>
 
 <script setup>
+import PageHeading from '../components/PageHeading.vue'
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Document, CircleClose } from '@element-plus/icons-vue'
@@ -209,7 +211,7 @@ onUnmounted(() => {
 
 <style scoped>
 .workflows-page {
-  padding: 8px;
+  padding: 0;
 }
 
 .toolbar {
@@ -220,12 +222,15 @@ onUnmounted(() => {
 }
 
 .hint {
-  color: #909399;
-  font-size: 13px;
+  color: var(--app-text-muted, #8492a8);
+  font-size: calc(13px * var(--app-font-scale, 1));
 }
 
 .workflow-table {
   background: #fff;
+  border: 1px solid var(--app-border, #e0e7f1);
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .log-toolbar {
@@ -241,7 +246,7 @@ onUnmounted(() => {
   border-radius: 6px;
   padding: 12px;
   font-family: Consolas, Monaco, monospace;
-  font-size: 12px;
+  font-size: calc(12px * var(--app-font-scale, 1));
   line-height: 1.7;
 }
 

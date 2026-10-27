@@ -9,6 +9,11 @@ import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
 import com.checker.service.EhGalleriesService;
 import com.checker.service.EhTagTranslationService;
+import com.checker.dto.GalleryAnalyticsRequest;
+import com.checker.dto.GallerySearchRequest;
+import com.checker.service.GalleryAnalyticsService;
+import com.checker.service.GalleryQueryService;
+import com.checker.service.TagNetworkService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -26,15 +31,24 @@ public class DashboardController {
     private final EhTagTranslationService tagTranslationService;
     private final EhGalleriesMapper galleriesMapper;
     private final JdbcTemplate jdbcTemplate;
+    private final GalleryQueryService galleryQueryService;
+    private final GalleryAnalyticsService galleryAnalyticsService;
+    private final TagNetworkService tagNetworkService;
 
     public DashboardController(EhGalleriesService galleriesService,
                                EhTagTranslationService tagTranslationService,
                                EhGalleriesMapper galleriesMapper,
-                               JdbcTemplate jdbcTemplate) {
+                               JdbcTemplate jdbcTemplate,
+                               GalleryQueryService galleryQueryService,
+                               GalleryAnalyticsService galleryAnalyticsService,
+                               TagNetworkService tagNetworkService) {
         this.galleriesService = galleriesService;
         this.tagTranslationService = tagTranslationService;
         this.galleriesMapper = galleriesMapper;
         this.jdbcTemplate = jdbcTemplate;
+        this.galleryQueryService = galleryQueryService;
+        this.galleryAnalyticsService = galleryAnalyticsService;
+        this.tagNetworkService = tagNetworkService;
     }
 
     /**
@@ -57,52 +71,44 @@ public class DashboardController {
      * 面板分析数据。所有聚合都在数据库中完成，并可按抓取时间和下载状态收窄范围。
      */
     @GetMapping("/analytics")
-    public Result<Map<String, Object>> getAnalytics(
-            @RequestParam(defaultValue = "30") int days,
-            @RequestParam(required = false) String status) {
-        int safeDays = Math.min(Math.max(days, 0), 3650);
-        String normalizedStatus = status == null || status.isBlank() ? null : normalizeStatus(status);
-        if (status != null && !status.isBlank() && normalizedStatus == null) {
-            return Result.error(400, "不支持的下载状态");
+    public Result<Map<String, Object>> getAnalytics(@ModelAttribute GalleryAnalyticsRequest request) {
+        try {
+            return Result.success(galleryAnalyticsService.analyze(request));
+        } catch (IllegalArgumentException failure) {
+            return Result.error(400, failure.getMessage());
         }
+    }
 
-        List<Object> params = new ArrayList<>();
-        List<String> filters = new ArrayList<>();
-        if (safeDays > 0) {
-            filters.add("crawled_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)");
-            params.add(safeDays);
+    /**
+     * 标签共现图谱。节点仅保留出现频率最高的标签，再计算这些标签在同一画廊中的共现，
+     * 避免对完整标签库执行笛卡尔积。
+     */
+    @GetMapping("/tag-network")
+    public Result<Map<String, Object>> getTagNetwork(
+            @RequestParam(defaultValue = "36") int limit,
+            @RequestParam(defaultValue = "2") int minWeight,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "0") int offset,
+            @RequestParam(defaultValue = "500") int pageSize,
+            @RequestParam(required = false) String snapshotId) {
+        try {
+            return Result.success(tagNetworkService.network(limit, minWeight, keyword, offset, pageSize, snapshotId));
+        } catch (IllegalArgumentException failure) {
+            return Result.error(400, failure.getMessage());
         }
-        if (normalizedStatus != null) {
-            filters.add("download_status IN (?, ?)");
-            params.add(normalizedStatus);
-            params.add(statusLabel(normalizedStatus));
-        }
-        String where = filters.isEmpty() ? "" : " WHERE " + String.join(" AND ", filters);
-        Object[] values = params.toArray();
-        Map<String, Object> result = new LinkedHashMap<>();
+    }
 
-        result.put("overview", jdbcTemplate.queryForMap("SELECT COUNT(*) total, " +
-                "COALESCE(SUM(file_size_mb), 0) size_mb, COALESCE(AVG(rating), 0) avg_rating, " +
-                "COALESCE(AVG(page_count), 0) avg_pages, " +
-                "COALESCE(SUM(CASE WHEN duplicate_of_gid IS NOT NULL THEN 1 ELSE 0 END), 0) duplicates " +
-                "FROM eh_galleries" + where, values));
-        result.put("status", jdbcTemplate.queryForList("SELECT CASE download_status " +
-                "WHEN '未下载' THEN 'PENDING' WHEN '下载中' THEN 'DOWNLOADING' WHEN '已下载' THEN 'DOWNLOADED' " +
-                "WHEN '已入库' THEN 'IMPORTED' WHEN '下载失败' THEN 'DOWNLOAD_FAILED' ELSE download_status END name, COUNT(*) value " +
-                "FROM eh_galleries" + where + " GROUP BY name ORDER BY value DESC", values));
-        result.put("timeline", jdbcTemplate.queryForList("SELECT DATE(crawled_at) date, COUNT(*) value FROM eh_galleries" + where +
-                (where.isEmpty() ? " WHERE " : " AND ") + "crawled_at IS NOT NULL GROUP BY DATE(crawled_at) ORDER BY date", values));
-        result.put("rating", jdbcTemplate.queryForList("SELECT CASE " +
-                "WHEN rating IS NULL OR rating = 0 THEN '未评分' WHEN rating < 3 THEN '0–3' WHEN rating < 4 THEN '3–4' " +
-                "WHEN rating < 4.5 THEN '4–4.5' ELSE '4.5–5' END name, COUNT(*) value FROM eh_galleries" + where + " GROUP BY name", values));
-        result.put("pages", jdbcTemplate.queryForList("SELECT CASE " +
-                "WHEN page_count IS NULL OR page_count = 0 THEN '未知' WHEN page_count < 20 THEN '<20页' WHEN page_count < 50 THEN '20–49页' " +
-                "WHEN page_count < 100 THEN '50–99页' ELSE '100页+' END name, COUNT(*) value FROM eh_galleries" + where + " GROUP BY name", values));
-        result.put("dedupe", jdbcTemplate.queryForList("SELECT CASE WHEN duplicate_of_gid IS NULL THEN '首选版本' ELSE '重复版本' END name, COUNT(*) value " +
-                "FROM eh_galleries" + where + " GROUP BY name", values));
-        result.put("queries", jdbcTemplate.queryForList("SELECT COALESCE(NULLIF(search_query, ''), '未记录') name, COUNT(*) value FROM eh_galleries" + where +
-                " GROUP BY name ORDER BY value DESC LIMIT 8", values));
-        return Result.success(result);
+    @GetMapping("/tag-network/neighbors")
+    public Result<Map<String, Object>> getTagNeighbors(
+            @RequestParam String tag,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "2") int minWeight,
+            @RequestParam(defaultValue = "100") int limit) {
+        try {
+            return Result.success(tagNetworkService.neighbors(tag, keyword, minWeight, limit));
+        } catch (IllegalArgumentException failure) {
+            return Result.error(400, failure.getMessage());
+        }
     }
     /**
      * 下载状态分布（饼图）
@@ -249,85 +255,12 @@ public class DashboardController {
      * 画廊列表（分页 + 筛选）
      */
     @GetMapping("/galleries")
-    public Result<IPage<EhGalleriesEntity>> getGalleries(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String status,
-            @RequestParam(required = false) String gid,
-            @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) String tag,
-            @RequestParam(defaultValue = "preferred") String dedupe,
-            @RequestParam(defaultValue = "crawledAt") String sortBy,
-            @RequestParam(defaultValue = "desc") String sortOrder) {
-
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-
-        if (gid != null && !gid.isBlank()) {
-            List<Long> gids;
-            try {
-                gids = Arrays.stream(gid.trim().split("[\\s,，;；]+"))
-                        .filter(value -> !value.isBlank())
-                        .map(Long::parseLong)
-                        .filter(value -> value > 0)
-                        .distinct()
-                        .toList();
-            } catch (NumberFormatException exception) {
-                return Result.error(400, "GID 必须是正整数，可用逗号、分号或空格分隔");
-            }
-            if (gids.isEmpty()) {
-                return Result.error(400, "请至少输入一个有效 GID");
-            }
-            wrapper.in("gid", gids);
+    public Result<IPage<Map<String, Object>>> getGalleries(@ModelAttribute GallerySearchRequest request) {
+        try {
+            return Result.success(galleryQueryService.search(request));
+        } catch (IllegalArgumentException failure) {
+            return Result.error(400, failure.getMessage());
         }
-
-        if (status != null && !status.isEmpty()) {
-            String normalizedStatus = normalizeStatus(status);
-            if (normalizedStatus == null) {
-                return Result.error(400, "不支持的下载状态");
-            }
-            wrapper.and(w -> w.eq("download_status", normalizedStatus)
-                    .or().eq("download_status", statusLabel(normalizedStatus)));
-        }
-        if (keyword != null && !keyword.isEmpty()) {
-            wrapper.and(w -> w.like("title", keyword).or().like("filename", keyword));
-        }
-        if (tag != null && !tag.isEmpty()) {
-            wrapper.apply("JSON_CONTAINS(tags, {0})", '"' + tag.replace("\"", "") + '"');
-        }
-        switch (dedupe.toLowerCase(Locale.ROOT)) {
-            case "preferred" -> wrapper.isNull("duplicate_of_gid");
-            case "duplicates" -> wrapper.isNotNull("duplicate_of_gid");
-            case "all" -> {
-                // 显式查看所有版本时不附加条件。
-            }
-            default -> {
-                return Result.error(400, "不支持的作品版本筛选条件");
-            }
-        }
-
-        String sortColumn = switch (sortBy) {
-            case "gid" -> "gid";
-            case "title" -> "title";
-            case "downloadStatus" -> "download_status";
-            case "fileSizeMb" -> "file_size_mb";
-            default -> "crawled_at";
-        };
-        boolean ascending = "asc".equalsIgnoreCase(sortOrder);
-        wrapper.orderBy(true, ascending, sortColumn);
-        if (!"gid".equals(sortColumn)) {
-            wrapper.orderByDesc("gid");
-        }
-
-        int safePage = Math.max(page, 1);
-        int safeSize = Math.min(Math.max(size, 1), 100);
-        IPage<EhGalleriesEntity> pageResult = galleriesService.page(new Page<>(safePage, safeSize), wrapper);
-        pageResult.getRecords().forEach(gallery -> {
-            String normalizedStatus = normalizeStatus(gallery.getDownloadStatus());
-            if (normalizedStatus != null) {
-                gallery.setDownloadStatus(normalizedStatus);
-            }
-        });
-        return Result.success(pageResult);
     }
 
     private String normalizeStatus(String status) {

@@ -6,6 +6,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.util.List;
 import java.util.Map;
@@ -16,6 +17,36 @@ import java.util.Map;
 @Mapper
 public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
 
+    /** Small projection for media requests; never read crawler trace JSON per image. */
+    @Select("SELECT gid, download_status, komga_book_id, storage_path, filename, updated_at " +
+            "FROM eh_galleries WHERE gid = #{gid}")
+    EhGalleriesEntity getPreviewMetadata(@Param("gid") long gid);
+
+    /** Fixed upper cursor and lightweight row count for a requested ID-refresh scope. */
+    @Select({"<script>", "SELECT COALESCE(MAX(gid),0) maxGid, COUNT(*) total FROM eh_galleries WHERE",
+            "<choose><when test='gids != null and !gids.isEmpty()'>gid IN",
+            "<foreach collection='gids' item='gid' open='(' separator=',' close=')'>#{gid}</foreach>",
+            "</when><otherwise>((komga_book_id IS NOT NULL AND TRIM(komga_book_id) &lt;&gt; '')",
+            "OR download_status IN ('IMPORTED','已入库'))</otherwise></choose>", "</script>"})
+    Map<String, Object> getKomgaIdRefreshBounds(@Param("gids") List<Long> gids);
+
+    @Select({"<script>", "SELECT gid,title,filename,storage_path,komga_book_id FROM eh_galleries",
+            "WHERE gid &gt; #{after} AND gid &lt;= #{maxGid} AND",
+            "<choose><when test='gids != null and !gids.isEmpty()'>gid IN",
+            "<foreach collection='gids' item='gid' open='(' separator=',' close=')'>#{gid}</foreach>",
+            "</when><otherwise>((komga_book_id IS NOT NULL AND TRIM(komga_book_id) &lt;&gt; '')",
+            "OR download_status IN ('IMPORTED','已入库'))</otherwise></choose>",
+            "ORDER BY gid ASC LIMIT #{size}", "</script>"})
+    List<EhGalleriesEntity> getKomgaIdRefreshBatch(@Param("after") long after, @Param("maxGid") long maxGid,
+                                                @Param("gids") List<Long> gids, @Param("size") int size);
+
+    /** Do not overwrite a mapping or physical identity changed after the job read the row. */
+    @Update("UPDATE eh_galleries SET komga_book_id = #{newId}, updated_at = CURRENT_TIMESTAMP " +
+            "WHERE gid = #{gid} AND BINARY komga_book_id <=> BINARY #{oldId} " +
+            "AND BINARY filename <=> BINARY #{filename} AND BINARY storage_path <=> BINARY #{storagePath}")
+    int compareAndSetKomgaBookId(@Param("gid") long gid, @Param("oldId") String oldId,
+                                @Param("newId") String newId, @Param("filename") String filename,
+                                @Param("storagePath") String storagePath);
 
     /**
      * 大批量写入：一次 INSERT 多行（由 BatchSqlInjector 注入），
