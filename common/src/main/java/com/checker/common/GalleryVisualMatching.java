@@ -4,14 +4,14 @@ import com.checker.dto.GalleryPageFingerprint;
 import com.checker.dto.GalleryVisualMatch;
 
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 按页面先后顺序比较两本画廊的抽样指纹，允许中间多出广告页或缺页，输出相似度与推荐版本。
  */
 public final class GalleryVisualMatching {
-    private static final int PAGE_DISTANCE_THRESHOLD = 18;
-
     private GalleryVisualMatching() {
     }
 
@@ -21,6 +21,14 @@ public final class GalleryVisualMatching {
      */
     public static GalleryVisualMatch match(Long leftGid, List<GalleryPageFingerprint> leftInput,
                                            Long rightGid, List<GalleryPageFingerprint> rightInput) {
+        return match(leftGid, leftInput, rightGid, rightInput, DedupeSettings.defaults());
+    }
+
+    /** 按本轮设置比较页面；样本数量、覆盖率和画质差距都足够时才推荐版本。 */
+    public static GalleryVisualMatch match(Long leftGid, List<GalleryPageFingerprint> leftInput,
+                                           Long rightGid, List<GalleryPageFingerprint> rightInput,
+                                           DedupeSettings settings) {
+        if (settings == null) throw new IllegalArgumentException("去重参数不能为空");
         List<GalleryPageFingerprint> left = ordered(leftInput);
         List<GalleryPageFingerprint> right = ordered(rightInput);
         if (left.isEmpty() || right.isEmpty()) {
@@ -28,12 +36,32 @@ public final class GalleryVisualMatching {
         }
 
         int[][] dp = new int[left.size() + 1][right.size() + 1];
-        int[][] distance = new int[left.size()][right.size()];
+        int[][] costs = new int[left.size() + 1][right.size() + 1];
+        byte[][] steps = new byte[left.size() + 1][right.size() + 1];
         for (int i = 0; i < left.size(); i++) {
             for (int j = 0; j < right.size(); j++) {
-                distance[i][j] = pageDistance(left.get(i), right.get(j));
-                int diagonal = distance[i][j] <= PAGE_DISTANCE_THRESHOLD ? dp[i][j] + 1 : Integer.MIN_VALUE / 4;
-                dp[i + 1][j + 1] = Math.max(diagonal, Math.max(dp[i][j + 1], dp[i + 1][j]));
+                int bestCount = dp[i][j + 1];
+                int bestCost = costs[i][j + 1];
+                byte step = 1;
+                if (better(dp[i + 1][j], costs[i + 1][j], bestCount, bestCost)) {
+                    bestCount = dp[i + 1][j];
+                    bestCost = costs[i + 1][j];
+                    step = 2;
+                }
+                int distance = pageDistance(left.get(i), right.get(j));
+                int diagonalCount = dp[i][j] + 1;
+                int diagonalCost = costs[i][j] + distance;
+                // 先尽量匹配更多页面；有多个同样长的对齐结果时，选整体哈希差异更小的一组。
+                if (distance <= settings.visualPageDistance()
+                        && (better(diagonalCount, diagonalCost, bestCount, bestCost)
+                        || diagonalCount == bestCount && diagonalCost == bestCost)) {
+                    bestCount = diagonalCount;
+                    bestCost = diagonalCost;
+                    step = 3;
+                }
+                dp[i + 1][j + 1] = bestCount;
+                costs[i + 1][j + 1] = bestCost;
+                steps[i + 1][j + 1] = step;
             }
         }
 
@@ -46,18 +74,18 @@ public final class GalleryVisualMatching {
         int leftQuality = 0;
         int rightQuality = 0;
         while (i > 0 && j > 0) {
-            if (distance[i - 1][j - 1] <= PAGE_DISTANCE_THRESHOLD && dp[i][j] == dp[i - 1][j - 1] + 1) {
+            if (steps[i][j] == 3) {
                 GalleryPageFingerprint lp = left.get(i - 1);
                 GalleryPageFingerprint rp = right.get(j - 1);
                 matched++;
-                totalDistance += distance[i - 1][j - 1];
+                totalDistance += pageDistance(lp, rp);
                 leftPixels += pixels(lp);
                 rightPixels += pixels(rp);
                 leftQuality += value(lp.getQuality());
                 rightQuality += value(rp.getQuality());
                 i--;
                 j--;
-            } else if (dp[i - 1][j] >= dp[i][j - 1]) {
+            } else if (steps[i][j] == 1) {
                 i--;
             } else {
                 j--;
@@ -70,11 +98,20 @@ public final class GalleryVisualMatching {
         double leftScore = qualityScore(leftPixels, leftQuality, matched);
         double rightScore = qualityScore(rightPixels, rightQuality, matched);
         int qualityDelta = matched == 0 ? 0 : (int) Math.round(Math.min(100, Math.abs(leftScore - rightScore)));
-        Long recommended = qualityDelta < 3 ? null : leftScore > rightScore ? leftGid : rightGid;
+        boolean sufficientEvidence = matched >= settings.visualMinMatchedPages()
+                && coverage >= settings.visualMinCoverage();
+        Long recommended = !sufficientEvidence || qualityDelta < settings.visualQualityDelta()
+                ? null : leftScore > rightScore ? leftGid : rightGid;
         String reason = matched == 0
                 ? "采样页中未找到可靠的单调匹配"
                 : String.format("匹配 %d/%d 个较少侧采样页；覆盖率 %d%%；匹配页平均相似度 %d%%；质量差 %d%%",
                 matched, Math.min(left.size(), right.size()), coverage, pageSimilarity, qualityDelta);
+        if (matched > 0 && !sufficientEvidence) {
+            reason += String.format("；证据不足：推荐至少需要 %d 个匹配页且覆盖率达到 %d%%，暂不推荐版本",
+                    settings.visualMinMatchedPages(), settings.visualMinCoverage());
+        } else if (matched > 0 && recommended == null) {
+            reason += "；画质差距未达到 " + settings.visualQualityDelta() + "%，暂不推荐版本";
+        }
 
         return GalleryVisualMatch.builder()
                 .leftGid(leftGid).rightGid(rightGid)
@@ -95,12 +132,23 @@ public final class GalleryVisualMatching {
     }
 
     /**
-     * 排除空记录及缺少页码的页面，并按页码排序，为后续顺序匹配准备数据。
+     * 排除无效页码与完全不可用的哈希，同一页只计算一次，防止重复记录抬高匹配证据。
      */
     private static List<GalleryPageFingerprint> ordered(List<GalleryPageFingerprint> input) {
         if (input == null) return List.of();
-        return input.stream().filter(item -> item != null && item.getPageIndex() != null)
-                .sorted(Comparator.comparingInt(GalleryPageFingerprint::getPageIndex)).toList();
+        Set<Integer> seenPages = new HashSet<>();
+        return input.stream().filter(item -> item != null && item.getPageIndex() != null && item.getPageIndex() >= 0)
+                .filter(item -> validHash(item.getPerceptualHash()) || validHash(item.getCenterHash()))
+                .sorted(Comparator.comparingInt(GalleryPageFingerprint::getPageIndex))
+                .filter(item -> seenPages.add(item.getPageIndex())).toList();
+    }
+
+    private static boolean validHash(String hash) {
+        return hash != null && hash.matches("[0-9a-fA-F]{16}");
+    }
+
+    private static boolean better(int count, int cost, int otherCount, int otherCost) {
+        return count > otherCount || count == otherCount && cost < otherCost;
     }
 
     private static long pixels(GalleryPageFingerprint item) {

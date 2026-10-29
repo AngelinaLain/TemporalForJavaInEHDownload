@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.GalleryDeduplication;
+import com.checker.common.DedupeSettings;
 import com.checker.config.EhWorkflowConfig;
 import com.checker.dto.WorkflowSettings;
 import com.checker.dto.GalleryPageFingerprint;
@@ -284,20 +285,23 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
 
         lockCandidateKey(candidateKey);
+        // 本次认领只读取一次参数，审核、待审扩展、聚类和写回分数始终采用同一套标准。
+        DedupeSettings settings = dedupeReviewService.settingsSnapshot();
         List<EhGalleriesEntity> bucket = selectByCandidateKey(candidateKey);
-        dedupeReviewService.ensureGrayZoneReviews(candidateKey, bucket);
+        dedupeReviewService.ensureGrayZoneReviews(candidateKey, bucket, settings);
         List<DedupeReviewEntity> reviews = dedupeReviewService.findByCandidateKey(candidateKey);
-        Set<Long> heldGids = dedupeReviewService.heldGids(bucket, reviews);
+        Set<Long> heldGids = dedupeReviewService.heldGids(bucket, reviews, settings);
         if (heldGids.contains(gid)) {
             /* 将灰区候选置为待人工审核，已下载或正在下载的健康版本不回退。 */
             markReviewRequired(requested, reviews);
-            log.info("🧑‍⚖️ GID {} 存在 65-84 分的灰区匹配，等待人工审核", gid);
+            log.info("🧑‍⚖️ GID {} 存在需人工确认的匹配（审核起点 {} 分，自动门槛 {} 分），等待人工审核",
+                    gid, settings.reviewScore(), settings.autoMatchScore());
             return false;
         }
         List<EhGalleriesEntity> available = bucket.stream()
                 .filter(item -> !heldGids.contains(item.getGid()))
                 .toList();
-        List<EhGalleriesEntity> component = componentContaining(available, gid, reviews);
+        List<EhGalleriesEntity> component = componentContaining(available, gid, reviews, settings);
         if (component.isEmpty()) component = List.of(requested);
 
         // 已有同作品版本正在下载时优先沿用，避免并发父流程重复下载。
@@ -308,9 +312,9 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .orElse(null);
         if (active != null) {
             /* 统一更新组内首选关系、匹配证据和当前认领状态。 */
-            applyDecision(component, active, null);
+            applyDecision(component, active, null, settings);
             /* 记录当前画廊被已有首选替代的原因，并保留其重复版本关系。 */
-            markRejectedCandidate(requested, active);
+            markRejectedCandidate(requested, active, settings);
             log.info("🔒 GID {} 与正在下载的 GID {} 匹配，本次不重复派发", gid, active.getGid());
             return false;
         }
@@ -321,13 +325,13 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         EhGalleriesEntity preferred = dedupeReviewService.choosePreferred(
                 eligible.isEmpty() ? component : eligible, reviews);
         if (!gid.equals(preferred.getGid())) {
-            applyDecision(component, preferred, null);
-            markRejectedCandidate(requested, preferred);
+            applyDecision(component, preferred, null, settings);
+            markRejectedCandidate(requested, preferred, settings);
             log.info("🔁 GID {} 匹配已有/更优版本 GID {}，跳过下载", gid, preferred.getGid());
             return false;
         }
 
-        applyDecision(component, preferred, gid);
+        applyDecision(component, preferred, gid, settings);
         log.info("✅ GID {} 已原子认领为候选组首选下载版本", gid);
         return true;
     }
@@ -346,14 +350,15 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 .toList();
         // 固定顺序获取行锁，避免两个批次以不同顺序处理时产生死锁。
         keys.forEach(this::lockCandidateKey);
+        DedupeSettings settings = dedupeReviewService.settingsSnapshot();
         for (String key : keys) {
             List<DedupeReviewEntity> reviews = dedupeReviewService.findByCandidateKey(key);
             List<EhGalleriesEntity> bucket = selectByCandidateKey(key);
-            Set<Long> heldGids = dedupeReviewService.heldGids(bucket, reviews);
+            Set<Long> heldGids = dedupeReviewService.heldGids(bucket, reviews, settings);
             List<EhGalleriesEntity> available = bucket.stream()
                     .filter(item -> !heldGids.contains(item.getGid()))
                     .toList();
-            for (List<EhGalleriesEntity> component : dedupeReviewService.cluster(available, reviews)) {
+            for (List<EhGalleriesEntity> component : dedupeReviewService.cluster(available, reviews, settings)) {
                 if (component.isEmpty()) continue;
                 List<EhGalleriesEntity> active = component.stream()
                         .filter(item -> hasStatus(item, DownloadStatus.DOWNLOADING))
@@ -367,7 +372,7 @@ public class DatabaseActivityImpl implements DatabaseActivity {
                 List<EhGalleriesEntity> pool = !active.isEmpty() ? active
                         : (!healthy.isEmpty() ? healthy : (!pending.isEmpty() ? pending : component));
                 EhGalleriesEntity preferred = dedupeReviewService.choosePreferred(pool, reviews);
-                applyDecision(component, preferred, null);
+                applyDecision(component, preferred, null, settings);
             }
         }
         log.info("🔄 已重新核对 {} 个候选键的首选版本关系", keys.size());
@@ -427,20 +432,20 @@ public class DatabaseActivityImpl implements DatabaseActivity {
      * 结合自动匹配和人工结论，找出目标画廊所属的同作品分组。
      * */
     private List<EhGalleriesEntity> componentContaining(List<EhGalleriesEntity> bucket, Long gid,
-                                                        List<DedupeReviewEntity> reviews) {
-        return dedupeReviewService.cluster(bucket, reviews).stream()
+                                                        List<DedupeReviewEntity> reviews, DedupeSettings settings) {
+        return dedupeReviewService.cluster(bucket, reviews, settings).stream()
                 .filter(group -> group.stream().anyMatch(item -> gid.equals(item.getGid())))
                 .findFirst()
                 .orElse(List.of());
     }
 
     private void applyDecision(List<EhGalleriesEntity> component, EhGalleriesEntity preferred,
-                               Long claimedGid) {
+                               Long claimedGid, DedupeSettings settings) {
         for (EhGalleriesEntity member : component) {
             boolean isPreferred = preferred.getGid().equals(member.getGid());
             GalleryDeduplication.MatchResult match = isPreferred
                     ? new GalleryDeduplication.MatchResult(100, "候选组首选版本")
-                    : GalleryDeduplication.match(preferred, member);
+                    : GalleryDeduplication.match(preferred, member, settings);
             UpdateWrapper<EhGalleriesEntity> update = new UpdateWrapper<>();
             update.eq("gid", member.getGid())
                     .set("duplicate_of_gid", isPreferred ? null : preferred.getGid())
@@ -456,8 +461,8 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         }
     }
 
-    private void markRejectedCandidate(EhGalleriesEntity requested, EhGalleriesEntity preferred) {
-        GalleryDeduplication.MatchResult match = GalleryDeduplication.match(preferred, requested);
+    private void markRejectedCandidate(EhGalleriesEntity requested, EhGalleriesEntity preferred, DedupeSettings settings) {
+        GalleryDeduplication.MatchResult match = GalleryDeduplication.match(preferred, requested, settings);
         UpdateWrapper<EhGalleriesEntity> update = new UpdateWrapper<>();
         update.eq("gid", requested.getGid())
                 .set("duplicate_of_gid", preferred.getGid())

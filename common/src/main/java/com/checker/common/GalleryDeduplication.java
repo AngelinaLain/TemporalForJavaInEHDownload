@@ -14,6 +14,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 import java.util.function.BiPredicate;
 
 /**
@@ -32,6 +33,9 @@ public final class GalleryDeduplication {
             "(?i)chinese|中文|汉化|漢化|翻译|翻譯|translated|translation|简体|繁体|簡體|繁體");
     private static final Pattern NON_IDENTITY_CHARACTER = Pattern.compile(
             "[^\\p{IsHan}\\p{IsHiragana}\\p{IsKatakana}\\p{IsLatin}\\p{IsDigit}]+");
+    private static final Pattern TITLE_NUMBER = Pattern.compile("[0-9]+");
+    private static final Pattern EXPLICIT_CHAPTER_NUMBER = Pattern.compile(
+            "(?i)(?:\\b(?:ch(?:apter)?|vol(?:ume)?|part)\\.?\\s*|第\\s*)([0-9]+)");
 
     private GalleryDeduplication() {
     }
@@ -108,16 +112,18 @@ public final class GalleryDeduplication {
      * 综合标题、作者、原作、角色及页数计算同作品分数，同时记录每项加减分原因供人工核对。
      */
     public static MatchResult match(EhGalleriesEntity left, EhGalleriesEntity right) {
+        return match(left, right, DedupeSettings.defaults());
+    }
+
+    /** 按指定设置计算同作品分数，章节编号或篇幅明显冲突时保留给人工确认。 */
+    public static MatchResult match(EhGalleriesEntity left, EhGalleriesEntity right, DedupeSettings settings) {
+        if (settings == null) throw new IllegalArgumentException("去重参数不能为空");
         if (left == null || right == null) {
             return new MatchResult(0, "缺少画廊数据");
         }
         if (left.getGid() != null && left.getGid().equals(right.getGid())) {
             return new MatchResult(100, "GID 完全相同");
         }
-        if (notBlank(left.getDedupeKey()) && left.getDedupeKey().equals(right.getDedupeKey())) {
-            return new MatchResult(100, "严格作品指纹相同");
-        }
-
         int score = 0;
         List<String> reasons = new ArrayList<>();
         String leftOriginal = normalizeTitle(left.getOriginalTitle());
@@ -133,7 +139,7 @@ public final class GalleryDeduplication {
             reasons.add("标准化标题相同 +55");
         } else {
             double similarity = titleSimilarity(leftTitle, rightTitle);
-            if (similarity >= 0.88D) {
+            if (similarity >= settings.titleSimilarityPercent() / 100D) {
                 int points = (int) Math.round(similarity * 50D);
                 score += points;
                 reasons.add("标题相似 " + Math.round(similarity * 100D) + "% +" + points);
@@ -177,6 +183,15 @@ public final class GalleryDeduplication {
         }
 
         int bounded = Math.max(0, Math.min(100, score));
+        // 共同作者和角色可能把续篇、单篇与合集的分数抬高，明显矛盾不能只靠加分抵消。
+        Set<String> leftNumbers = titleNumbers(left, leftTitle);
+        Set<String> rightNumbers = titleNumbers(right, rightTitle);
+        if (!leftNumbers.isEmpty() && !rightNumbers.isEmpty() && !leftNumbers.equals(rightNumbers)) {
+            reasons.add("标题章节或编号不同，需人工确认");
+        }
+        if (hasLargePageDifference(left, right)) {
+            reasons.add("页数相差一倍或更多，可能为单篇与合集，需人工确认");
+        }
         return new MatchResult(bounded, reasons.isEmpty() ? "没有足够的共同信号" : String.join("；", reasons));
     }
 
@@ -184,7 +199,18 @@ public final class GalleryDeduplication {
      * 检查两条画廊的综合分数是否达到自动判定同一作品的阈值。
      */
     public static boolean isAutomaticMatch(EhGalleriesEntity left, EhGalleriesEntity right) {
-        return match(left, right).score() >= AUTO_MATCH_THRESHOLD;
+        return isAutomaticMatch(left, right, DedupeSettings.defaults());
+    }
+
+    /** 使用指定的自动合并分数判断两本画廊，供一次任务内共享相同参数。 */
+    public static boolean isAutomaticMatch(EhGalleriesEntity left, EhGalleriesEntity right, DedupeSettings settings) {
+        if (match(left, right, settings).score() < settings.autoMatchScore()) return false;
+        if (left.getGid() != null && left.getGid().equals(right.getGid())) return true;
+        // 分数表示共同证据的多少，自动合并还必须通过章节与篇幅检查，降低阈值也不能绕过。
+        Set<String> leftNumbers = titleNumbers(left, effectiveTitle(left));
+        Set<String> rightNumbers = titleNumbers(right, effectiveTitle(right));
+        return (leftNumbers.isEmpty() || rightNumbers.isEmpty() || leftNumbers.equals(rightNumbers))
+                && !hasLargePageDifference(left, right);
     }
 
     /**
@@ -243,6 +269,7 @@ public final class GalleryDeduplication {
      * 统一标签分类和名称的字符形式、大小写与空白，供作品身份计算使用。
      */
     private static String normalizeTag(String tag) {
+        if (tag == null || tag.isBlank()) return "";
         String normalized = Normalizer.normalize(tag, Normalizer.Form.NFKC)
                 .trim()
                 .toLowerCase(Locale.ROOT);
@@ -334,8 +361,26 @@ public final class GalleryDeduplication {
         return value.substring(0, end);
     }
 
-    private static boolean notBlank(String value) {
-        return value != null && !value.isBlank();
+    /** 提取标题编号，补上会被普通标题清理去掉的括号内明确章节号。 */
+    private static Set<String> titleNumbers(EhGalleriesEntity gallery, String normalizedTitle) {
+        Set<String> numbers = new HashSet<>();
+        Matcher ordinary = TITLE_NUMBER.matcher(normalizedTitle);
+        while (ordinary.find()) numbers.add(ordinary.group().replaceFirst("^0+(?!$)", ""));
+        String raw = gallery.getOriginalTitle();
+        if (raw == null || raw.isBlank()) raw = gallery.getTitle();
+        if (raw != null) {
+            Matcher explicit = EXPLICIT_CHAPTER_NUMBER.matcher(Normalizer.normalize(raw, Normalizer.Form.NFKC));
+            while (explicit.find()) numbers.add(explicit.group(1).replaceFirst("^0+(?!$)", ""));
+        }
+        return numbers;
+    }
+
+    /** 页数至少相差一倍时暂缓自动合并，避免把章节单篇当作完整合集的重复版本。 */
+    private static boolean hasLargePageDifference(EhGalleriesEntity left, EhGalleriesEntity right) {
+        return left.getPageCount() != null && left.getPageCount() > 0
+                && right.getPageCount() != null && right.getPageCount() > 0
+                && Math.min(left.getPageCount(), right.getPageCount()) * 2L
+                <= Math.max(left.getPageCount(), right.getPageCount());
     }
 
     /**

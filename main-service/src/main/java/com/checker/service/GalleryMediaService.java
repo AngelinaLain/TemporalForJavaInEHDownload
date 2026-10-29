@@ -144,7 +144,9 @@ public class GalleryMediaService {
         }
     }
 
-    /** 先找本地归档，再检查 Komga；旧书籍 ID 失效时重新定位，并保留每一步的检测说明。 */
+    /**
+     * 先找本地归档，再检查 Komga；旧书籍 ID 失效时重新定位，并保留每一步的检测说明。
+     * */
     private SourceIndex source(EhGalleriesEntity gallery) throws Exception {
         return sources.getOrLoad(revision(gallery), () -> {
             List<Map<String, String>> diagnostics = new ArrayList<>();
@@ -213,7 +215,9 @@ public class GalleryMediaService {
         return new SourceIndex("KOMGA", Math.min(count, 100_000), bookId, List.of(), message, List.of());
     }
 
-    /** 按已经选定的本地来源读取一张图片，归档只打开所需条目，Komga 仅请求对应页。 */
+    /**
+     * 按已经选定的本地来源读取一张图片，归档只打开所需条目，Komga 仅请求对应页。
+     * */
     private ImageData loadImage(SourceIndex source, int index, boolean thumbnail) throws Exception {
         byte[] bytes;
         switch (source.source()) {

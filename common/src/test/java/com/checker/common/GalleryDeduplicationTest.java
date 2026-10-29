@@ -4,6 +4,7 @@ import com.checker.entity.EhGalleriesEntity;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Arrays;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -112,6 +113,98 @@ class GalleryDeduplicationTest {
                 List.of(first, conflict), (left, right) -> true).size());
         assertEquals(2, GalleryDeduplication.clusterCandidates(
                 List.of(first, conflict), (left, right) -> false).size());
+    }
+
+    @Test
+    void sameStrictKeyDoesNotReplaceMissingEvidenceOrHideConflicts() {
+        EhGalleriesEntity first = gallery(601L, "版本一", "同名作品", 4D, 20);
+        EhGalleriesEntity second = gallery(602L, "版本二", "同名作品", 4D, 20);
+        first.setTags(List.of());
+        second.setTags(List.of());
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+
+        assertEquals(first.getDedupeKey(), second.getDedupeKey());
+        assertEquals(75, GalleryDeduplication.match(first, second).score());
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second));
+
+        first.setTags(List.of("parody:first-work"));
+        second.setTags(List.of("parody:other-work"));
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+        assertEquals(first.getDedupeKey(), second.getDedupeKey());
+        assertEquals(65, GalleryDeduplication.match(first, second).score());
+        assertTrue(GalleryDeduplication.match(first, second).reason().contains("原作冲突"));
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second));
+    }
+
+    @Test
+    void ignoresStaleStrictKeyWhenCurrentCreatorEvidenceConflicts() {
+        EhGalleriesEntity first = gallery(611L, "版本一", "同名作品", 4D, 20);
+        EhGalleriesEntity second = gallery(612L, "版本二", "同名作品", 4D, 20);
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+        second.setTags(List.of("artist:different-author", "parody:other-work"));
+
+        assertEquals(first.getDedupeKey(), second.getDedupeKey());
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second));
+        assertTrue(GalleryDeduplication.match(first, second).reason().contains("作者/社团冲突"));
+    }
+
+    @Test
+    void doesNotMergeDifferentChaptersEvenWhenBracketRemovalCreatesSameKey() {
+        EhGalleriesEntity first = gallery(621L, "版本一", "A Shared Story (Chapter 1)", 4D, 20);
+        EhGalleriesEntity second = gallery(622L, "版本二", "A Shared Story (Chapter 2)", 4D, 20);
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+        DedupeSettings loose = new DedupeSettings(40, 60, 70, 18, 3, 70, 3);
+
+        assertEquals(first.getDedupeKey(), second.getDedupeKey());
+        assertTrue(GalleryDeduplication.match(first, second).score() >= 85);
+        assertTrue(GalleryDeduplication.match(first, second).reason().contains("编号不同"));
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second));
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second, loose));
+    }
+
+    @Test
+    void doesNotMergeStandaloneChapterWithMuchLongerCollection() {
+        EhGalleriesEntity chapter = gallery(631L, "单篇", "同一原作", 4D, 20);
+        EhGalleriesEntity collection = gallery(632L, "合集", "同一原作", 4D, 80);
+        List.of(chapter, collection).forEach(GalleryDeduplication::populateIdentity);
+
+        assertTrue(GalleryDeduplication.match(chapter, collection).score() >= 85);
+        assertTrue(GalleryDeduplication.match(chapter, collection).reason().contains("单篇与合集"));
+        assertFalse(GalleryDeduplication.isAutomaticMatch(chapter, collection));
+        assertEquals(2, GalleryDeduplication.clusterCandidates(List.of(chapter, collection)).size());
+    }
+
+    @Test
+    void appliesConfiguredAutomaticAndTitleThresholdsWithoutChangingIdentity() {
+        EhGalleriesEntity first = gallery(641L, "版本一", "LongSharedTitleForMatchingA", 4D, 20);
+        EhGalleriesEntity second = gallery(642L, "版本二", "LongSharedTitleForMatchingB", 4D, 20);
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+        String originalKey = first.getDedupeKey();
+        DedupeSettings strictTitle = new DedupeSettings(65, 85, 100, 18, 3, 70, 3);
+
+        assertTrue(GalleryDeduplication.isAutomaticMatch(first, second));
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second, strictTitle));
+        assertEquals(originalKey, first.getDedupeKey());
+
+        second.setOriginalTitle(first.getOriginalTitle());
+        first.setTags(List.of());
+        second.setTags(List.of());
+        assertFalse(GalleryDeduplication.isAutomaticMatch(first, second));
+        assertTrue(GalleryDeduplication.isAutomaticMatch(first, second,
+                new DedupeSettings(40, 70, 88, 18, 3, 70, 3)));
+    }
+
+    @Test
+    void toleratesNullTagsAndKeepsCompleteLinkGrouping() {
+        EhGalleriesEntity first = gallery(651L, "版本一", "同一原作", 4D, 20);
+        EhGalleriesEntity second = gallery(652L, "版本二", "同一原作", 4D, 20);
+        second.setTags(Arrays.asList(null, "artist:author", "parody:original-work"));
+        List.of(first, second).forEach(GalleryDeduplication::populateIdentity);
+        assertTrue(GalleryDeduplication.isAutomaticMatch(first, second));
+
+        EhGalleriesEntity third = gallery(653L, "版本三", "同一原作", 4D, 20);
+        assertEquals(2, GalleryDeduplication.clusterCandidates(List.of(third, second, first),
+                (left, right) -> Math.abs(left.getGid() - right.getGid()) == 1).size());
     }
 
     private EhGalleriesEntity gallery(Long gid, String title, String originalTitle, Double rating, Integer pageCount) {

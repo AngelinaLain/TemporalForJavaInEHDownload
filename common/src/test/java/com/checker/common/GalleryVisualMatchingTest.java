@@ -16,11 +16,13 @@ import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GalleryVisualMatchingTest {
@@ -41,6 +43,99 @@ class GalleryVisualMatchingTest {
         assertEquals(100, match.getSampleCoverage());
         assertTrue(match.getSimilarity() >= 95);
         assertEquals(2L, match.getRecommendedGid());
+    }
+
+    @Test
+    void doesNotRecommendVersionBasedOnSingleMatchingPage() {
+        GalleryVisualMatch match = GalleryVisualMatching.match(1L, pages(1L, 0, 1, 600, 900),
+                2L, pages(2L, 0, 1, 2400, 3600));
+
+        assertEquals(1, match.getMatchedPages());
+        assertEquals(100, match.getSimilarity());
+        assertNull(match.getRecommendedGid());
+        assertTrue(match.getReason().contains("证据不足"));
+    }
+
+    @Test
+    void appliesConfiguredMinimumMatchedPagesAndQualityGap() {
+        List<GalleryPageFingerprint> left = pages(1L, 0, 2, 1000, 1400);
+        List<GalleryPageFingerprint> right = pages(2L, 0, 2, 1400, 2000);
+
+        assertNull(GalleryVisualMatching.match(1L, left, 2L, right).getRecommendedGid());
+        assertEquals(2L, GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 18, 2, 70, 3)).getRecommendedGid());
+        GalleryVisualMatch highGap = GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 18, 2, 70, 30));
+        assertNull(highGap.getRecommendedGid());
+        assertTrue(highGap.getReason().contains("画质差距未达到 30%"));
+    }
+
+    @Test
+    void requiresConfiguredCoverageEvenWhenEnoughPagesMatch() {
+        List<GalleryPageFingerprint> left = pages(1L, 0, 4, 1000, 1400);
+        List<GalleryPageFingerprint> right = List.of(
+                page(2L, 0, left.get(0).getPerceptualHash(), 2000, 2800),
+                page(2L, 1, left.get(1).getPerceptualHash(), 2000, 2800),
+                page(2L, 2, "ffffffffffffffff", 2000, 2800),
+                page(2L, 3, "fffffffffffffffe", 2000, 2800));
+
+        GalleryVisualMatch strict = GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 18, 2, 70, 3));
+        assertEquals(2, strict.getMatchedPages());
+        assertEquals(50, strict.getSampleCoverage());
+        assertNull(strict.getRecommendedGid());
+        assertEquals(2L, GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 18, 2, 30, 3)).getRecommendedGid());
+    }
+
+    @Test
+    void usesConfiguredPageDistance() {
+        List<GalleryPageFingerprint> left = pages(1L, 0, 3, 1000, 1400);
+        List<GalleryPageFingerprint> right = new ArrayList<>();
+        for (int index = 0; index < left.size(); index++) {
+            String hash = String.format("%016x", Long.parseUnsignedLong(left.get(index).getPerceptualHash(), 16) ^ 3L);
+            right.add(page(2L, index, hash, 1000, 1400));
+        }
+
+        assertEquals(0, GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 0, 3, 70, 3)).getMatchedPages());
+        assertEquals(3, GalleryVisualMatching.match(1L, left, 2L, right,
+                new DedupeSettings(65, 85, 88, 2, 3, 70, 3)).getMatchedPages());
+    }
+
+    @Test
+    void filtersInvalidHashesAndCountsEachValidPageOnce() {
+        GalleryPageFingerprint centerOnly = page(1L, 2, null, 1000, 1400);
+        centerOnly.setCenterHash("3333333333333333");
+        List<GalleryPageFingerprint> left = Arrays.asList(null,
+                page(1L, -1, "0000000000000000", 1000, 1400),
+                page(1L, 0, "0000000000000000", 1000, 1400),
+                page(1L, 0, "0000000000000000", 1000, 1400),
+                page(1L, 1, "invalid", 1000, 1400), centerOnly);
+        List<GalleryPageFingerprint> right = List.of(
+                page(2L, 0, "0000000000000000", 1000, 1400),
+                page(2L, 2, "3333333333333333", 1000, 1400));
+
+        GalleryVisualMatch match = GalleryVisualMatching.match(1L, left, 2L, right);
+        assertEquals(2, match.getLeftSamples());
+        assertEquals(2, match.getMatchedPages());
+        assertNull(match.getRecommendedGid());
+        assertEquals(0, GalleryVisualMatching.match(1L,
+                List.of(page(1L, 0, "invalid", 1000, 1400)), 2L, right).getLeftSamples());
+    }
+
+    @Test
+    void choosesSmallerDistanceWhenSeveralAlignmentsMatchSameNumberOfPages() {
+        List<GalleryPageFingerprint> left = List.of(page(1L, 0, "0000000000000000", 1000, 1400));
+        List<GalleryPageFingerprint> right = List.of(
+                page(2L, 0, "0000000000000000", 1000, 1400),
+                page(2L, 1, "000000000000000f", 1000, 1400));
+
+        GalleryVisualMatch match = GalleryVisualMatching.match(1L, left, 2L, right);
+
+        assertEquals(1, match.getMatchedPages());
+        assertEquals(100, match.getSimilarity());
+        assertTrue(match.getReason().contains("平均相似度 100%"));
     }
 
     @Test

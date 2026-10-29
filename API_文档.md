@@ -318,6 +318,43 @@ Komga 浏览器跳转优先使用 `KOMGA_PUBLIC_URL`，为空时回退 `KOMGA_UR
 
 ## 5. 重复项人工审核
 
+### 全局去重参数
+
+去重审核页的“去重参数”面板对应下列接口，均要求管理员 JWT：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/dedupe-settings` | 读取全局参数；返回 `data.settings` 和 `data.defaults`，查询不写库 |
+| PUT | `/api/dedupe-settings` | 完整提交以下七个整数参数；成功返回已保存参数和默认值 |
+
+```json
+{
+  "reviewScore": 65,
+  "autoMatchScore": 85,
+  "titleSimilarityPercent": 88,
+  "visualPageDistance": 18,
+  "visualMinMatchedPages": 3,
+  "visualMinCoverage": 70,
+  "visualQualityDelta": 3
+}
+```
+
+| 参数 | 含义与范围 |
+| --- | --- |
+| `reviewScore` | 人工审核起点，40～94 分；达到此分数且未通过自动判断的候选进入审核 |
+| `autoMatchScore` | 自动同作起点，60～100 分，必须严格大于 `reviewScore` |
+| `titleSimilarityPercent` | 近似标题获得加分的门槛，70～100% |
+| `visualPageDistance` | 页面哈希距离容差，0～24；越低越严格 |
+| `visualMinMatchedPages` | 视觉质量推荐所需最少匹配页数，2～16 页 |
+| `visualMinCoverage` | 视觉质量推荐所需覆盖率，30～100%，分母为采样较少一侧的有效页数 |
+| `visualQualityDelta` | 视觉质量推荐所需最小画质分差，1～30% |
+
+参数保存在数据库，重启后仍保留，多实例在下一次业务操作读取新值。未保存时使用上表默认值；缺字段、额外字段、非整数、越界或分数关系不合法返回业务码 `400`。数据库读取失败不会静默回退到默认策略。
+
+保存参数不自动改写历史分组和审核记录。同一次认领、重整或人工处理使用同一份参数快照；后续判断采用新值。作品键相同不再直接判满分，仍须比较标题、作者、原作、角色及页数。章节编号冲突或页数至少相差一倍时，自动分组会暂缓并按审核起点保留人工确认机会；降低自动阈值也不能绕过这两项保护。人工 `MATCH`、`DIFFERENT`、`VARIANT` 结论始终优先。
+
+视觉参数只影响已保存页面指纹的比较和推荐，不改变指纹算法或采样数，不单独触发自动合并；AI 向量模型和阈值仍在“AI 设置”管理。
+
 ### `GET /api/dedupe-reviews`
 
 Query：`page=1`、`size=20`、`decision=PENDING`。`decision` 可使用 `PENDING`、`MATCH`、`DIFFERENT`、`VARIANT` 或 `ALL`。
@@ -345,6 +382,12 @@ Query：`page=1`、`size=20`、`decision=PENDING`。`decision` 可使用 `PENDIN
 对该审核记录的两个候选版本发起 AI 视觉复核，无需请求体。相同候选对已有 `QUEUED` 或 `RUNNING` 的任务时会复用该任务，避免重复提交。响应包含 `jobId` 和 `workflowId`，后续进度用 `GET /api/visual-dedup/ai-review/{jobId}` 查询。审核记录不存在时返回业务码 `400`，Temporal 工作流启动失败时返回 `503`。
 
 该结果仅作为人工审核证据，**不会自动提交 MATCH / DIFFERENT / VARIANT 结论**。
+
+### `POST /api/dedupe-reviews/{id}/refresh-visual`
+
+无需请求体，按当前去重参数重新比较该审核对已保存的视觉指纹，并返回更新后的审核记录。记录不存在返回业务码 `404`。不读取整本归档、不外发图片、不改人工结论与人工首选版本。证据不足时清除过时的视觉推荐；待审记录的候选推荐同步更新，已人工处理的推荐字段保持原有人工处置结果。
+
+日常下载认领跳过已有审核记录的视觉重算，减少候选桶锁内数据库读写。归档指纹变化时仍自动刷新相关证据；调整参数后可用本接口主动核对效果。
 
 ## 6. Komga 入库复核
 
@@ -693,8 +736,11 @@ Redis 探测也计入健康检查：Redis 不可达时 `/actuator/health` 会变
 | Dashboard | POST | `/api/dashboard/tag-translations/refresh` |
 | Dashboard | GET | `/api/dashboard/tag-detail` |
 | 去重审核 | GET | `/api/dedupe-reviews` |
+| 去重参数 | GET | `/api/dedupe-settings` |
+| 去重参数 | PUT | `/api/dedupe-settings` |
 | 去重审核 | POST | `/api/dedupe-reviews/{id}/resolve` |
 | 去重审核 | POST | `/api/dedupe-reviews/{id}/ai-review` |
+| 去重审核 | POST | `/api/dedupe-reviews/{id}/refresh-visual` |
 | Komga 复核 | GET | `/api/komga-import-reviews` |
 | Komga 复核 | POST | `/api/komga-import-reviews/{gid}/retry` |
 | Komga 关联刷新 | POST | `/api/komga-id-refresh` |

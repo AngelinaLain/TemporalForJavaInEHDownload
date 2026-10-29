@@ -110,6 +110,16 @@ public class DedupeReviewController {
             return Result.error(503, "Temporal 工作流启动失败: " + exception.getMessage());
         }
     }
+    /** 使用当前参数更新这对画廊的视觉证据，只读取已有指纹，不重新读归档或修改人工结论。 */
+    @PostMapping("/{id}/refresh-visual")
+    public Result<DedupeReviewEntity> refreshVisual(@PathVariable Long id) {
+        try {
+            return Result.success(reviewService.refreshVisualEvidence(id));
+        } catch (IllegalArgumentException exception) {
+            return Result.error(404, exception.getMessage());
+        }
+    }
+
     /**
      * 保存人工结论，再为需要继续处理的画廊启动下载工作流。
      */

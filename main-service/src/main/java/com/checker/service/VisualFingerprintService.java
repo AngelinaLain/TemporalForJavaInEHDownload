@@ -3,6 +3,7 @@ package com.checker.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.checker.common.GalleryVisualMatching;
+import com.checker.common.DedupeSettings;
 import com.checker.common.PerceptualHash;
 import com.checker.dto.GalleryPageFingerprint;
 import com.checker.dto.GalleryVisualMatch;
@@ -20,10 +21,13 @@ import java.util.List;
 public class VisualFingerprintService {
     private final GalleryPageHashMapper pageHashMapper;
     private final VisualMatchMapper visualMatchMapper;
+    private final DedupeSettingsService settingsService;
 
-    public VisualFingerprintService(GalleryPageHashMapper pageHashMapper, VisualMatchMapper visualMatchMapper) {
+    public VisualFingerprintService(GalleryPageHashMapper pageHashMapper, VisualMatchMapper visualMatchMapper,
+                                    DedupeSettingsService settingsService) {
         this.pageHashMapper = pageHashMapper;
         this.visualMatchMapper = visualMatchMapper;
+        this.settingsService = settingsService;
     }
 
     /** 在事务中替换某画廊当前算法版本的页面指纹；已有归档指纹时不让预览指纹覆盖它。 */
@@ -73,10 +77,16 @@ public class VisualFingerprintService {
     /** 比较两个画廊的页面指纹并保存匹配证据，供选优和人工审核复用。 */
     @Transactional
     public GalleryVisualMatch matchAndPersist(Long firstGid, Long secondGid) {
+        return matchAndPersist(firstGid, secondGid, settingsService.current());
+    }
+
+    /** 调用方可传入本轮参数快照，保证多个画廊对按照同一标准比较。 */
+    @Transactional
+    public GalleryVisualMatch matchAndPersist(Long firstGid, Long secondGid, DedupeSettings settings) {
         long leftGid = Math.min(firstGid, secondGid);
         long rightGid = Math.max(firstGid, secondGid);
         GalleryVisualMatch match = GalleryVisualMatching.match(
-                leftGid, find(leftGid), rightGid, find(rightGid));
+                leftGid, find(leftGid), rightGid, find(rightGid), settings);
         QueryWrapper<VisualMatchEntity> query = new QueryWrapper<>();
         query.eq("left_gid", leftGid).eq("right_gid", rightGid)
                 .eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION);
@@ -96,9 +106,7 @@ public class VisualFingerprintService {
 
     /** 统计具有当前算法版本指纹的画廊数量。 */
     public long countCurrentGalleries() {
-        QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
-        query.select("DISTINCT gid").eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION);
-        return pageHashMapper.selectObjs(query).size();
+        return pageHashMapper.countCurrentGalleries(PerceptualHash.ALGORITHM_VERSION);
     }
 
     private GalleryPageHashEntity toEntity(GalleryPageFingerprint dto) {

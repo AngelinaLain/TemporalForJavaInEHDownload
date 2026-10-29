@@ -16,10 +16,12 @@
       </template>
     </PageHeading>
 
+    <DedupeSettingsPanel />
+
     <el-skeleton v-if="firstLoad" :rows="10" animated class="review-skeleton" />
     <el-empty v-else-if="!records.length" description="当前没有需要处理的去重审核" />
 
-    <el-card v-for="item in records" :key="item.id" shadow="hover" class="review-card" v-loading="resolvingId === item.id || aiReviewId === item.id">
+    <el-card v-for="item in records" :key="item.id" shadow="hover" class="review-card" v-loading="resolvingId === item.id || aiReviewId === item.id || refreshingVisualId === item.id">
       <template #header>
         <div class="case-header">
           <div class="case-title">
@@ -50,6 +52,11 @@
         </p>
       </div>
 
+      <div class="visual-refresh-actions">
+        <p>按当前参数重新比较已有指纹，不重新读取归档、不外发图片，也不改变人工结论。</p>
+        <el-button plain :loading="refreshingVisualId === item.id" :disabled="refreshingVisualId !== null" @click="refreshVisualEvidence(item)">更新视觉证据</el-button>
+      </div>
+
       <div class="comparison">
         <template v-for="(candidate, index) in reviewCandidates(item)" :key="candidate.gallery?.gid || index">
           <div v-if="index" class="versus">VS</div>
@@ -57,13 +64,13 @@
             v-if="candidate.gallery"
             class="candidate"
             :class="{
-              recommended: item.recommendedGid === candidate.gallery.gid,
+              recommended: recommendedCandidate(item) === candidate.gallery,
               selected: item.preferredGid === candidate.gallery.gid
             }"
           >
             <div class="candidate-heading">
               <span>{{ candidate.label }}</span>
-              <span v-if="item.recommendedGid === candidate.gallery.gid" class="recommend-badge">系统推荐</span>
+              <span v-if="recommendedCandidate(item) === candidate.gallery" class="recommend-badge">系统推荐</span>
               <span v-if="item.preferredGid === candidate.gallery.gid" class="selected-badge">人工首选</span>
             </div>
             <div class="candidate-title">{{ candidate.gallery.title || '-' }}</div>
@@ -90,7 +97,7 @@
         <el-button type="primary" plain :loading="aiReviewId === item.id" @click="startAiReview(item)">
           AI 视觉复核
         </el-button>
-        <el-button type="primary" @click="confirmRecommended(item)">确认系统推荐</el-button>
+        <el-button type="primary" :disabled="!recommendedCandidate(item)" @click="confirmRecommended(item)">{{ recommendedCandidate(item) ? '确认系统推荐' : '暂无系统推荐' }}</el-button>
         <el-button @click="resolveReview(item, 'MATCH', item.left?.gid, `选择 GID ${item.left?.gid}`)">
           选择左侧
         </el-button>
@@ -127,6 +134,7 @@
 <script setup>
 // 展示重复画廊候选及比较证据，提交人工判断或启动 AI 视觉复核。
 import PageHeading from '../components/PageHeading.vue'
+import DedupeSettingsPanel from '../components/DedupeSettingsPanel.vue'
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
@@ -137,6 +145,7 @@ const loading = ref(false)
 const firstLoad = ref(true)
 const resolvingId = ref(null)
 const aiReviewId = ref(null)
+const refreshingVisualId = ref(null)
 const pendingCount = ref(0)
 const filters = reactive({ decision: 'PENDING' })
 const pagination = reactive({ page: 1, size: 10, total: 0 })
@@ -174,9 +183,29 @@ const reloadFromFirstPage = () => {
   void loadData()
 }
 
+// 推荐必须明确对应仍存在的左侧或右侧记录；缺失或过时的推荐不替用户选择版本。
+const recommendedCandidate = item => {
+  if (item?.recommendedGid == null) return null
+  return [item.left, item.right].find(gallery => gallery?.gid > 0 && gallery.gid === item.recommendedGid) || null
+}
+
 const confirmRecommended = item => {
-  const gallery = item.recommendedGid === item.left?.gid ? item.left : item.right
-  return resolveReview(item, 'MATCH', gallery?.gid, `确认系统推荐 GID ${gallery?.gid}`)
+  const gallery = recommendedCandidate(item)
+  if (!gallery) return ElMessage.warning('当前没有有效的系统推荐，请查看两侧证据后手动选择版本。')
+  return resolveReview(item, 'MATCH', gallery.gid, `确认系统推荐 GID ${gallery.gid}`)
+}
+
+// 参数修改后可单独重比这条审核的已有指纹，随后重新读取当前页展示最新证据。
+const refreshVisualEvidence = async item => {
+  if (refreshingVisualId.value !== null) return
+  refreshingVisualId.value = item.id
+  try {
+    await api.post(`/dedupe-reviews/${item.id}/refresh-visual`)
+    await loadData()
+    ElMessage.success('视觉证据已按当前参数更新，人工结论保持不变')
+  } finally {
+    refreshingVisualId.value = null
+  }
 }
 
 // 提交人工的同作、不同或版本判断，再刷新审核列表。
@@ -254,6 +283,7 @@ onMounted(loadData)
 .visual-summary span { color: var(--app-text-muted, #8492a8); font-size: calc(12px * var(--app-font-scale, 1)); }
 .visual-summary strong { color: var(--app-text, #25354b); font-size: calc(18px * var(--app-font-scale, 1)); }
 .visual-recommendation { margin: 10px 0 0; color: var(--app-text-secondary, #64748b); font-size: calc(13px * var(--app-font-scale, 1)); }
+.visual-refresh-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 14px; }.visual-refresh-actions p { flex: 1; min-width: 200px; margin: 0; color: var(--app-text-muted); font-size: calc(11px * var(--app-font-scale, 1)); line-height: 1.8; }
 .versus { display: flex; align-items: center; justify-content: center; color: var(--app-text-muted, #8492a8); font-weight: 700; }
 .candidate { border: 1px solid var(--app-border, #e0e7f1); border-radius: 8px; padding: 18px; background: #fff; min-width: 0; }
 .candidate.recommended { border-color: var(--app-accent, #4169e1); box-shadow: inset 0 0 0 1px var(--app-accent, #4169e1); }

@@ -1,7 +1,7 @@
 <template>
   <div class="visual-page">
     <PageHeading title="视觉指纹管理" eyebrow="VISUAL MATCHING" description="生成画廊采样指纹，维护历史索引，并对候选作品进行视觉复核。">
-      <template #actions><el-button :loading="loading" @click="loadStatus">刷新状态</el-button></template>
+      <template #actions><el-button @click="$router.push('/dedupe-reviews#dedupe-settings')">调整去重参数</el-button><el-button :loading="loading" @click="loadStatus">刷新状态</el-button></template>
     </PageHeading>
     <el-card shadow="never">
       <el-row :gutter="16">
