@@ -5,6 +5,7 @@ import com.checker.common.Constants;
 import com.checker.common.DownloadStatus;
 import com.checker.common.ErrorType;
 import com.checker.entity.EhGalleriesEntity;
+import com.checker.dto.BatchEmailPayload;
 import com.checker.temporalServices.activities.DatabaseActivity;
 import com.checker.temporalServices.activities.KomgaActivity;
 import com.checker.temporalServices.activities.NotificationActivity;
@@ -18,6 +19,7 @@ import org.slf4j.Logger;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -168,6 +170,85 @@ class WorkflowSteps {
             content.append("\n⚠️ 检测到致命错误，后续尚未启动的子流程已停止派发。");
         }
         return content.toString().trim();
+    }
+
+    /**
+     * 将已经查询的本批最终状态整理为结构化邮件，不增加工作流活动或额外数据库读取。
+     * 全部记录参与统计；明细最多三十条，优先列出需人工处理的画廊，再按 GID 稳定排序。
+     */
+    static String buildRichBatchNotificationContent(String flowName, int discovered, int planned, int started,
+                                                    boolean stoppedByFatalError,
+                                                    List<EhGalleriesEntity> finalStates,
+                                                    long startedAt, long finishedAt,
+                                                    String workflowId, String runId) {
+        List<EhGalleriesEntity> records = finalStates == null ? List.of()
+                : finalStates.stream().filter(java.util.Objects::nonNull).toList();
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (DownloadStatus status : DownloadStatus.values()) counts.put(status.getValue(), 0);
+        for (EhGalleriesEntity gallery : records) {
+            String status = displayStatus(gallery.getDownloadStatus());
+            counts.merge(status, 1, Integer::sum);
+        }
+        List<BatchEmailPayload.Gallery> details = records.stream()
+                .sorted(Comparator.comparingInt((EhGalleriesEntity gallery) -> notificationPriority(gallery.getDownloadStatus()))
+                        .thenComparing(EhGalleriesEntity::getGid, Comparator.nullsLast(Long::compareTo)))
+                .limit(30)
+                .map(gallery -> new BatchEmailPayload.Gallery(gallery.getGid(),
+                        limitNotificationText(gallery.getTitle(), 240), limitNotificationText(gallery.getOriginalTitle(), 240),
+                        displayStatus(gallery.getDownloadStatus()), gallery.getPageCount(),
+                        finiteNotificationNumber(gallery.getRating()), finiteNotificationNumber(gallery.getFileSizeMb()),
+                        gallery.getDuplicateOfGid(), gallery.getKomgaConfirmationAttempts(),
+                        limitNotificationText(notificationReason(gallery), 360),
+                        limitNotificationText(gallery.getKomgaBookId(), 128)))
+                .toList();
+        return new BatchEmailPayload(limitNotificationText(flowName, 80), discovered, planned, started,
+                stoppedByFatalError, startedAt, finishedAt, limitNotificationText(workflowId, 240),
+                limitNotificationText(runId, 128), counts, records.size(), records.size() - details.size(), details).encode();
+    }
+
+    /** 统一中英文状态名，未知值不假装成成功或失败。 */
+    private static String displayStatus(String status) {
+        String normalized = normalizeDownloadStatus(status);
+        return normalized == null ? "未知状态" : normalized;
+    }
+
+    /** 失败和待人工处理的记录优先展示，已完成与忽略记录排在后面。 */
+    private static int notificationPriority(String status) {
+        String normalized = displayStatus(status);
+        if (DownloadStatus.BLOCKED.getValue().equals(normalized)
+                || DownloadStatus.DOWNLOAD_FAILED.getValue().equals(normalized)
+                || DownloadStatus.KOMGA_IMPORT_FAILED.getValue().equals(normalized)
+                || DownloadStatus.PARTIAL.getValue().equals(normalized)) return 0;
+        if (DownloadStatus.REVIEW_REQUIRED.getValue().equals(normalized)) return 1;
+        if (DownloadStatus.WAITING_KOMGA.getValue().equals(normalized)
+                || DownloadStatus.DOWNLOADED.getValue().equals(normalized)) return 2;
+        if (DownloadStatus.IMPORTED.getValue().equals(normalized)) return 4;
+        if (DownloadStatus.IGNORED.getValue().equals(normalized)) return 5;
+        return 3;
+    }
+
+    /** 仅在对应处理阶段使用已有原因，缺少持久化原因时留空，不编造失败细节。 */
+    private static String notificationReason(EhGalleriesEntity gallery) {
+        String status = displayStatus(gallery.getDownloadStatus());
+        if (DownloadStatus.KOMGA_IMPORT_FAILED.getValue().equals(status)
+                || DownloadStatus.WAITING_KOMGA.getValue().equals(status)
+                || DownloadStatus.DOWNLOADED.getValue().equals(status)) {
+            return gallery.getKomgaConfirmationReason();
+        }
+        if (DownloadStatus.REVIEW_REQUIRED.getValue().equals(status)
+                || DownloadStatus.IGNORED.getValue().equals(status)) return gallery.getDedupeMatchReason();
+        return null;
+    }
+
+    /** 按完整字符截断长文本，控制活动载荷大小且不截断 Unicode 辅助字符。 */
+    private static String limitNotificationText(String value, int maximum) {
+        if (value == null) return null;
+        int count = value.codePointCount(0, value.length());
+        return count <= maximum ? value : value.substring(0, value.offsetByCodePoints(0, maximum));
+    }
+
+    private static Double finiteNotificationNumber(Double value) {
+        return value != null && Double.isFinite(value) ? value : null;
     }
 
     /** 将旧中文状态和枚举名称统一成展示名称，供批量通知统计。 */

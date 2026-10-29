@@ -133,6 +133,12 @@ curl http://127.0.0.1:8001/api/dashboard/stats \
 { "subject": "邮件测试", "content": "测试内容" }
 ```
 
+接口把测试通知提交到后台发送队列，响应中的成功不等同于邮件已经送达。默认主题为“GalleryImport · 邮件通知测试”，自定义正文按纯文本处理，HTML 标签不会被执行。实际邮件使用统一中文 HTML 模板，并显示通知时间及明确时区。
+
+新批次邮件增加任务发现/计划/启动/入库/需关注/未启动数量、完整状态统计、任务起止时间和耗时、Workflow ID 与 Run ID。画廊明细最多 30 条，异常优先，包含已有的标题、GID、评分、页数、大小、版本与入库说明；不展示源站令牌、内部归档路径或抓取追踪。历史工作流继续兼容原正文。
+
+配置 `NOTIFICATION_APP_URL` 可启用系统及相关处理页面的跳转按钮；`NOTIFICATION_TIME_ZONE` 默认为 `Asia/Shanghai`。测试邮件不会伪造真实批次或画廊结果。可直接查看仓库 `docs/email-previews/` 中的虚构样式示例。
+
 ### `POST /api/temporal/eh/collections/build-by-tags`
 
 按标签创建或更新 Komga 合集。该端点是旧的“按标签直接构建”能力；自定义合集管理请使用第 10 节接口。

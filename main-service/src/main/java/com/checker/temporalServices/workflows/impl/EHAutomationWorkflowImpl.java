@@ -264,9 +264,14 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
         } else {
             List<Long> taskGids = tasks.stream().map(task -> task.gallery.getGid()).toList();
             List<EhGalleriesEntity> finalStates = getGalleriesByIdsInBatches(taskGids);
-            String content = WorkflowSteps.buildBatchNotificationContent(
-                    "抓取流程", galleries.size(), tasks.size(), startedChildren,
-                    fatalErrorOccurred, finalStates);
+            int richEmailVersion = Workflow.getVersion("rich-email-summary", Workflow.DEFAULT_VERSION, 1);
+            // 旧历史保留原文本参数；新汇总只使用已有活动结果和工作流时钟，不增加外部读取。
+            String content = richEmailVersion == Workflow.DEFAULT_VERSION
+                    ? WorkflowSteps.buildBatchNotificationContent("抓取流程", galleries.size(), tasks.size(), startedChildren,
+                            fatalErrorOccurred, finalStates)
+                    : WorkflowSteps.buildRichBatchNotificationContent("抓取流程", galleries.size(), tasks.size(), startedChildren,
+                            fatalErrorOccurred, finalStates, Workflow.getInfo().getRunStartedTimestampMillis(),
+                            Workflow.currentTimeMillis(), Workflow.getInfo().getWorkflowId(), Workflow.getInfo().getRunId());
             notificationActivity.sendEmailAlert("抓取流程汇总", content);
         }
     }

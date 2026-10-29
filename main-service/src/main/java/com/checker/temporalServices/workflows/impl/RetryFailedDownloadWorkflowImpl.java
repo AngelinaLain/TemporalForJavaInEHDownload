@@ -125,9 +125,14 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
         } else {
             List<Long> gids = failedGalleries.stream().map(EhGalleriesEntity::getGid).toList();
             List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(gids);
-            String content = WorkflowSteps.buildBatchNotificationContent(
-                    "重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
-                    fatalErrorOccurred, finalStates);
+            int richEmailVersion = Workflow.getVersion("rich-email-summary", Workflow.DEFAULT_VERSION, 1);
+            // 活动接口和调用顺序保持不变；新增版本只决定邮件正文采用旧文本还是新版结构。
+            String content = richEmailVersion == Workflow.DEFAULT_VERSION
+                    ? WorkflowSteps.buildBatchNotificationContent("重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
+                            fatalErrorOccurred, finalStates)
+                    : WorkflowSteps.buildRichBatchNotificationContent("重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
+                            fatalErrorOccurred, finalStates, Workflow.getInfo().getRunStartedTimestampMillis(),
+                            Workflow.currentTimeMillis(), Workflow.getInfo().getWorkflowId(), Workflow.getInfo().getRunId());
             notificationActivity.sendEmailAlert("重试流程汇总", content);
         }
     }

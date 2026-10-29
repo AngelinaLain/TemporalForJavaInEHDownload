@@ -36,7 +36,7 @@ public class NotificationEventListener {
     public void onNotification(NotificationEvent event) {
         log.info("📨 收到通知事件，异步发送邮件: {}", event.getSubject());
         try {
-            emailNotificationService.sendEmail(event.getSubject(), event.getContent());
+            emailNotificationService.sendEmail(event.getSubject(), event.getContent(), event.getContext());
         } catch (Exception e) {
             log.error("❌ 异步邮件发送失败: {}", e.getMessage());
         }

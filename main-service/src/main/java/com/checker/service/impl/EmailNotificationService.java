@@ -1,6 +1,5 @@
 package com.checker.service.impl;
 
-import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
@@ -8,10 +7,13 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checker.config.EhNetworkConfig;
+import com.checker.service.mail.NotificationContext;
+import com.checker.service.mail.NotificationEmail;
+import com.checker.service.mail.NotificationEmailComposer;
+import com.checker.service.mail.NotificationEmailRenderer;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
@@ -27,8 +29,16 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class EmailNotificationService {
 
-    @Autowired
-    private EhNetworkConfig netConfig;
+    private final EhNetworkConfig netConfig;
+    private final NotificationEmailComposer composer;
+    private final NotificationEmailRenderer renderer;
+
+    public EmailNotificationService(EhNetworkConfig netConfig, NotificationEmailComposer composer,
+                                    NotificationEmailRenderer renderer) {
+        this.netConfig = netConfig;
+        this.composer = composer;
+        this.renderer = renderer;
+    }
 
     /** Graph API Token 缓存，有效期 50 分钟（Token 实际有效 1 小时，提前 10 分钟刷新） */
     private final Cache<String, String> tokenCache = Caffeine.newBuilder()
@@ -42,8 +52,14 @@ public class EmailNotificationService {
      * @return true 表示邮件已发送；配置或令牌不完整时返回 false，请求发送失败则抛异常
      */
     public boolean sendEmail(String subject, String content) {
+        return sendEmail(subject, content, NotificationContext.now());
+    }
+
+    /** 在异步线程整理和渲染通知，工作流只发布事件，不等待画廊概况查询或 Graph 请求。 */
+    public boolean sendEmail(String subject, String content, NotificationContext context) {
         EhNetworkConfig.Notification notifConfig = netConfig.getNotification();
-        if (StrUtil.isBlank(notifConfig.getAdminEmail()) || StrUtil.isBlank(notifConfig.getTenantId())) {
+        if (StrUtil.hasBlank(notifConfig.getAdminEmail(), notifConfig.getTenantId(), notifConfig.getClientId(),
+                notifConfig.getClientSecret(), notifConfig.getSenderEmail())) {
             log.warn("未配置完整的邮件通知参数，跳过。主题: {}", subject);
             return false;
         }
@@ -56,7 +72,8 @@ public class EmailNotificationService {
         }
 
         // 2. 组装邮件 JSON
-        JSONObject mailPayload = buildMailPayload(subject, content, notifConfig);
+        NotificationEmail email = composer.compose(subject, content, context);
+        JSONObject mailPayload = buildMailPayload(email, renderer.render(email), notifConfig);
 
         // 3. 发送邮件
         String sendMailUrl = String.format("https://graph.microsoft.com/v1.0/users/%s/sendMail",
@@ -77,35 +94,16 @@ public class EmailNotificationService {
     }
 
     /**
-     * 转义标题和正文中的 HTML 特殊字符，再构建 Graph 邮件请求体。
+     * 用已经安全渲染的 HTML 构建 Graph 请求体，JSON 主题保留普通文本，不重复做 HTML 转义。
      */
-    private static JSONObject buildMailPayload(String subject, String content,
-                                               EhNetworkConfig.Notification notifConfig) {
-        String safeSubject = subject.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-        String htmlSafeContent = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>");
-        String currentTime = DateUtil.now();
-        String htmlBody = String.format(
-                "<!DOCTYPE html><html><head><style>" +
-                "body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background-color:#f9f9f9;color:#333;margin:0;padding:20px}" +
-                ".card{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:24px;max-width:600px;margin:0 auto;box-shadow:0 2px 4px rgba(0,0,0,.05)}" +
-                ".header{border-bottom:2px solid #0078D4;padding-bottom:12px;margin-bottom:20px;font-size:20px;font-weight:bold;color:#0078D4}" +
-                ".content{font-size:15px;line-height:1.6}" +
-                ".footer{margin-top:30px;padding-top:15px;border-top:1px dashed #ccc;font-size:12px;color:#888}" +
-                "</style></head><body>" +
-                "<div class='card'>" +
-                "<div class='header'>%s</div>" +
-                "<div class='content'>%s</div>" +
-                "<div class='footer'><strong>触发时间：</strong>%s<br><strong>系统来源：</strong>EHentai 自动化工作流 (Temporal)</div>" +
-                "</div></body></html>",
-                safeSubject, htmlSafeContent, currentTime
-        );
-
+    static JSONObject buildMailPayload(NotificationEmail email, String htmlBody,
+                                        EhNetworkConfig.Notification notifConfig) {
         JSONObject message = new JSONObject();
-        message.set("subject", subject);
+        message.set("subject", email.subject());
 
         JSONObject fromAddr = new JSONObject();
         fromAddr.set("address", notifConfig.getSenderEmail());
-        fromAddr.set("name", "EHentai 自动化机器人");
+        fromAddr.set("name", "GalleryImport 通知中心");
         JSONObject from = new JSONObject();
         from.set("emailAddress", fromAddr);
         message.set("from", from);
@@ -125,7 +123,7 @@ public class EmailNotificationService {
 
         JSONObject mailPayload = new JSONObject();
         mailPayload.set("message", message);
-        mailPayload.set("saveToSentItems", "false");
+        mailPayload.set("saveToSentItems", false);
         return mailPayload;
     }
 
@@ -141,14 +139,15 @@ public class EmailNotificationService {
         tokenForm.put("scope", "https://graph.microsoft.com/.default");
         tokenForm.put("grant_type", "client_credentials");
 
-        String tokenResp = HttpRequest.post(tokenUrl).form(tokenForm).timeout(10000).execute().body();
-        JSONObject tokenJson = JSONUtil.parseObj(tokenResp);
-        String accessToken = tokenJson.getStr("access_token");
-        if (StrUtil.isBlank(accessToken)) {
-            log.error("获取 Graph Token 失败: {}", tokenResp);
-            return null;
+        try (HttpResponse response = HttpRequest.post(tokenUrl).form(tokenForm).timeout(10000).execute()) {
+            JSONObject tokenJson = JSONUtil.parseObj(response.body());
+            String accessToken = tokenJson.getStr("access_token");
+            if (StrUtil.isBlank(accessToken)) {
+                log.error("获取 Graph Token 失败, HTTP: {}", response.getStatus());
+                return null;
+            }
+            log.info("✅ Graph API Token 已获取并缓存");
+            return accessToken;
         }
-        log.info("✅ Graph API Token 已获取并缓存");
-        return accessToken;
     }
 }

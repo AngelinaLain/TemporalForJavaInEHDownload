@@ -106,15 +106,16 @@ public class EHAutomationController {
      */
     @PostMapping("/test-email")
     public Result<Map<String, String>> testEmail(@RequestBody(required = false) Map<String, String> payload) {
-        String subject = "EHentai 自动化 - 邮件测试";
-        String content = "这是一封测试邮件。如果您收到此邮件，说明您的 Microsoft E5 Graph API 凭证配置完全正确！";
+        String subject = "GalleryImport · 邮件通知测试";
+        String content = "这是一封 GalleryImport 通知样式测试邮件。\n成功收到本邮件，表示本次邮件发送链路可用。"
+                + "\n正式批次报告将显示任务概况、状态统计、画廊明细及需要处理的事项。";
         if (payload != null) {
             subject = payload.getOrDefault("subject", subject);
             content = payload.getOrDefault("content", content);
         }
         notificationActivity.sendEmailAlert(subject, content);
         return Result.success(Map.of(
-                "message", "发送邮件指令已执行，请查看控制台日志以及您的管理员邮箱接收情况。"
+                "message", "测试通知已提交后台队列，请查看管理员邮箱；是否成功送达以收件结果和后台日志为准。"
         ));
     }
 

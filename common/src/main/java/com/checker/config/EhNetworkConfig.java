@@ -121,6 +121,10 @@ public class EhNetworkConfig {
         private String clientId;
         private String clientSecret;
         private String senderEmail;
+        /** 邮件中的系统入口，填写浏览器能访问的前端地址；留空时不展示系统跳转按钮。 */
+        private String appPublicUrl;
+        /** 邮件展示时间使用的时区，避免容器时区与用户所在地不同。 */
+        private String timeZone = "Asia/Shanghai";
     }
 
     /**

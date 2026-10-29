@@ -98,6 +98,8 @@ eh-config:
     client-id: ${GRAPH_CLIENT_ID}
     client-secret: ${GRAPH_CLIENT_SECRET}
     sender-email: ${GRAPH_SENDER_EMAIL}
+    app-public-url: ${NOTIFICATION_APP_URL:}
+    time-zone: ${NOTIFICATION_TIME_ZONE:Asia/Shanghai}
   komga:
     url: ${KOMGA_URL}
     public-url: ${KOMGA_PUBLIC_URL:}
