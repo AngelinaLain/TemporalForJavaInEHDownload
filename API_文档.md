@@ -439,7 +439,7 @@ Query：`page=1`、`size=20`、`status=KOMGA_IMPORT_FAILED`。`status` 支持 `K
 
 `POST /api/visual-dedup/ai-review` 与去重审核页的入口等价：两个 GID 必须不同、均为正数且存在于数据库。相同候选对已有 `QUEUED` 或 `RUNNING` 任务时复用该任务；工作流启动失败会返回 `503` 并把任务标记为 `FAILED`。
 
-任务执行要求两侧画廊都已生成当前算法版本的页面视觉指纹，并依赖 `ai-service` 的本地向量模型；任一条件不满足时任务以 `FAILED` 结束，原因见 `lastError`。
+任务执行会复用两侧画廊当前算法版本的页面视觉指纹；任一缺失或仅有旧版本时，先从归档自动补算并保存，再继续复核。归档不可读、无法生成有效指纹或 `ai-service` 的本地向量模型不可用时，任务以 `FAILED` 结束，原因见 `lastError`。
 
 任务状态取值：
 

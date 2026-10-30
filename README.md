@@ -149,7 +149,7 @@ Docker Compose 默认把 `/data/download-cache` 挂载到命名卷 `download-cac
 ### 限制与前置条件
 
 - AI 结论只是审核证据：系统不会据此自动写入 `MATCH`、`DIFFERENT` 或 `VARIANT` 结论，本地向量判断的 `requiresHumanReview` 固定为 `true`。
-- 复核要求两侧画廊已生成当前算法版本的页面视觉指纹（抓取阶段会生成）；任一缺失时任务直接失败，需要先在「视觉去重」页补算。
+- 复核会复用两侧画廊当前算法版本的页面视觉指纹；任一缺失或仅有旧版本时，会先从归档自动补算并保存，再继续分析。归档不可读或无法生成有效指纹时任务失败，原因写入 `last_error`。
 - 复核依赖 `ai-service` 的本地向量模型：需要设置 `AI_EMBEDDING_ENABLED=true` 并让模型文件可读（Compose 已把 `./models` 只读挂载到 `/models`），否则任务会直接失败。
 - `main-service` 调用 `ai-service` 的内部接口需要 `AI_INTERNAL_TOKEN`（至少 16 个字符），未配置时 ai-service 对这些接口返回 `503`。
 - 修改 `AI_EMBEDDING_MODEL_VERSION`、更换 ONNX 权重或改动预处理方式后，旧向量视为失效并自动重算。

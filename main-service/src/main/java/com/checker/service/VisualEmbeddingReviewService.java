@@ -49,6 +49,7 @@ public class VisualEmbeddingReviewService {
     private final GalleryPageEmbeddingMapper embeddingMapper;
     private final EhGalleriesMapper galleriesMapper;
     private final VisualFingerprintService fingerprintService;
+    private final ArchiveVisualFingerprintExtractor fingerprintExtractor;
     private final SynologyArchiveReader archiveReader;
     private final ArchiveSampleImageExtractor sampleExtractor;
     private final AiInternalClient aiClient;
@@ -60,6 +61,7 @@ public class VisualEmbeddingReviewService {
                                         GalleryPageEmbeddingMapper embeddingMapper,
                                         EhGalleriesMapper galleriesMapper,
                                         VisualFingerprintService fingerprintService,
+                                        ArchiveVisualFingerprintExtractor fingerprintExtractor,
                                         SynologyArchiveReader archiveReader,
                                         ArchiveSampleImageExtractor sampleExtractor,
                                         AiInternalClient aiClient,
@@ -70,6 +72,7 @@ public class VisualEmbeddingReviewService {
         this.embeddingMapper = embeddingMapper;
         this.galleriesMapper = galleriesMapper;
         this.fingerprintService = fingerprintService;
+        this.fingerprintExtractor = fingerprintExtractor;
         this.archiveReader = archiveReader;
         this.sampleExtractor = sampleExtractor;
         this.aiClient = aiClient;
@@ -102,8 +105,8 @@ public class VisualEmbeddingReviewService {
     private void doExecute(AiVisualReviewJobEntity job) throws Exception {
         EhGalleriesEntity leftGallery = requireGallery(job.getLeftGid());
         EhGalleriesEntity rightGallery = requireGallery(job.getRightGid());
-        List<GalleryPageFingerprint> leftHashes = fingerprints(job.getLeftGid());
-        List<GalleryPageFingerprint> rightHashes = fingerprints(job.getRightGid());
+        List<GalleryPageFingerprint> leftHashes = fingerprints(leftGallery);
+        List<GalleryPageFingerprint> rightHashes = fingerprints(rightGallery);
 
         Map<String, Object> embeddingStatus = aiClient.embeddingStatus();
         if (!Boolean.TRUE.equals(embeddingStatus.get("available"))) {
@@ -317,6 +320,12 @@ public class VisualEmbeddingReviewService {
     /** 从已配置的归档来源提取选中采样页，避免读取无关图片。 */
     private Map<Integer, ArchiveSampleImageExtractor.SampleImage> readSamples(
             EhGalleriesEntity gallery, Set<Integer> indexes) throws Exception {
+        return readArchive(gallery, input -> sampleExtractor.extract(input, indexes));
+    }
+
+    /** 指纹补全和采样图片读取共用目录回退及按 GID 定位归档的规则。 */
+    private <T> T readArchive(EhGalleriesEntity gallery,
+                              SynologyArchiveReader.ArchiveInputFunction<T> function) throws Exception {
         try (SynologyArchiveReader.ArchiveSession session = archiveReader.openSession()) {
             List<String> directories = new ArrayList<>(new LinkedHashSet<>(List.of(
                     normalizeDirectory(gallery.getStoragePath()),
@@ -327,7 +336,7 @@ public class VisualEmbeddingReviewService {
                     Optional<String> resolved = SynologyArchiveReader.selectSeriesArchive(
                             gallery.getFilename(), gallery.getGid(), session.listArchives(directory));
                     if (resolved.isEmpty()) continue;
-                    return session.read(directory, resolved.get(), input -> sampleExtractor.extract(input, indexes));
+                    return session.read(directory, resolved.get(), function);
                 } catch (Exception failure) {
                     last = failure;
                 }
@@ -336,9 +345,17 @@ public class VisualEmbeddingReviewService {
         }
     }
 
-    private List<GalleryPageFingerprint> fingerprints(Long gid) {
+    /** 缺少当前版本指纹时从归档补算并保存，让首次复核也能直接执行。 */
+    private List<GalleryPageFingerprint> fingerprints(EhGalleriesEntity gallery) throws Exception {
+        Long gid = gallery.getGid();
         List<GalleryPageFingerprint> values = fingerprintService.find(gid);
-        if (values.isEmpty()) throw new IllegalStateException("GID " + gid + " 尚未生成当前版本的视觉指纹");
+        if (values.isEmpty()) {
+            List<GalleryPageFingerprint> generated = readArchive(gallery,
+                    input -> fingerprintExtractor.extract(input, gid, gallery.getPageCount()));
+            fingerprintService.replace(gid, generated);
+            values = fingerprintService.find(gid);
+        }
+        if (values.isEmpty()) throw new IllegalStateException("GID " + gid + " 的归档未能生成当前版本的视觉指纹");
         return values.stream().limit(MAX_PAGES).toList();
     }
 
