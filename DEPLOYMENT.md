@@ -451,10 +451,25 @@ powershell -File deploy/up.ps1
 | `RSS_MAX_ACTIVE_BATCHES` | `2`；同时未完成批次数，与实际下载并发是不同限制 |
 | `RSSHUB_IMAGE` | 官方 `2026-11-16` 镜像的多架构 digest，避免无意跟随 latest 升级 |
 | `RSSHUB_REDIS_URL` | `redis://redis:6379/2`，默认与应用 Redis DB 分开；自定义时避免与 `REDIS_DB` 相同 |
-| `RSSHUB_PROXY_URI` | 可选完整代理 URI，用户名和密码中的特殊字符须 URL 编码 |
-| `RSSHUB_PROXY_AUTH` | 可选 `username:password` 覆盖；默认沿用 `PROXY_HOST/PORT/TYPE/USERNAME/PASSWORD` |
+| `RSSHUB_PROXY_URI` | 可选完整代理 URI，优先于其他代理字段；用户名和密码中的特殊字符须 URL 编码 |
+| `RSSHUB_PROXY_AUTH` | URI 留空时的可选认证覆盖，接受明文 `username:password` 或其标准 Base64，不带 `Basic ` 前缀 |
 
 RSSHub 映射已有 `EH_MEMBER_ID/EH_PASS_HASH/EH_SK/EH_STAR`，不另外把 Cookie 放进订阅 URL。首版针对 EH，勿为该 RSSHub 实例添加 `EH_IGNEOUS` 切换 ExH。缓存固定为 300 秒，最短检查间隔为 5 分钟。若原 Redis 配置了密码，需把 URL 编码后的凭据写入 `RSSHUB_REDIS_URL`。RSSHub 不依赖浏览器容器。
+
+代理默认沿用 `PROXY_HOST/PORT/TYPE/USERNAME/PASSWORD`。分开的用户名和密码填写原始值，启动脚本会自动编码为完整代理 URI，支持 HTTP、HTTPS、SOCKS5（`socks`、`socks5`、`socks5h`）。密码中的冒号、`@`、`%`、空格等字符不需要手工编码。`RSSHUB_PROXY_AUTH` 在 URI 留空时覆盖默认账号，以第一个冒号分隔用户名和密码；也兼容原生 Base64 认证值。若填写 `RSSHUB_PROXY_URI`，它完整覆盖默认地址与认证，脚本不会把其他账号追加到该 URI。没有代理主机和 URI 时使用直连。
+
+此前启动脚本曾把明文 `username:password` 传给 RSSHub 原生 `PROXY_AUTH`，而固定版本会直接将其拼到 `Basic` 请求头后，导致代理认证格式错误；SOCKS 也不使用该字段。现在统一使用 URI 内的认证，由代理客户端生成正确请求头。出现 `Proxy response (403) !== 200 when HTTP Tunneling` 时可先应用此修正；若仍失败，需要继续检查代理账号、出口策略及目标域名许可，不能只根据 403 判断是哪一种。
+
+拉取包含修复的提交后，重新创建 RSSHub 即可加载新的启动脚本挂载；后端错误提示的更新需要同时重建后端：
+
+```bash
+git pull --ff-only
+docker compose up -d --no-deps --force-recreate rsshub
+docker compose build backend
+docker compose up -d --no-deps backend
+```
+
+使用归档挂载覆盖文件时保留原来的 `COMPOSE_FILE` 或 `-f` 文件组合。代理回归测试不读取 `.env`，可在 Node.js 24.5+ 执行 `node --test deploy/rsshub-start.test.mjs`；包含本机模拟代理的 CONNECT 认证检查，不连接 EH 源站。
 
 后端启动自动执行 Flyway `V24`（RSS 表）和 `V25`（全局下载许可）。定时入口为 Temporal Schedule `gallery-rss-tick`，每分钟检查各订阅的到期时间；Temporal 临时不可用时自动重试创建。请同时更新后端和抓取 Worker，后者负责新的 `ScrapeRssSearchPage` Activity。
 

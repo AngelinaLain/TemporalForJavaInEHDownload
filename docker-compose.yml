@@ -30,6 +30,7 @@ services:
     command: ['sh', '/usr/local/bin/gallery-rsshub-start.sh']
     volumes:
       - ./deploy/rsshub-start.sh:/usr/local/bin/gallery-rsshub-start.sh:ro
+      - ./deploy/rsshub-start.mjs:/usr/local/bin/gallery-rsshub-start.mjs:ro
     environment:
       NODE_ENV: production
       CACHE_TYPE: redis
