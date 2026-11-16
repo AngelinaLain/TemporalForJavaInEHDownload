@@ -56,7 +56,7 @@ const item = (path, label, icon) => ({ path, label, icon: markRaw(icon) })
 const navigation = [
   { label: '内容与发现', items: [item('/dashboard', '数据概览', DataAnalysis), item('/galleries', '画廊列表', List), item('/collections', '画廊合集', Collection), item('/tag-network', '关系图谱', Share)] },
   { label: '归档与审核', items: [item('/dedupe-reviews', '去重审核', Finished), item('/visual-dedup', '视觉指纹', Picture), item('/archive-sync', '群晖归档同步', FolderChecked), item('/komga-import-reviews', 'Komga 入库复核', Refresh)] },
-  { label: '自动化与系统', items: [item('/operations', '工作流操作', Operation), item('/workflows', '流程监控', Connection), item('/monitoring', '监控大盘', Monitor), item('/ai-settings', 'AI 设置', Setting)] }
+  { label: '自动化与系统', items: [item('/operations', '工作流操作', Operation), item('/rss-subscriptions', 'RSS 订阅', Connection), item('/workflows', '流程监控', Connection), item('/monitoring', '监控大盘', Monitor), item('/ai-settings', 'AI 设置', Setting)] }
 ]
 let mediaQuery
 // 根据屏幕宽度切换侧栏模式，并收起可能残留的移动端抽屉。

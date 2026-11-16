@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "eh-config.workflow")
 public class EhWorkflowConfig {
-    /** 子工作流最大并发数（受 EHentai 限制，建议 ≤ 3） */
+    /** 单批窗口及所有新下载工作流共用的全局并发数（受 EHentai 限制，建议 ≤ 3） */
     private int maxConcurrency = 2;
     /** Komga 入库轮询最大次数 */
     private int komgaImportMaxRetries = 40;

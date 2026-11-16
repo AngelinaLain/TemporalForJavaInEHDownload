@@ -68,54 +68,21 @@ public class DatabaseActivityImpl implements DatabaseActivity {
     }
 
     /**
-     * 先区分新增和已有记录，再分开批量插入或更新，减少数据库往返。
+     * 原子插入新发现，已有记录只补源站元数据，保留并发任务的状态、归档路径和文件名。
      * */
     @Override
     public void saveGalleriesBatch(List<EhGalleriesEntity> galleries) {
         if (galleries == null || galleries.isEmpty()) return;
 
-        // 区分新记录与已有记录：
-        // 新记录走 insertBatchSomeColumn（一次 INSERT 多行，性能优于逐条）；
-        // 已有记录走 saveOrUpdateBatch（按主键更新）。
-        List<Long> gids = galleries.stream()
-                .filter(g -> g != null && g.getGid() != null)
-                .map(EhGalleriesEntity::getGid)
-                .distinct()
-                .toList();
-        Map<Long, EhGalleriesEntity> existingMap = gids.isEmpty()
-                ? Collections.emptyMap()
-                : galleriesMapper.selectBatchIds(gids).stream()
-                        .collect(java.util.stream.Collectors.toMap(EhGalleriesEntity::getGid, Function.identity()));
-
-        List<EhGalleriesEntity> toInsert = new ArrayList<>();
-        List<EhGalleriesEntity> toUpdate = new ArrayList<>();
         for (EhGalleriesEntity gallery : galleries) {
             if (gallery == null || gallery.getGid() == null) continue;
-            if (existingMap.containsKey(gallery.getGid())) {
-                toUpdate.add(gallery);
-            } else {
-                toInsert.add(gallery);
-            }
+            normalizeInsertDefaults(gallery);
+            if (gallery.getDownloadStatus() == null) gallery.setDownloadStatus(DownloadStatus.PENDING.getValue());
+            galleriesMapper.insertDiscoveredGallery(gallery);
         }
-
-        int inserted = 0;
-        if (!toInsert.isEmpty()) {
-            // insertBatchSomeColumn 不会触发 MetaObjectHandler 自动填充，
-            // 且会原样写入 null 值，故插入前兜底补全时间字段（crawled_at 为 NOT NULL）。
-            Date now = new Date();
-            for (EhGalleriesEntity gallery : toInsert) {
-                normalizeInsertDefaults(gallery, now);
-            }
-            inserted = galleriesMapper.insertBatchSomeColumn(toInsert);
-        }
-        boolean updated = true;
-        if (!toUpdate.isEmpty()) {
-            updated = galleriesService.saveOrUpdateBatch(toUpdate);
-        }
-        log.info("✅ 批量入库完成，共 {} 条（新增 {} 条走批量 INSERT，更新 {} 条，结果: {}）",
-                galleries.size(), inserted, toUpdate.size(), updated);
+        // Updating only source metadata preserves concurrently acquired/downloaded state and filenames.
+        updateGalleryDeduplicationMetadata(galleries);
     }
-
     /**
      * 自定义批量插入会显式写入映射列，不能只依赖数据库默认值。
      * 插入前补齐时间和确认次数，兼容尚未更新默认约束的历史数据库。
@@ -281,10 +248,12 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         String candidateKey = requested.getCandidateKey();
         if (candidateKey == null || candidateKey.isBlank()) {
             /* 没有可靠候选特征时只认领当前画廊，并避免覆盖正在处理或已完成的记录。 */
-            return markUnidentifiedGalleryDownloading(requested);
+            return markUnidentifiedGalleryDownloading(galleriesMapper.selectGalleryForUpdate(gid));
         }
 
         lockCandidateKey(candidateKey);
+        requested = galleriesMapper.selectGalleryForUpdate(gid);
+        if (requested == null || isUnavailableForClaim(requested)) return false;
         // 本次认领只读取一次参数，审核、待审扩展、聚类和写回分数始终采用同一套标准。
         DedupeSettings settings = dedupeReviewService.settingsSnapshot();
         List<EhGalleriesEntity> bucket = selectByCandidateKey(candidateKey);
@@ -378,7 +347,13 @@ public class DatabaseActivityImpl implements DatabaseActivity {
         log.info("🔄 已重新核对 {} 个候选键的首选版本关系", keys.size());
     }
 
+    private boolean isUnavailableForClaim(EhGalleriesEntity gallery) {
+        return hasStatus(gallery, DownloadStatus.IMPORTED) || hasStatus(gallery, DownloadStatus.DOWNLOADING)
+                || hasStatus(gallery, DownloadStatus.DOWNLOADED) || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)
+                || hasStatus(gallery, DownloadStatus.KOMGA_IMPORT_FAILED) || hasStatus(gallery, DownloadStatus.BLOCKED);
+    }
     private boolean markUnidentifiedGalleryDownloading(EhGalleriesEntity gallery) {
+        if (gallery == null || isUnavailableForClaim(gallery)) return false;
         if (hasStatus(gallery, DownloadStatus.IMPORTED)
                 || hasStatus(gallery, DownloadStatus.DOWNLOADING)
                 || hasStatus(gallery, DownloadStatus.WAITING_KOMGA)
@@ -424,7 +399,8 @@ public class DatabaseActivityImpl implements DatabaseActivity {
      * */
     private List<EhGalleriesEntity> selectByCandidateKey(String candidateKey) {
         QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
-        query.eq("candidate_key", candidateKey).orderByAsc("gid");
+        // Current read after the candidate lock: a repeatable-read snapshot may predate another claimant.
+        query.eq("candidate_key", candidateKey).orderByAsc("gid").last("FOR UPDATE");
         return galleriesMapper.selectList(query);
     }
 

@@ -317,42 +317,7 @@ public class ScraperActivityImpl implements ScraperActivity {
      * 将关键词、语言、分类及高级筛选拼成源站可接受的初始检索地址。
      */
     private String buildInitialSearchUrl(SearchOptions searchOptions) {
-        String searchParam = URLUtil.encodeAll(searchOptions.getKeyword());
-        if (StrUtil.isNotBlank(searchOptions.getLanguage())) {
-            searchParam += "%20language%3A%22" + URLUtil.encodeAll(searchOptions.getLanguage()) + "%22";
-        }
-
-        StringBuilder urlBuilder = new StringBuilder(
-                String.format("%s?f_search=%s&f_cats=%d&advsearch=1",
-                        Constants.EHENTAI_BASE_URL, searchParam, searchOptions.getFilterCats())
-        );
-
-        if (searchOptions.getMinimumRating() != null && searchOptions.getMinimumRating() > 1) {
-            urlBuilder.append("&f_srdd=").append(searchOptions.getMinimumRating());
-        }
-        if (searchOptions.getPageAtLeast() != null && searchOptions.getPageAtLeast() > 0) {
-            urlBuilder.append("&f_spf=").append(searchOptions.getPageAtLeast());
-        }
-        if (searchOptions.getPageAtMost() != null && searchOptions.getPageAtMost() > 0) {
-            urlBuilder.append("&f_spt=").append(searchOptions.getPageAtMost());
-        }
-        if (Boolean.TRUE.equals(searchOptions.getSearchExpungedGalleries())) {
-            urlBuilder.append("&f_sh=on");
-        }
-        if (Boolean.TRUE.equals(searchOptions.getShowOnlyWithTorrents())) {
-            urlBuilder.append("&f_sto=on");
-        }
-        if (Boolean.TRUE.equals(searchOptions.getDisableLanguageFilter())) {
-            urlBuilder.append("&f_sfl=on");
-        }
-        if (Boolean.TRUE.equals(searchOptions.getDisableUploaderFilter())) {
-            urlBuilder.append("&f_sfu=on");
-        }
-        if (Boolean.TRUE.equals(searchOptions.getDisableTagsFilter())) {
-            urlBuilder.append("&f_sft=on");
-        }
-
-        return urlBuilder.toString();
+        return com.checker.common.EhSearchQueryBuilder.searchUrl(searchOptions);
     }
 
     /**

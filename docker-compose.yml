@@ -16,8 +16,45 @@ services:
     environment:
       # 断点文件必须跨容器重启保留；可通过 .env 覆盖为宿主机挂载路径。
       DOWNLOAD_TEMP_DIR: ${DOWNLOAD_TEMP_DIR:-/data/download-cache}
+      RSS_ENABLED: ${RSS_ENABLED:-true}
+      RSS_HUB_URL: http://rsshub:1200
     volumes:
       - download-cache:/data/download-cache
+    networks:
+      - eh-net
+
+  # 搜索订阅源仅供内部后端访问；无需浏览器容器或额外公开端口。
+  rsshub:
+    image: ${RSSHUB_IMAGE:-diygod/rsshub@sha256:3a207d5a1eb1597c908f0858ca6d4794d9773605e2d259c736d160b784704797}
+    restart: unless-stopped
+    command: ['sh', '/usr/local/bin/gallery-rsshub-start.sh']
+    volumes:
+      - ./deploy/rsshub-start.sh:/usr/local/bin/gallery-rsshub-start.sh:ro
+    environment:
+      NODE_ENV: production
+      CACHE_TYPE: redis
+      REDIS_URL: ${RSSHUB_REDIS_URL:-redis://redis:6379/2}
+      CACHE_EXPIRE: '300'
+      CACHE_CONTENT_EXPIRE: '300'
+      EH_IPB_MEMBER_ID: ${EH_MEMBER_ID:-}
+      EH_IPB_PASS_HASH: ${EH_PASS_HASH:-}
+      EH_SK: ${EH_SK:-}
+      EH_STAR: ${EH_STAR:-}
+      PROXY_URI: ${RSSHUB_PROXY_URI:-}
+      PROXY_HOST: ${PROXY_HOST:-}
+      PROXY_PORT: ${PROXY_PORT:-7893}
+      PROXY_PROTOCOL: ${PROXY_TYPE:-http}
+      PROXY_AUTH: ${RSSHUB_PROXY_AUTH:-}
+      PROXY_USERNAME: ${PROXY_USERNAME:-}
+      PROXY_PASSWORD: ${PROXY_PASSWORD:-}
+    depends_on:
+      - redis
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:1200/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - eh-net
 

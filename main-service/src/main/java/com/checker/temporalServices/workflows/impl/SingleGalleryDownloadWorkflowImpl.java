@@ -54,6 +54,26 @@ public class SingleGalleryDownloadWorkflowImpl implements SingleGalleryDownloadW
     @Override
     /** 区分入库补偿与完整下载，在取得执行机会后提取直链，失败时按错误类别决定重试或阻断。 */
     public void processSingleGallery(EhGalleriesEntity gallery, boolean compensateOnly, WorkflowSettings settings) {
+        int permitVersion = Workflow.getVersion("global-download-permit", Workflow.DEFAULT_VERSION, 1);
+        if (permitVersion == Workflow.DEFAULT_VERSION || compensateOnly) {
+            processWithPermit(gallery, compensateOnly, settings);
+            return;
+        }
+        var permits = Workflow.newActivityStub(com.checker.temporalServices.activities.DownloadPermitActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+        try {
+            String state;
+            while (!(state = permits.acquireDownloadPermit(gallery.getGid())).equals("ACQUIRED")) {
+                if (state.equals("FINISHED")) return;
+                Workflow.sleep(Duration.ofSeconds(30));
+            }
+            processWithPermit(gallery, false, settings);
+        } finally {
+            // 取消仍必须释放持久的槽位；终止由恢复处理。
+            Workflow.newDetachedCancellationScope(() -> permits.releaseDownloadPermit(gallery.getGid())).run();
+        }
+    }
+
+    private void processWithPermit(EhGalleriesEntity gallery, boolean compensateOnly, WorkflowSettings settings) {
         // 旧历史保留独立通知和异步入库步骤，新流程等待完整结果后交给父流程汇总。
         int batchNotificationVersion = Workflow.getVersion(
                 "batch-email-notification", Workflow.DEFAULT_VERSION, 1);

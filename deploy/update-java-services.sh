@@ -3,4 +3,5 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 docker compose --progress plain build backend scraper-worker ai-service
+docker compose up -d redis rsshub
 docker compose up -d --no-deps backend scraper-worker ai-service

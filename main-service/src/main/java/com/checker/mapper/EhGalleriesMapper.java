@@ -17,6 +17,16 @@ import java.util.Map;
 @Mapper
 public interface EhGalleriesMapper extends BaseMapper<EhGalleriesEntity> {
 
+    @org.apache.ibatis.annotations.ResultMap("mybatis-plus_EhGalleriesEntity")
+    @Select("SELECT * FROM eh_galleries WHERE gid=#{gid} FOR UPDATE")
+    EhGalleriesEntity selectGalleryForUpdate(@Param("gid") Long gid);
+
+    /** Existing files and download decisions are never reset by a concurrent discovery. */
+    @Insert("INSERT INTO eh_galleries(gid,token,title,original_title,page_count,rating,filename,gallery_url,search_query,crawled_at,updated_at,download_status,komga_confirmation_attempts,tags) " +
+            "VALUES(#{g.gid},#{g.token},#{g.title},#{g.originalTitle},#{g.pageCount},#{g.rating},#{g.filename},#{g.galleryUrl},#{g.searchQuery},#{g.crawledAt},#{g.updatedAt},#{g.downloadStatus},0,#{g.tags,typeHandler=com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler}) " +
+            "ON DUPLICATE KEY UPDATE gid=gid")
+    int insertDiscoveredGallery(@Param("g") EhGalleriesEntity gallery);
+
     /** 预览只读取定位归档和 Komga 所需的字段，避免每张图片请求都加载抓取追踪大数据。 */
     @Select("SELECT gid, download_status, komga_book_id, storage_path, filename, updated_at " +
             "FROM eh_galleries WHERE gid = #{gid}")

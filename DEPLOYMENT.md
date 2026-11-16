@@ -12,7 +12,8 @@ docker-compose.yml 会启动以下容器：
 | eh-scraper-worker | 8081 | EHentai 抓取 Worker |
 | eh-ai-service | 8082 | AI 摘要/翻译服务 |
 | eh-frontend | 8002 | Vue 管理页面和 Nginx API 反向代理 |
-| eh-redis | 6379 | JWT 黑名单和 AI 缓存 |
+| eh-redis | 6379 | JWT 黑名单、AI 缓存及 RSSHub 缓存 |
+| rsshub | 内部 1200 | EH 搜索 RSS 源；不向宿主机公开端口 |
 
 MySQL、Temporal、Nacos、Synology 和 Komga 由外部环境提供，不由本 Compose 文件创建。
 
@@ -422,3 +423,49 @@ docker compose up -d --remove-orphans
 ~~~
 
 回滚数据库前必须确认 Flyway 迁移是否可逆；本项目迁移默认只向前兼容，不建议直接删除迁移记录或手工修改 flyway_schema_history。
+
+## RSSHub 与关键词订阅部署
+
+RSSHub 已加入默认 Compose 服务，无需另外安装。完整部署入口包含后端、抓取 Worker、AI、前端、Redis 与 RSSHub：
+
+```bash
+bash deploy/up.sh
+```
+
+Windows PowerShell：
+
+```powershell
+powershell -File deploy/up.ps1
+```
+
+没有 `.env` 时脚本只创建配置模板并退出；填写后重新运行。已有 `.env` 的升级不覆盖凭据。挂载归档目录的部署可在调用前设置 `COMPOSE_FILE=docker-compose.yml:docker-compose.mount.yml`（Windows 分隔符为分号），或继续使用原有 `docker compose -f ...` 命令，RSSHub 会随默认服务启动。
+
+`deploy/update-java-services.sh` 仍只重建 Java 服务，但会确保 Redis 和 RSSHub 已启动。此次新增前端页面，首次升级请使用完整部署入口。
+
+| 变量 | 默认值 / 用途 |
+| --- | --- |
+| `RSS_ENABLED` | `true`；关闭后停止新轮询和新派发，已启动的下载继续执行 |
+| `RSS_HUB_URL` | `http://rsshub:1200`；Compose 内固定为内部服务地址，直接运行 Java 时按环境配置 |
+| `RSS_MAX_ATTEMPTS` | `5`；失败批次的自动重试上限 |
+| `RSS_BATCH_SIZE` | `25`；每批最多 25 个画廊 |
+| `RSS_MAX_ACTIVE_BATCHES` | `2`；同时未完成批次数，与实际下载并发是不同限制 |
+| `RSSHUB_IMAGE` | 官方 `2026-11-16` 镜像的多架构 digest，避免无意跟随 latest 升级 |
+| `RSSHUB_REDIS_URL` | `redis://redis:6379/2`，默认与应用 Redis DB 分开；自定义时避免与 `REDIS_DB` 相同 |
+| `RSSHUB_PROXY_URI` | 可选完整代理 URI，用户名和密码中的特殊字符须 URL 编码 |
+| `RSSHUB_PROXY_AUTH` | 可选 `username:password` 覆盖；默认沿用 `PROXY_HOST/PORT/TYPE/USERNAME/PASSWORD` |
+
+RSSHub 映射已有 `EH_MEMBER_ID/EH_PASS_HASH/EH_SK/EH_STAR`，不另外把 Cookie 放进订阅 URL。首版针对 EH，勿为该 RSSHub 实例添加 `EH_IGNEOUS` 切换 ExH。缓存固定为 300 秒，最短检查间隔为 5 分钟。若原 Redis 配置了密码，需把 URL 编码后的凭据写入 `RSSHUB_REDIS_URL`。RSSHub 不依赖浏览器容器。
+
+后端启动自动执行 Flyway `V24`（RSS 表）和 `V25`（全局下载许可）。定时入口为 Temporal Schedule `gallery-rss-tick`，每分钟检查各订阅的到期时间；Temporal 临时不可用时自动重试创建。请同时更新后端和抓取 Worker，后者负责新的 `ScrapeRssSearchPage` Activity。
+
+可检查：
+
+```bash
+docker compose ps rsshub backend scraper-worker
+docker compose logs --tail=100 rsshub
+docker compose logs --tail=100 backend
+```
+
+RSS 不是完整事件日志。页面会分别显示检查成功时间、完整补查覆盖时间以及未完成扫描页数；源码页面变化、登录失效或限流会记录错误并保留游标，不把异常页面当成历史末尾。
+
+可靠性测试可在一次性 MySQL 数据库 `rss_test` 运行（测试不会读取应用 `.env`）：设置 `RSS_TEST_JDBC_URL=jdbc:mysql://127.0.0.1:<port>/rss_test?serverTimezone=UTC&allowPublicKeyRetrieval=true&useSSL=false`、`RSS_TEST_DB_PASSWORD` 后运行 `mvn -pl main-service,scraper-worker -am test`。未设置测试地址时只跳过 MySQL 集成测试，其余测试正常执行。

@@ -26,6 +26,7 @@ class DatabaseActivityDedupeSettingsTest {
         List<EhGalleriesEntity> bucket = List.of(gallery);
         DedupeSettings snapshot = new DedupeSettings(70, 92, 90, 12, 5, 85, 8);
         when(galleries.selectById(42L)).thenReturn(gallery);
+        when(galleries.selectGalleryForUpdate(42L)).thenReturn(gallery);
         when(galleries.selectList(any())).thenReturn(bucket);
         when(reviews.settingsSnapshot()).thenReturn(snapshot)
                 .thenThrow(new AssertionError("本次认领不能再次读取变化中的配置"));

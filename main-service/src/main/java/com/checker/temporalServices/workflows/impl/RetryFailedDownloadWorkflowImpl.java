@@ -37,6 +37,7 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
     @Override
     /** 读取失败记录并按并发窗口启动恢复子流程，结束后重新核对首选关系和最终通知。 */
     public void retryFailedTasks() {
+        int existingChildVersion = Workflow.getVersion("idempotent-child-conflict", Workflow.DEFAULT_VERSION, 1);
         // 版本标记保留已运行历史的调用顺序，新任务才使用对应的新认领与通知规则。
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
         int batchNotificationVersion = Workflow.getVersion(
@@ -93,6 +94,10 @@ public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkf
                 try {
                     child.processSingleGallery(gallery, compensateOnly, settings);
                 } catch (ChildWorkflowFailure e) {
+                    if (existingChildVersion != Workflow.DEFAULT_VERSION && WorkflowSteps.isAlreadyStarted(e)) {
+                        log.info("画廊已有工作流，沿用该任务");
+                        return;
+                    }
                     log.error("子工作流异常终止（致命错误），停止派发新任务。GID: {}", gallery.getGid());
                     fatalErrorOccurred = true;
                 }

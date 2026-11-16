@@ -17,6 +17,12 @@
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>io.temporal</groupId>
+            <artifactId>temporal-testing</artifactId>
+            <version>${temporal.version}</version>
+            <scope>test</scope>
+        </dependency>
         <!-- OpenAPI 3 / Swagger UI（Spring Boot 3.x） -->
         <dependency>
             <groupId>org.springdoc</groupId>

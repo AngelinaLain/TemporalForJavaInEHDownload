@@ -28,6 +28,13 @@ import java.util.Map;
  * Komga 轮询次数和间隔由调用方传入的运行设置决定，不在工具类中写死。
  */
 class WorkflowSteps {
+    static boolean isAlreadyStarted(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof io.temporal.client.WorkflowExecutionAlreadyStarted) return true;
+        }
+        return false;
+    }
+
 
 
     /** 普通数据库、通知和图库操作使用的超时与重试策略。 */

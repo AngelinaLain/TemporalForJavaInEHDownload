@@ -73,6 +73,12 @@ const routes = [
         meta: { title: '工作流操作' }
       },
       {
+        path: 'rss-subscriptions',
+        name: 'RssSubscriptions',
+        component: () => import('../views/RssSubscriptions.vue'),
+        meta: { title: 'RSS 订阅' }
+      },
+      {
         path: 'monitoring',
         name: 'Monitoring',
         component: () => import('../views/Monitoring.vue'),

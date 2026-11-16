@@ -209,3 +209,11 @@ management:
   zipkin:
     tracing:
       endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}
+
+# RSS subscriptions use Temporal schedules and a durable MySQL queue.
+rss:
+  enabled: ${RSS_ENABLED:true}
+  hub-url: ${RSS_HUB_URL:http://rsshub:1200}
+  max-attempts: ${RSS_MAX_ATTEMPTS:5}
+  batch-size: ${RSS_BATCH_SIZE:25}
+  max-active-batches: ${RSS_MAX_ACTIVE_BATCHES:2}

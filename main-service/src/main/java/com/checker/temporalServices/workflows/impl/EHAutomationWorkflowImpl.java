@@ -63,6 +63,7 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
     @Override
     /** 读取设置和版本标记，分阶段采集、去重、派发子流程，等待已启动任务结束后汇总通知。 */
     public void executeAutomation(SearchOptions searchOptions) {
+        int existingChildVersion = Workflow.getVersion("idempotent-child-conflict", Workflow.DEFAULT_VERSION, 1);
         // 版本值记录在历史中；重放旧流程时必须继续走原分支，不能改变已经发生的命令顺序。
         int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
         int batchNotificationVersion = Workflow.getVersion(
@@ -237,6 +238,10 @@ public class EHAutomationWorkflowImpl implements EHAutomationWorkflow {
                 try {
                     child.processSingleGallery(task.gallery, task.compensateOnly, settings);
                 } catch (ChildWorkflowFailure e) {
+                    if (existingChildVersion != Workflow.DEFAULT_VERSION && WorkflowSteps.isAlreadyStarted(e)) {
+                        log.info("画廊已有工作流，沿用该任务");
+                        return;
+                    }
                     log.error("❌ 子工作流异常终止（致命错误），停止派发新任务。GID: {}", task.gallery.getGid());
                     fatalErrorOccurred = true;
                 }
