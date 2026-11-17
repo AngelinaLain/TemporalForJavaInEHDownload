@@ -90,6 +90,18 @@ test('IPv6 and host URLs keep the intended protocol and port', () => {
     assert.equal(buildRssHubEnvironment({ ...base, PROXY_HOST: 'socks5://proxy.example:1080' }).PROXY_URI, 'socks5://proxy.example:1080');
 });
 
+test('explicit standard ports are not replaced by the shared proxy port', () => {
+    for (const [host, expected] of [
+        ['http://proxy.example:80', 'http://proxy.example'],
+        ['proxy.example:80', 'http://proxy.example'],
+        ['https://proxy.example:443', 'https://proxy.example'],
+        ['http://[::1]:80/', 'http://[::1]'],
+    ]) {
+        assert.equal(buildRssHubEnvironment({ ...base, PROXY_HOST: host }).PROXY_URI, expected);
+    }
+    assert.equal(buildRssHubEnvironment({ ...base, PROXY_HOST: 'http://proxy.example' }).PROXY_URI, 'http://proxy.example:7893');
+});
+
 test('invalid proxy addresses and ports fail without exposing input', () => {
     for (const uri of ['http://fixture-user:fixture-secret@', 'ftp://proxy.example', 'http://proxy.example/path', 'http://proxy.example?secret=value']) {
         assert.throws(() => buildRssHubEnvironment({ PROXY_URI: uri }), (error) => {

@@ -32,11 +32,44 @@ class RssStoreMysqlTest {
         store=new RssStore(db,new ObjectMapper(),manager,new RssConfig());
     }
     @BeforeEach void reset() {
-        for (String table:List.of("rss_item","rss_download_task","rss_batch","rss_poll_run","rss_subscription_revision","rss_subscription","eh_download_permit","eh_galleries")) db.update("DELETE FROM "+table);
+        for (String table:List.of("rss_collection_task","eh_gallery_collection_items","eh_gallery_collections","rss_item","rss_download_task","rss_batch","rss_poll_run","rss_subscription_revision","rss_subscription","eh_download_permit","eh_galleries")) db.update("DELETE FROM "+table);
     }
     RssSubscriptionRequest request() { var r=new RssSubscriptionRequest();r.setName("测试订阅");r.setKeyword("test");return r; }
     RssSearchItem item(long gid,long time) {return new RssSearchItem(gid,"abc","https://e-hentai.org/g/"+gid+"/abc/","Test",time);}
     RssStore.Snapshot subscription() {String id=store.save(null,request());return store.load(id,1);}
+
+    @Test void optionalCollectionPersistsWithoutResettingSearchAndRejectsMissingTarget() {
+        var request=request();String id=store.save(null,request);
+        assertFalse(store.load(id,1).request().isCollectionEnabled());
+        long baseline=store.load(id,1).baseline();
+        db.update("INSERT INTO eh_gallery_collections(id,name) VALUES(123,'RSS 测试合集')");
+        request.setCollectionEnabled(true);request.setCollectionId(123L);store.save(id,request);
+        var saved=store.load(id,1);assertEquals(baseline,saved.baseline());
+        assertTrue(saved.request().isCollectionEnabled());assertEquals(123L,saved.request().getCollectionId());
+        assertEquals("RSS 测试合集",store.list().get(0).get("collectionName"));
+        request.setCollectionId(999L);
+        assertThrows(IllegalArgumentException.class,()->store.save(id,request));
+        assertEquals(123L,store.load(id,1).request().getCollectionId());
+        request.setCollectionEnabled(false);store.save(id,request);
+        assertNull(store.load(id,1).request().getCollectionId());
+        assertFalse(db.queryForObject("SELECT collection_enabled FROM rss_subscription WHERE id=?",Boolean.class,id));
+    }
+
+    @Test void collectionStatusAndRetryRemainIndependentFromDownload() {
+        db.update("INSERT INTO eh_gallery_collections(id,name) VALUES(123,'RSS 测试合集')");
+        var request=request();request.setCollectionEnabled(true);request.setCollectionId(123L);
+        String id=store.save(null,request);var snapshot=store.load(id,1);
+        store.record(snapshot,List.of(item(42,System.currentTimeMillis())));
+        db.update("INSERT INTO rss_download_task(gid,url,status,next_attempt_at,updated_at) VALUES(42,'https://e-hentai.org/g/42/abc/','IMPORTED',0,0)");
+        db.update("INSERT INTO rss_collection_task(subscription_id,gid,collection_id,revision,status,attempts,next_attempt_at,updated_at,last_error) VALUES(?,42,123,1,'FAILED',5,0,0,'归档失败')",id);
+        var rows=(List<java.util.Map<String,Object>>)store.items(id,1,25).get("records");
+        assertEquals("FAILED",rows.get(0).get("collectionStatus"));
+        assertEquals("归档失败",rows.get(0).get("collectionError"));
+        assertEquals("IMPORTED",rows.get(0).get("status"));
+        store.retry(id);
+        assertEquals("WAITING",db.queryForObject("SELECT status FROM rss_collection_task WHERE subscription_id=?",String.class,id));
+        assertEquals("IMPORTED",db.queryForObject("SELECT status FROM rss_download_task WHERE gid=42",String.class));
+    }
 
     @Test void overlappingSubscriptionsAndRepeatedPagesCreateOneDownload() {
         var a=subscription();var b=subscription();var item=item(42,System.currentTimeMillis());

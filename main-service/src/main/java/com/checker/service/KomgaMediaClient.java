@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.net.URLDecoder;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -145,9 +146,76 @@ public class KomgaMediaClient {
         return Optional.of(new PreviewBook(match.getKey(), Math.max(0, count)));
     }
 
+    /** 归档迁移后必须匹配 Library 根目录下的完整目标路径，旧目录中的同名书不能完成确认。 */
+    public Optional<String> findBookAtPath(long gid, String relativeDirectory, String filename) throws IOException {
+        if (!configured()) throw new IOException("Komga 服务未配置");
+        if (gid <= 0 || filename == null || filename.isBlank() || filename.contains("/") || filename.contains("\\"))
+            throw new IllegalArgumentException("画廊 GID 或归档文件名无效");
+        String directory = relativeDirectory == null ? "" : relativeDirectory.replace('\\', '/');
+        if (directory.startsWith("/") || directory.contains(":")
+                || java.util.Arrays.stream(directory.split("/", -1)).anyMatch(part -> part.equals(".") || part.equals("..")))
+            throw new IllegalArgumentException("归档相对目录无效");
+        directory = directory.replaceAll("/+$", "");
+        String library = config.getKomga().getLibraryId();
+        if (library == null || library.isBlank()) throw new IOException("请配置目标 Komga Library");
+        HttpUrl libraryUrl = base().newBuilder().addPathSegments("api/v1/libraries").addPathSegment(library).build();
+        JsonNode details = mapper.readTree(execute(authorized(libraryUrl).get().build(), 1024 * 1024));
+        if (details == null || !library.equals(details.path("id").asText()))
+            throw new IOException("Komga 返回的 Library 信息无效");
+        String root = absolutePhysicalPath(details.path("root").asText(""));
+        if (root == null) throw new IOException("Komga 未提供 Library 物理根目录，请检查 API Key 权限");
+        String expectedPath = root.replaceAll("/+$", "") + "/" + (directory.isEmpty() ? "" : directory + "/") + filename;
+        Map<String, JsonNode> matches = new LinkedHashMap<>();
+        int[] remainingPages = {MAX_SEARCH_PAGES};
+        LinkedHashSet<String> terms = new LinkedHashSet<>();
+        terms.add(String.valueOf(gid));
+        String title = titleTerms(filename);
+        if (!title.isBlank()) terms.add(title);
+        terms.add(stem(filename).substring(0, Math.min(120, stem(filename).length())));
+        for (String term : terms) {
+            search(term, matches, remainingPages, book -> {
+                if (!library.equals(book.path("libraryId").asText("")) || book.path("deleted").asBoolean(false)) return false;
+                String physical = absolutePhysicalPath(book.path("url").asText(""));
+                if (physical == null && matchesPhysicalFile(book, gid, filename))
+                    throw new IOException("Komga 未提供书籍物理路径，无法确认目标合集目录");
+                return expectedPath.equals(physical);
+            });
+            if (!matches.isEmpty()) break;
+        }
+        if (matches.size() > 1) throw new IOException("Komga 目标归档路径存在多个书籍 ID，请等待扫描完成后重试");
+        return matches.keySet().stream().findFirst();
+    }
+
+    /** 仅解码 file URI；普通文件路径中的百分号和加号属于真实文件名。 */
+    private static String absolutePhysicalPath(String value) throws IOException {
+        if (value == null || value.isBlank()) return null;
+        String path = value;
+        if (value.regionMatches(true, 0, "file:", 0, 5)) {
+            try {
+                URI uri = URI.create(value.replace(" ", "%20"));
+                if (uri.getQuery() != null || uri.getFragment() != null || uri.getPath() == null) return null;
+                path = (uri.getAuthority() == null || uri.getAuthority().isEmpty() ? "" : "//" + uri.getAuthority()) + uri.getPath();
+            } catch (IllegalArgumentException malformed) {
+                throw new IOException("Komga 物理路径格式无效");
+            }
+        }
+        path = path.replace('\\', '/');
+        if (path.matches("^/[A-Za-z]:/.*")) path = path.substring(1);
+        if (!path.startsWith("/") && !path.matches("^[A-Za-z]:/.*")) return null;
+        if (path.chars().anyMatch(Character::isISOControl)
+                || java.util.Arrays.stream(path.split("/")).anyMatch(part -> part.equals(".") || part.equals("..")))
+            throw new IOException("Komga 物理路径包含无效目录");
+        return path;
+    }
+
     /** 分页召回候选并校验分页完整性，超出预算或无法确认唯一性时明确失败。 */
     private void search(String term, long gid, String expected, Map<String, JsonNode> matches,
                         int[] remainingPages) throws IOException {
+        search(term, matches, remainingPages, book -> matchesPhysicalFile(book, gid, expected));
+    }
+
+    private void search(String term, Map<String, JsonNode> matches, int[] remainingPages,
+                        PhysicalBookMatcher matcher) throws IOException {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("fullTextSearch", term);
         String library = config.getKomga().getLibraryId();
@@ -176,7 +244,7 @@ public class KomgaMediaClient {
                 String actualLibrary = book.path("libraryId").asText("");
                 if (id.isBlank() || (library != null && !library.isBlank()
                         && !actualLibrary.isBlank() && !library.equals(actualLibrary))) continue;
-                if (matchesPhysicalFile(book, gid, expected)) matches.put(id, book);
+                if (matcher.matches(book)) matches.put(id, book);
             }
             boolean last;
             if (result.path("last").isBoolean()) {
@@ -282,6 +350,9 @@ public class KomgaMediaClient {
     public record LibraryBook(String bookId, List<String> filenames) {}
     /** 全部分页已校验完成的图库目录，未完整读取时不会创建此结果。 */
     public record LibrarySnapshot(List<LibraryBook> books, int total) {}
+
+    @FunctionalInterface
+    private interface PhysicalBookMatcher { boolean matches(JsonNode book) throws IOException; }
 
     /** 保留 Komga 的响应状态，让调用方区分旧书籍 ID、图库权限和普通连接错误。 */
     public static final class KomgaHttpException extends IOException {

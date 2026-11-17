@@ -4,6 +4,8 @@ import java.nio.charset.StandardCharsets;
 import com.checker.dto.SearchOptions;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 class RssFeedClientTest {
     private static byte[] xml(String items) { return ("<rss><channel>"+items+"</channel></rss>").getBytes(StandardCharsets.UTF_8); }
@@ -48,5 +50,51 @@ class RssFeedClientTest {
         assertTrue(empty.contains("请查看 RSSHub 日志"));
         String longError = RssFeedClient.httpError(502,"text/plain","x".repeat(10000).getBytes(StandardCharsets.UTF_8));
         assertTrue(longError.length()<1000);
+    }
+
+    @Test void redactsJsonAndJavascriptHeaderObjectsWithoutHidingTheCause() throws Exception {
+        String details = "FetchError: headers={\"authorization\":\"Bearer bearer-secret\","
+                + "\"cookie\":\"session=cookie-secret; extra=other-secret\"} "
+                + "config={'password':'pass-secret', 'proxy-authorization': 'Basic basic-secret'} "
+                + "cause=ECONNREFUSED proxy.example:7893";
+        String html = "<html><pre>" + details.replace("\"", "&quot;") + "</pre></html>";
+        String json = new ObjectMapper().writeValueAsString(Map.of("error", Map.of("message", details)));
+        for (String output : new String[]{
+                RssFeedClient.httpError(503, "text/html", html.getBytes(StandardCharsets.UTF_8)),
+                RssFeedClient.httpError(503, "application/json", json.getBytes(StandardCharsets.UTF_8))}) {
+            assertTrue(output.contains("HTTP 503"));
+            assertTrue(output.contains("ECONNREFUSED proxy.example:7893"));
+            for (String secret : new String[]{"bearer-secret", "cookie-secret", "other-secret", "pass-secret", "basic-secret"})
+                assertFalse(output.contains(secret), secret);
+        }
+    }
+
+    @Test void redactsEscapedQuotedValuesAndEmbeddedSerializedObjects() throws Exception {
+        var json = new ObjectMapper();
+        String credentialObject = json.writeValueAsString(Map.of(
+                "password", "password-prefix\" , password-tail\\",
+                "token", "token-prefix\\\" ; token-tail",
+                "cookie", new String[]{"first-cookie", "second-cookie"},
+                "authorization", "Bearer bearer-secret"));
+        // An error can contain either an inspected object or JSON serialized inside another string.
+        String escapedObject = json.writeValueAsString(credentialObject);
+        String jsObject = "{'password':'single-prefix\\' , single-tail\\\\', 'token':'single-token'}";
+        for (String object : new String[]{credentialObject, escapedObject, jsObject}) {
+            String detail = "FetchError: " + object + " cause=Proxy response (407)";
+            String output = RssFeedClient.httpError(503, "text/plain", detail.getBytes(StandardCharsets.UTF_8));
+            assertTrue(output.contains("HTTP 503"));
+            assertTrue(output.contains("Proxy response (407)"), output);
+            for (String secret : new String[]{"password-prefix", "password-tail", "token-prefix", "token-tail",
+                    "first-cookie", "second-cookie", "bearer-secret", "single-prefix", "single-tail", "single-token"})
+                assertFalse(output.contains(secret), secret + ": " + output);
+        }
+    }
+
+    @Test void redactsTheEntireTruncatedQuotedSecret() {
+        String detail = "ECONNREFUSED config={\"password\":\"prefix\\\" , secret-tail";
+        String output = RssFeedClient.httpError(503, "text/plain", detail.getBytes(StandardCharsets.UTF_8));
+        assertTrue(output.contains("ECONNREFUSED"));
+        assertFalse(output.contains("prefix"));
+        assertFalse(output.contains("secret-tail"));
     }
 }

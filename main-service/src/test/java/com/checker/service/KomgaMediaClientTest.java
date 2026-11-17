@@ -222,6 +222,83 @@ class KomgaMediaClientTest {
     private static Map<String, Object> book(String id, String name, String library, int pages) {
         return Map.of("id", id, "name", name, "libraryId", library, "media", Map.of("pagesCount", pages));
     }
+
+    @Test void destinationConfirmationRejectsTheOldPathAndNestedSuffixesEvenWhenTheBookIdIsValid() throws Exception {
+        AtomicBoolean scanned = new AtomicBoolean();
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) {
+                assertEquals("/komga/api/v1/libraries/target-library", call.path());
+                reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            } else {
+                var items = new java.util.ArrayList<>(List.of(
+                        physicalBook("old-id", "/library/[42] Title.cbz"),
+                        physicalBook("nested-wrong", "/library/Other/Series/[42] Title.cbz"),
+                        physicalBook("prefix-wrong", "/other-library/Series/[42] Title.cbz")));
+                if (scanned.get()) items.add(physicalBook("new-id", "/library/Series/[42] Title.cbz"));
+                reply(exchange, 200, Map.of("content", items, "last", true, "totalElements", items.size()));
+            }
+        };
+        assertTrue(client.findBookAtPath(42L, "Series", "[42] Title.cbz").isEmpty());
+        scanned.set(true);
+        assertEquals("new-id", client.findBookAtPath(42L, "Series", "[42] Title.cbz").orElseThrow());
+        for (Call call : calls) if (call.method().equals("POST")) {
+            assertEquals("target-library", JSON.readTree(call.body()).path("condition").path("libraryId").path("value").asText());
+        }
+    }
+
+    @Test void destinationConfirmationHandlesFileUrisWithoutChangingLiteralPercentOrPlusNames() throws Exception {
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "file:///library/"));
+            else reply(exchange, 200, Map.of("content", List.of(
+                    physicalBook("encoded", "file:///library/Series/%5B42%5D%20Title%20%2520%2B.cbz")), "last", true));
+        };
+        assertEquals("encoded", client.findBookAtPath(42L, "Series", "[42] Title %20+.cbz").orElseThrow());
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            else reply(exchange, 200, Map.of("content", List.of(
+                    physicalBook("literal", "/library/Series/[42] Title %20+.cbz")), "last", true));
+        };
+        assertEquals("literal", client.findBookAtPath(42L, "Series", "[42] Title %20+.cbz").orElseThrow());
+    }
+
+    @Test void destinationConfirmationRejectsAmbiguousMissingPathsAndIncompleteResults() {
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            else reply(exchange, 200, Map.of("content", List.of(
+                    physicalBook("one", "/library/Series/[42] Title.cbz"),
+                    physicalBook("two", "/library/Series/[42] Title.cbz")), "last", true));
+        };
+        assertTrue(assertThrows(IOException.class,
+                () -> client.findBookAtPath(42L, "Series", "[42] Title.cbz")).getMessage().contains("多个"));
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            else reply(exchange, 200, Map.of("content", List.of(physicalBook("restricted", "[42] Title.cbz")), "last", true));
+        };
+        assertTrue(assertThrows(IOException.class,
+                () -> client.findBookAtPath(42L, "Series", "[42] Title.cbz")).getMessage().contains("物理路径"));
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            else reply(exchange, 200, Map.of("content", List.of(physicalBook("one", "/library/Series/[42] Title.cbz"))));
+        };
+        assertTrue(assertThrows(IOException.class,
+                () -> client.findBookAtPath(42L, "Series", "[42] Title.cbz")).getMessage().contains("分页完成"));
+    }
+
+    @Test void destinationConfirmationDoesNotUseDeletedBooksOrHiddenLibraryRoots() throws Exception {
+        handler = (exchange, call) -> {
+            if (call.method().equals("GET")) reply(exchange, 200, Map.of("id", "target-library", "root", "/library"));
+            else reply(exchange, 200, Map.of("content", List.of(Map.of("id", "deleted", "libraryId", "target-library",
+                    "url", "/library/Series/[42] Title.cbz", "deleted", true)), "last", true));
+        };
+        assertTrue(client.findBookAtPath(42L, "Series", "[42] Title.cbz").isEmpty());
+        handler = (exchange, call) -> reply(exchange, 200, Map.of("id", "target-library", "root", ""));
+        assertTrue(assertThrows(IOException.class,
+                () -> client.findBookAtPath(42L, "Series", "[42] Title.cbz")).getMessage().contains("权限"));
+    }
+
+    private static Map<String, Object> physicalBook(String id, String path) {
+        return Map.of("id", id, "name", "[42] Title.cbz", "url", path, "libraryId", "target-library");
+    }
     private static void reply(HttpExchange exchange, int status, Object value) throws IOException {
         byte[] bytes = JSON.writeValueAsBytes(value);
         exchange.getResponseHeaders().set("Content-Type", "application/json");

@@ -13,6 +13,8 @@ public class RssSubscriptionRequest {
     private int intervalMinutes = 15;
     private boolean enabled = true;
     private boolean autoDownload = true;
+    private boolean collectionEnabled;
+    private Long collectionId;
     private String initialMode = "NEW_ONLY";
     private int historyDays = 7;
     private int backfillIntervalHours = 6;
@@ -21,6 +23,8 @@ public class RssSubscriptionRequest {
     public void validate() {
         if (name == null || name.isBlank() || name.length() > 100) throw new IllegalArgumentException("订阅名称需为 1–100 个字符");
         name = name.trim();
+        if (collectionEnabled && (collectionId == null || collectionId <= 0)) throw new IllegalArgumentException("请选择或新建一个画廊合集");
+        if (!collectionEnabled) collectionId = null;
         keyword = keyword == null ? "" : keyword.trim();
         tags = tags == null ? List.of() : tags.stream().filter(s -> s != null && !s.isBlank()).map(String::trim).distinct().toList();
         String merged = String.join(" ", tags) + (keyword.isEmpty() ? "" : " " + keyword);

@@ -47,12 +47,13 @@ public class RssStore {
         try { return json.readValue(value, RssSubscriptionRequest.class); } catch (Exception e) { throw new IllegalStateException("订阅条件损坏", e); }
     }
     public List<Map<String, Object>> list() {
-        var rows = db.query("SELECT * FROM rss_subscription WHERE deleted=FALSE ORDER BY created_at DESC", ROW);
+        var rows = db.query("SELECT s.*,c.name collection_name FROM rss_subscription s LEFT JOIN eh_gallery_collections c ON c.id=s.collection_id WHERE s.deleted=FALSE ORDER BY s.created_at DESC", ROW);
         for (var row : rows) {
             var request = decode((String) row.remove("configJson"));
             row.put("config", request);
             row.put("name", request.getName());
             row.put("route", EhSearchQueryBuilder.rssRoute(request.getSearchOptions()));
+            row.put("collectionCounts", db.query("SELECT t.status,COUNT(*) total FROM rss_collection_task t WHERE t.subscription_id=? AND t.collection_id=? AND t.revision=? GROUP BY t.status", ROW, row.get("id"), row.get("collectionId"), row.get("revision")));
             row.put("counts", db.query("SELECT COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END) status,COUNT(*) total FROM rss_item i LEFT JOIN rss_download_task t ON t.gid=i.gid WHERE i.subscription_id=? AND i.revision=? GROUP BY COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END)", ROW, row.get("id"), row.get("revision")));
         }
         return rows;
@@ -74,6 +75,13 @@ public class RssStore {
                 db.update("UPDATE rss_subscription SET config_json=?,enabled=?,auto_download=?,next_poll_at=? WHERE id=?", encode(request), request.isEnabled(), request.isAutoDownload(), now, id);
                 if (changed) db.update("UPDATE rss_subscription SET revision=revision+1,baseline_at=?,coverage_at=NULL,last_backfill_at=NULL,scan_cursor=NULL,scan_started_at=NULL,scan_before_at=NULL,scan_pages=0,last_error=NULL,error_count=0 WHERE id=?", baseline, id);
             }
+            // Keep the subscription-before-collection lock order used by RSS assignment.
+            if (request.isCollectionEnabled()) {
+                var names = db.queryForList("SELECT name FROM eh_gallery_collections WHERE id=? FOR UPDATE", String.class, request.getCollectionId());
+                if (names.isEmpty()) throw new IllegalArgumentException("所选画廊合集已不存在，请重新选择或新建");
+                com.checker.service.GallerySeriesPlacementService.safeDirectory(names.get(0));
+            }
+            db.update("UPDATE rss_subscription SET collection_enabled=?,collection_id=? WHERE id=?", request.isCollectionEnabled(), request.getCollectionId(), key);
             db.update("INSERT IGNORE INTO rss_subscription_revision(subscription_id,revision,config_json,baseline_at) SELECT id,revision,config_json,baseline_at FROM rss_subscription WHERE id=?",key);
         });
         return key;
@@ -140,7 +148,7 @@ public class RssStore {
 
     public Map<String,Object> items(String id, int page, int size) {
         require(id); int limit = Math.max(1,Math.min(100,size)); int offset = (Math.max(1,page)-1)*limit;
-        var rows = db.query("SELECT i.*,r.config_json condition_snapshot,COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END) status,t.attempts,COALESCE(t.last_error,b.last_error) last_error,b.workflow_id,g.download_status,g.duplicate_of_gid FROM rss_item i LEFT JOIN rss_subscription_revision r ON r.subscription_id=i.subscription_id AND r.revision=i.revision LEFT JOIN rss_download_task t ON i.gid=t.gid LEFT JOIN rss_batch b ON t.batch_id=b.id LEFT JOIN eh_galleries g ON g.gid=i.gid WHERE i.subscription_id=? ORDER BY i.discovered_at DESC,i.gid DESC LIMIT ? OFFSET ?",ROW,id,limit,offset);
+        var rows = db.query("SELECT i.*,r.config_json condition_snapshot,COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END) status,t.attempts,COALESCE(t.last_error,b.last_error) last_error,b.workflow_id,g.download_status,g.duplicate_of_gid,ct.status collection_status,ct.last_error collection_error FROM rss_item i JOIN rss_subscription s ON s.id=i.subscription_id LEFT JOIN rss_subscription_revision r ON r.subscription_id=i.subscription_id AND r.revision=i.revision LEFT JOIN rss_download_task t ON i.gid=t.gid LEFT JOIN rss_batch b ON t.batch_id=b.id LEFT JOIN eh_galleries g ON g.gid=i.gid LEFT JOIN rss_collection_task ct ON ct.subscription_id=i.subscription_id AND ct.gid=i.gid AND ct.collection_id=s.collection_id AND ct.revision=i.revision AND s.collection_enabled=TRUE AND i.revision=s.revision WHERE i.subscription_id=? ORDER BY i.discovered_at DESC,i.gid DESC LIMIT ? OFFSET ?",ROW,id,limit,offset);
         for (var row:rows) {
             String snapshot=(String)row.remove("conditionSnapshot");
             row.put("searchQuery",snapshot==null ? "" : decode(snapshot).getSearchOptions().getKeyword());
@@ -185,6 +193,7 @@ public class RssStore {
     public void retry(String id) {
         require(id);
         tx.executeWithoutResult(status -> {
+            db.update("UPDATE rss_collection_task SET status='WAITING',attempts=0,next_attempt_at=0,last_error=NULL WHERE subscription_id=? AND status IN ('FAILED','RETRY','CONFLICT')", id);
             db.update("UPDATE eh_galleries SET download_status='未下载' WHERE download_status IN ('BLOCKED','阻断') AND gid IN (SELECT t.gid FROM rss_download_task t JOIN rss_item i ON t.gid=i.gid WHERE i.subscription_id=? AND t.status='BLOCKED') AND gid NOT IN (SELECT gid FROM eh_download_permit)",id);
             db.update("UPDATE rss_download_task SET status='PENDING',attempts=0,next_attempt_at=0,last_error=NULL WHERE status IN ('FAILED','RETRY','BLOCKED') AND gid IN (SELECT gid FROM rss_item WHERE subscription_id=?)",id);
         });

@@ -30,6 +30,7 @@ class KomgaSeriesSyncServiceTest {
     KomgaApiClient komga;
     MountedArchiveStorage storage;
     EhGalleriesEntity gallery;
+    DownloadPermitService permits;
     final String filename = "[561583] historical title.cbz";
 
     @BeforeEach
@@ -49,16 +50,19 @@ class KomgaSeriesSyncServiceTest {
         gallery.setGid(561583L);
         gallery.setFilename("historical title");
         gallery.setTitle("Title");
+        gallery.setDownloadStatus("IMPORTED");
         when(mapper.selectList(any())).thenReturn(List.of(gallery));
+        when(mapper.selectById(561583L)).thenReturn(gallery);
         when(mapper.update(isNull(), any())).thenReturn(1);
         placements = mock(GallerySeriesPlacementService.class);
         when(placements.resolve(561583L)).thenReturn(
                 new GallerySeriesPlacementService.SeriesPlacement(1L, "Series", "Series", 1, "1:Series:0"));
         komga = mock(KomgaApiClient.class);
+        permits = mock(DownloadPermitService.class);
     }
 
     KomgaSeriesSyncService service() {
-        return new KomgaSeriesSyncService(mapper, placements, reader, uploader, komga, config, Runnable::run);
+        return new KomgaSeriesSyncService(mapper, placements, reader, uploader, komga, config, Runnable::run, permits);
     }
 
     void archive(Path path) throws IOException {
@@ -181,6 +185,90 @@ class KomgaSeriesSyncServiceTest {
         assertEquals(1, service().start().get("failed"));
         assertNull(gallery.getStoragePath());
         assertTrue(Files.exists(root.resolve(filename)));
+        verify(mapper, never()).update(isNull(), any());
+    }
+
+    @Test void targetedSyncMovesOnlyTheRequestedArchiveAndCanRetryWithoutRepublishing() throws Exception {
+        archive(root.resolve(filename));
+        Path unrelated = root.resolve("[999] manual pending.cbz");
+        archive(unrelated);
+        byte[] originalUnrelated = Files.readAllBytes(unrelated);
+        var service = service();
+        service.synchronizeOne(561583L, 1L);
+        assertFalse(Files.exists(root.resolve(filename)));
+        assertTrue(Files.exists(root.resolve("Series/" + filename)));
+        assertArrayEquals(originalUnrelated, Files.readAllBytes(unrelated));
+        assertEquals("Series", gallery.getStoragePath());
+        service.synchronizeOne(561583L, 1L);
+        verify(uploader, times(1)).upload(any(), eq("Series"), eq(filename), any());
+        verify(komga, times(2)).triggerLibraryScan();
+        verify(mapper, never()).selectList(any());
+    }
+
+    @Test void targetedSyncKeepsFailedCleanupRecoverableWithoutClaimingCompletion() throws Exception {
+        archive(root.resolve(filename));
+        doThrow(new IOException("NAS busy")).when(reader).deleteExact("", filename);
+        assertThrows(IOException.class, () -> service().synchronizeOne(561583L, 1L));
+        assertEquals(filename, gallery.getSeriesCleanupFilename());
+        assertTrue(Files.exists(root.resolve(filename)));
+        verify(komga, never()).triggerLibraryScan();
+        doCallRealMethod().when(reader).deleteExact("", filename);
+        service().synchronizeOne(561583L, 1L);
+        assertNull(gallery.getSeriesCleanupFilename());
+        assertFalse(Files.exists(root.resolve(filename)));
+        verify(uploader, times(1)).upload(any(), anyString(), anyString(), any());
+        verify(komga).triggerLibraryScan();
+    }
+
+    @Test void targetedSyncRetriesTheScanAfterFilesWereAlreadyPublished() throws Exception {
+        archive(root.resolve(filename));
+        doThrow(new IOException("Komga unavailable")).doNothing().when(komga).triggerLibraryScan();
+        var service = service();
+        assertThrows(IOException.class, () -> service.synchronizeOne(561583L, 1L));
+        assertEquals("Series", gallery.getStoragePath());
+        service.synchronizeOne(561583L, 1L);
+        verify(uploader, times(1)).upload(any(), anyString(), anyString(), any());
+        verify(komga, times(2)).triggerLibraryScan();
+    }
+
+    @Test void targetedSyncRejectsWrongMembershipUnimportedBooksAndActiveDownloads() {
+        assertThrows(IllegalStateException.class, () -> service().synchronizeOne(561583L, 2L));
+        gallery.setDownloadStatus("DOWNLOADING");
+        assertThrows(IllegalStateException.class, () -> service().synchronizeOne(561583L, 1L));
+        gallery.setDownloadStatus("IMPORTED");
+        when(permits.hasOwner(561583L)).thenReturn(true);
+        assertThrows(IllegalStateException.class, () -> service().synchronizeOne(561583L, 1L));
+        verifyNoInteractions(uploader, reader, komga);
+        verify(mapper, never()).selectList(any());
+    }
+
+    @Test void changingMembershipDuringArchiveReadPreservesSourceAndStopsPublication() throws Exception {
+        archive(root.resolve(filename));
+        var original = placements.resolve(561583L);
+        when(placements.resolve(561583L)).thenReturn(original, original,
+                new GallerySeriesPlacementService.SeriesPlacement(2L, "Manual", "Manual", 1, "2:Manual:0"));
+        assertThrows(IllegalStateException.class, () -> service().synchronizeOne(561583L, 1L));
+        assertTrue(Files.exists(root.resolve(filename)));
+        verifyNoInteractions(uploader, komga);
+        verify(reader, never()).deleteExact(anyString(), anyString());
+    }
+
+    @Test void targetedAndFullLibrarySyncShareTheSameRunningGuard() {
+        var service = new KomgaSeriesSyncService(mapper, placements, reader, uploader, komga, config,
+                task -> { /* Keep the full-library job pending. */ }, permits);
+        service.start();
+        assertThrows(IllegalStateException.class, () -> service.synchronizeOne(561583L, 1L));
+        verifyNoInteractions(uploader, reader, komga);
+        verify(mapper, never()).selectById(anyLong());
+    }
+
+    @Test void targetedSyncCannotConfirmAnAlreadySignedDestinationWhoseFileIsMissing() {
+        gallery.setFilename(filename);
+        gallery.setStoragePath("Series");
+        gallery.setSeriesSyncSignature("1:Series:0");
+        IOException failure = assertThrows(IOException.class, () -> service().synchronizeOne(561583L, 1L));
+        assertTrue(failure.getMessage().contains("目标合集归档不存在"));
+        verifyNoInteractions(uploader, komga);
         verify(mapper, never()).update(isNull(), any());
     }
 }

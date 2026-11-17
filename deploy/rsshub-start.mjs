@@ -53,8 +53,12 @@ export function buildRssHubEnvironment(source) {
 
     let host = source.PROXY_HOST.trim();
     if (isIP(host) === 6) host = `[${host}]`;
-    const url = proxyUrl(host.includes('://') ? host : `${source.PROXY_PROTOCOL?.trim() || 'http'}://${host}`);
-    if (!url.port && source.PROXY_PORT?.trim()) {
+    const address = host.includes('://') ? host : `${source.PROXY_PROTOCOL?.trim() || 'http'}://${host}`;
+    const url = proxyUrl(address);
+    // URL normalizes explicit :80/:443 to an empty port. Do not replace these with the shared default.
+    const authority = address.slice(address.indexOf('://') + 3).split(/[/?#]/, 1)[0];
+    const hasExplicitPort = /:\d+$/.test(authority);
+    if (!hasExplicitPort && !url.port && source.PROXY_PORT?.trim()) {
         const port = source.PROXY_PORT.trim();
         if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
             throw new Error('RSSHub proxy port must be between 1 and 65535.');

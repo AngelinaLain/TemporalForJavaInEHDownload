@@ -13,6 +13,7 @@ import com.checker.service.ArchiveVisualFingerprintExtractor;
 import com.checker.service.VisualFingerprintService;
 import com.checker.service.DedupeReviewService;
 import com.checker.service.GallerySeriesPlacementService;
+import com.checker.rss.RssCollectionService;
 import com.checker.temporalServices.activities.LocalImportActivity;
 import cn.hutool.core.util.StrUtil;
 import io.temporal.activity.Activity;
@@ -84,6 +85,9 @@ public class LocalImportActivityImpl implements LocalImportActivity {
     @Autowired
     private GallerySeriesPlacementService placementService;
 
+    @Autowired
+    private RssCollectionService rssCollections;
+
     @Override
     /** 锁定当前画廊工作目录后复用或续传归档，校验并注入元数据，上传成功再更新位置和清理缓存。 */
     public void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb) {
@@ -114,6 +118,7 @@ public class LocalImportActivityImpl implements LocalImportActivity {
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = acquireWorkLock(lockChannel, ctx, gid)) {
             // 同一 GID 的活动共用缓存目录，取得锁后才能续传、注入或清理，避免互相覆盖。
+            rssCollections.assignForGallery(gid);
             GallerySeriesPlacementService.SeriesPlacement placement = placementService.resolve(gid);
             ComicInfo comicInfo = buildComicInfo(gallery, placement);
             String metadataFingerprint = sha256(comicInfo.toXml());

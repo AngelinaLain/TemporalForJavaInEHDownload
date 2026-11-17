@@ -27,6 +27,11 @@ public class RssFeedClient {
     private static final int MAX_BYTES = 4 * 1024 * 1024;
     private static final int MAX_ERROR_BYTES = 64 * 1024;
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Pattern SENSITIVE_FIELD = Pattern.compile(
+            "(?i)(?<![a-z0-9_-])(?:\\\\*[\"'])?(proxy-authorization|authorization|set-cookie|cookie|"
+                    + "ipb_member_id|ipb_pass_hash|igneous|sk|star|token|api[_-]?key|password|passwd|proxy_auth)"
+                    + "(?:\\\\*[\"'])?\\s*[:=]\\s*");
+    private static final Pattern AUTH_VALUE = Pattern.compile("(?i)(?:Basic|Bearer)\\s+[^\\s,;<>\\]}]+");
     private final RssConfig config;
     private final OkHttpClient client = new OkHttpClient.Builder().connectTimeout(Duration.ofSeconds(10))
             .callTimeout(Duration.ofSeconds(90)).followRedirects(false).build();
@@ -77,11 +82,68 @@ public class RssFeedClient {
     }
 
     private static String redact(String text) {
-        return text
-                .replaceAll("(?i)([a-z][a-z0-9+.-]*://)[^\\s<>\"']*@", "$1[REDACTED]@")
-                .replaceAll("(?i)(?:proxy-authorization|authorization)\\s*[:=]\\s*(?:Basic|Bearer)\\s+[^\\s,;<]+", "Authorization: [REDACTED]")
-                .replaceAll("(?i)(?:set-cookie|cookie)\\s*[:=][^\\r\\n]*", "Cookie: [REDACTED]")
-                .replaceAll("(?i)((?:ipb_member_id|ipb_pass_hash|igneous|sk|star|token|api[_-]?key|password|passwd|proxy_auth)\\s*[:=]\\s*)[^\\s&,;<>]+", "$1[REDACTED]");
+        var fields = SENSITIVE_FIELD.matcher(text);
+        var result = new StringBuilder();
+        int cursor = 0;
+        while (fields.find(cursor)) {
+            result.append(text, cursor, fields.end()).append("[REDACTED]");
+            cursor = sensitiveValueEnd(text, fields.end(), fields.group(1));
+            if (cursor == text.length()) break;
+        }
+        result.append(text, cursor, text.length());
+        return result.toString()
+                .replaceAll("(?i)([a-z][a-z0-9+.-]*://)[^\\s<>\"']*@", "$1[REDACTED]@");
+    }
+
+    /** Consume a complete quoted value, including escaped quotes, before inspecting subsequent fields. */
+    private static int sensitiveValueEnd(String text, int start, String key) {
+        int quoteAt = start;
+        while (quoteAt < text.length() && text.charAt(quoteAt) == '\\') quoteAt++;
+        if (quoteAt < text.length() && (text.charAt(quoteAt) == '"' || text.charAt(quoteAt) == '\'')) {
+            return quotedValueEnd(text, quoteAt, quoteAt - start);
+        }
+        // Header collections may represent Cookie/Authorization values as an array.
+        if (start < text.length() && (text.charAt(start) == '[' || text.charAt(start) == '{')) {
+            int depth = 0;
+            for (int i = start; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (c == '\\') {
+                    int escapedQuote = i;
+                    while (escapedQuote < text.length() && text.charAt(escapedQuote) == '\\') escapedQuote++;
+                    if (escapedQuote < text.length() && (text.charAt(escapedQuote) == '"' || text.charAt(escapedQuote) == '\'')) {
+                        i = quotedValueEnd(text, escapedQuote, escapedQuote - i) - 1;
+                    }
+                } else if (c == '"' || c == '\'') i = quotedValueEnd(text, i, 0) - 1;
+                else if (c == '[' || c == '{') depth++;
+                else if ((c == ']' || c == '}') && --depth == 0) return i + 1;
+            }
+            return text.length(); // Truncated values must not expose the remaining secret.
+        }
+        String lowerKey = key.toLowerCase(Locale.ROOT);
+        if (lowerKey.endsWith("authorization")) {
+            var auth = AUTH_VALUE.matcher(text).region(start, text.length());
+            if (auth.lookingAt()) return auth.end();
+        }
+        boolean header = lowerKey.endsWith("cookie") || lowerKey.endsWith("authorization");
+        int end = start;
+        while (end < text.length()) {
+            char c = text.charAt(end);
+            if (c == '\r' || c == '\n' || (!header && (Character.isWhitespace(c) || "&,;<>{}]".indexOf(c) >= 0))) break;
+            end++;
+        }
+        return end;
+    }
+
+    /** Also handles JSON text embedded as an escaped string: \"key\":\"value\". */
+    private static int quotedValueEnd(String text, int quoteAt, int quoteEscapes) {
+        char quote = text.charAt(quoteAt);
+        for (int i = quoteAt + 1; i < text.length(); i++) {
+            int escapes = 0;
+            while (i < text.length() && text.charAt(i) == '\\') { escapes++; i++; }
+            if (i < text.length() && text.charAt(i) == quote && escapes >= quoteEscapes
+                    && (escapes - quoteEscapes) % (2 * (quoteEscapes + 1)) == 0) return i + 1;
+        }
+        return text.length();
     }
 
     static List<RssSearchItem> parse(byte[] xml) throws Exception {

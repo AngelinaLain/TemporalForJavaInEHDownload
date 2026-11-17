@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.checker.clients.KomgaApiClient;
 import com.checker.common.ComicInfo;
 import com.checker.common.ComicInfoInjector;
+import com.checker.common.DownloadStatus;
 import com.checker.config.EhNetworkConfig;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.mapper.EhGalleriesMapper;
@@ -39,6 +40,7 @@ public class KomgaSeriesSyncService {
     private final KomgaApiClient komgaApiClient;
     private final EhNetworkConfig networkConfig;
     private final TaskExecutor executor;
+    private final DownloadPermitService downloadPermits;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicInteger processed = new AtomicInteger();
     private final AtomicInteger succeeded = new AtomicInteger();
@@ -56,7 +58,8 @@ public class KomgaSeriesSyncService {
                                   SynologyUploadService uploadService,
                                   KomgaApiClient komgaApiClient,
                                   EhNetworkConfig networkConfig,
-                                  @Qualifier("backgroundTaskExecutor") TaskExecutor executor) {
+                                  @Qualifier("backgroundTaskExecutor") TaskExecutor executor,
+                                  DownloadPermitService downloadPermits) {
         this.galleriesMapper = galleriesMapper;
         this.placementService = placementService;
         this.archiveReader = archiveReader;
@@ -64,6 +67,7 @@ public class KomgaSeriesSyncService {
         this.komgaApiClient = komgaApiClient;
         this.networkConfig = networkConfig;
         this.executor = executor;
+        this.downloadPermits = downloadPermits;
     }
 
     /** 建立一次系列同步任务并交给后台执行，已有任务运行时拒绝重复启动。 */
@@ -85,6 +89,44 @@ public class KomgaSeriesSyncService {
             throw failure;
         }
         return status();
+    }
+
+    /** RSS 只整理已经入库且仍属于指定合集的一本书；共享守卫，避免与手工全库整理交错。 */
+    public void synchronizeOne(long gid, long expectedCollectionId) throws Exception {
+        if (gid <= 0 || expectedCollectionId <= 0) throw new IllegalArgumentException("画廊和合集 ID 必须为正数");
+        if (!running.compareAndSet(false, true)) throw new IllegalStateException("Komga 系列同步正在运行");
+        try {
+            EhGalleriesEntity gallery = requireImportedGallery(gid);
+            GallerySeriesPlacementService.SeriesPlacement placement = placementService.resolve(gid);
+            if (!Objects.equals(placement.collectionId(), expectedCollectionId))
+                throw new IllegalStateException("画廊合集归属已变化，已停止 RSS 整理");
+            SyncGuard guard = () -> {
+                requireImportedGallery(gid);
+                if (!Objects.equals(placement, placementService.resolve(gid)))
+                    throw new IllegalStateException("画廊合集或排序已变化，已停止 RSS 整理");
+            };
+            synchronize(new SyncTarget(gallery, placement), guard);
+            if (gallery.getSeriesCleanupFilename() != null)
+                throw new IOException("旧归档清理尚未完成，等待重试");
+            guard.verify();
+            if (!archiveReader.existsExact(placement.relativeDirectory(), gallery.getFilename()))
+                throw new IOException("目标合集归档不存在，无法确认整理完成");
+            // 即使文件已整理，之前的扫描请求也可能失败，重试时仍需触发扫描。
+            komgaApiClient.triggerLibraryScan();
+        } finally {
+            running.set(false);
+        }
+    }
+
+    private EhGalleriesEntity requireImportedGallery(long gid) {
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+        if (gallery == null || (!DownloadStatus.IMPORTED.name().equals(gallery.getDownloadStatus())
+                && !DownloadStatus.IMPORTED.getValue().equals(gallery.getDownloadStatus())))
+            throw new IllegalStateException("画廊尚未确认入库，暂不整理归档");
+        if (gallery.getDuplicateOfGid() != null || gallery.getFilename() == null || gallery.getFilename().isBlank())
+            throw new IllegalStateException("画廊没有独立的已入库归档，暂不整理");
+        if (downloadPermits.hasOwner(gid)) throw new IllegalStateException("画廊仍持有下载许可，暂不整理归档");
+        return gallery;
     }
 
     /** 汇总同步进度、错误和待清理副本数量。 */
@@ -148,8 +190,13 @@ public class KomgaSeriesSyncService {
 
     /** 读取旧归档、写入目标目录并更新数据库位置，源副本的删除放在确认目标之后。 */
     private void synchronize(SyncTarget target) throws Exception {
+        synchronize(target, () -> { });
+    }
+
+    private void synchronize(SyncTarget target, SyncGuard guard) throws Exception {
         EhGalleriesEntity gallery = target.gallery();
         GallerySeriesPlacementService.SeriesPlacement placement = target.placement();
+        guard.verify();
         if (!cleanupPreviousArchive(gallery)) throw new IOException("旧文件清理仍未完成，保留待重试记录");
         String sourceDirectory = normalizePath(gallery.getStoragePath());
         if (sourceDirectory.equals(placement.relativeDirectory())
@@ -178,7 +225,9 @@ public class KomgaSeriesSyncService {
             });
             validateArchive(local);
             ComicInfoInjector.inject(local, buildComicInfo(gallery, placement));
+            guard.verify();
             uploadService.upload(local, placement.relativeDirectory(), targetFilename, bytes -> { });
+            guard.verify();
 
             boolean needsCleanup = !readDirectory.equals(placement.relativeDirectory())
                     || !sourceFilename.equals(targetFilename);
@@ -197,6 +246,7 @@ public class KomgaSeriesSyncService {
             gallery.setSeriesSyncSignature(placement.signature());
             gallery.setSeriesCleanupPath(needsCleanup ? readDirectory : null);
             gallery.setSeriesCleanupFilename(needsCleanup ? sourceFilename : null);
+            guard.verify();
             cleanupPreviousArchive(gallery);
         } finally {
             Files.deleteIfExists(local);
@@ -321,4 +371,7 @@ public class KomgaSeriesSyncService {
     private record SyncTarget(EhGalleriesEntity gallery,
                               GallerySeriesPlacementService.SeriesPlacement placement) {
     }
+
+    @FunctionalInterface
+    private interface SyncGuard { void verify() throws Exception; }
 }
