@@ -37,7 +37,12 @@ class RssCollectionMysqlTest {
                 "rss_item", "rss_download_task", "rss_batch", "rss_poll_run", "rss_subscription_revision",
                 "rss_subscription", "eh_download_permit", "eh_galleries")) db.update("DELETE FROM " + table);
         archives = mock(RssCollectionArchiveService.class);
-        service = new RssCollectionService(db, manager, archives, Runnable::run, new RssConfig());
+        var placements = mock(RssPlacementResolver.class);
+        when(placements.resolve(anyLong())).thenAnswer(invocation -> {
+            long gid = invocation.getArgument(0);
+            return new RssPlacementResolver.Decision(gid, gid, RssPlacementResolver.MatchSource.SELF, "测试按订阅画廊归位", null, null);
+        });
+        service = new RssCollectionService(db, manager, archives, placements, Runnable::run, new RssConfig());
         collection(10, "First");
         collection(20, "Second");
     }
@@ -69,7 +74,10 @@ class RssCollectionMysqlTest {
         return db.queryForObject("SELECT * FROM rss_collection_task WHERE subscription_id=? AND gid=? AND collection_id=?",
                 (rs, row) -> new RssCollectionService.Task(rs.getString("subscription_id"), rs.getLong("gid"),
                         rs.getLong("collection_id"), rs.getInt("revision"), rs.getString("status"),
-                        rs.getInt("attempts"), rs.getLong("updated_at"), rs.getString("placement_signature")), id, gid, collection);
+                        rs.getInt("attempts"), rs.getLong("updated_at"), rs.getString("placement_signature"),
+                        rs.getObject("placement_gid") == null ? null : rs.getLong("placement_gid"),
+                        rs.getString("match_source"),
+                        rs.getObject("review_id") == null ? null : rs.getLong("review_id")), id, gid, collection);
     }
 
     private void makeDue() { db.update("UPDATE rss_collection_task SET next_attempt_at=0"); }
@@ -125,7 +133,12 @@ class RssCollectionMysqlTest {
         service.runOnce();
         assertEquals("WAITING_KOMGA", task("rss", 1, 10).status());
         assertEquals(0, task("rss", 1, 10).attempts());
-        service = new RssCollectionService(db, manager, archives, Runnable::run, new RssConfig());
+        var placements = mock(RssPlacementResolver.class);
+        when(placements.resolve(anyLong())).thenAnswer(invocation -> {
+            long gid = invocation.getArgument(0);
+            return new RssPlacementResolver.Decision(gid, gid, RssPlacementResolver.MatchSource.SELF, "测试按订阅画廊归位", null, null);
+        });
+        service = new RssCollectionService(db, manager, archives, placements, Runnable::run, new RssConfig());
         makeDue(); service.runOnce();
         assertEquals("SYNCED", task("rss", 1, 10).status());
         assertEquals("已入库", db.queryForObject("SELECT download_status FROM eh_galleries WHERE gid=1", String.class));

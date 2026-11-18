@@ -46,7 +46,7 @@ class RssCollectionServiceTest {
         var archive = mock(RssCollectionArchiveService.class);
         var config = new RssConfig();
         List<Runnable> queued = new ArrayList<>();
-        var service = new RssCollectionService(db, mock(PlatformTransactionManager.class), archive, queued::add, config);
+        var service = new RssCollectionService(db, mock(PlatformTransactionManager.class), archive, mock(RssPlacementResolver.class), queued::add, config);
         service.schedule();
         service.schedule();
         assertEquals(1, queued.size());
@@ -64,7 +64,7 @@ class RssCollectionServiceTest {
         var db = mock(JdbcTemplate.class);
         var archive = mock(RssCollectionArchiveService.class);
         var config = new RssConfig();
-        var service = new RssCollectionService(db, mock(PlatformTransactionManager.class), archive, executor, config);
+        var service = new RssCollectionService(db, mock(PlatformTransactionManager.class), archive, mock(RssPlacementResolver.class), executor, config);
         assertDoesNotThrow(service::schedule);
         assertDoesNotThrow(service::schedule);
         verify(executor, times(2)).execute(any());

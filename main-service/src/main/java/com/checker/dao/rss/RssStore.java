@@ -56,6 +56,8 @@ public class RssStore {
             row.put("name", request.getName());
             row.put("route", EhSearchQueryBuilder.rssRoute(request.getSearchOptions()));
             row.put("collectionCounts", db.query("SELECT t.status,COUNT(*) total FROM rss_collection_task t WHERE t.subscription_id=? AND t.collection_id=? AND t.revision=? GROUP BY t.status", ROW, row.get("id"), row.get("collectionId"), row.get("revision")));
+            // 匹配已有画廊的数量：归合集时优先归位既有画廊，而不是重复版本。
+            row.put("matched", db.queryForObject("SELECT COUNT(*) FROM rss_item i JOIN eh_galleries g ON g.gid=i.gid WHERE i.subscription_id=? AND i.revision=? AND g.duplicate_of_gid IS NOT NULL", Long.class, row.get("id"), row.get("revision")));
             row.put("counts", db.query("SELECT COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END) status,COUNT(*) total FROM rss_item i LEFT JOIN rss_download_task t ON t.gid=i.gid WHERE i.subscription_id=? AND i.revision=? GROUP BY COALESCE(t.status,CASE WHEN i.eligible=TRUE THEN 'COLLECTED' ELSE 'BASELINE' END)", ROW, row.get("id"), row.get("revision")));
         }
         return rows;
@@ -195,7 +197,8 @@ public class RssStore {
     public void retry(String id) {
         require(id);
         tx.executeWithoutResult(status -> {
-            db.update("UPDATE rss_collection_task SET status='WAITING',attempts=0,next_attempt_at=0,last_error=NULL WHERE subscription_id=? AND status IN ('FAILED','RETRY','CONFLICT')", id);
+            // 保持原样的任务也允许手动重试：管理员可能已移除原有的合集归属。
+            db.update("UPDATE rss_collection_task SET status='WAITING',attempts=0,next_attempt_at=0,last_error=NULL WHERE subscription_id=? AND status IN ('FAILED','RETRY','CONFLICT','SKIPPED_EXISTING')", id);
             db.update("UPDATE eh_galleries SET download_status='未下载' WHERE download_status IN ('BLOCKED','阻断') AND gid IN (SELECT t.gid FROM rss_download_task t JOIN rss_item i ON t.gid=i.gid WHERE i.subscription_id=? AND t.status='BLOCKED') AND gid NOT IN (SELECT gid FROM eh_download_permit)",id);
             db.update("UPDATE rss_download_task SET status='PENDING',attempts=0,next_attempt_at=0,last_error=NULL WHERE status IN ('FAILED','RETRY','BLOCKED') AND gid IN (SELECT gid FROM rss_item WHERE subscription_id=?)",id);
         });

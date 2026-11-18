@@ -136,6 +136,27 @@
       </article>
     </section>
 
+    <section class="rss-grid">
+      <article class="panel">
+        <header class="panel-heading"><div><h2>RSS 订阅分析</h2><p>从订阅发现到匹配既有画廊、归入合集的链路</p></div><span class="panel-chip">{{ rssOverview.activeSubscriptions || 0 }} / {{ rssOverview.subscriptions || 0 }} 个订阅在运行</span></header>
+        <div class="rss-metrics">
+          <div><span>订阅发现</span><strong>{{ formatCount(rssOverview.discovered) }}</strong><small>满足条件 {{ formatCount(rssOverview.eligible) }}</small></div>
+          <div><span>已入库</span><strong>{{ formatCount(rssOverview.imported) }}</strong><small>匹配已有 {{ formatCount(rssOverview.matched) }}</small></div>
+          <div><span>已归合集</span><strong>{{ formatCount(rssOverview.placed) }}</strong><small>归位率 {{ rssRate(rssOverview.placementRate) }}%</small></div>
+          <div><span>待人工复核</span><strong>{{ formatCount(rssOverview.pendingReview) }}</strong><small>入库未归位 {{ formatCount(rssOverview.unplaced) }}</small></div>
+        </div>
+        <div v-show="viewMode === 'chart'" class="chart-wrap"><div ref="rssFunnelRef" class="chart rss-chart" /><div v-if="!rssFunnel.length && rssLoaded" class="chart-empty">暂无 RSS 订阅数据</div></div>
+        <div v-if="viewMode === 'table'" class="table-wrap rss-table"><table><thead><tr><th>阶段</th><th>数量</th><th /></tr></thead><tbody><tr v-for="row in rssFunnel" :key="row.key"><td>{{ row.name }}</td><td>{{ formatCount(row.value) }}</td><td /></tr><tr v-if="!rssFunnel.length"><td colspan="3" class="empty-cell">暂无 RSS 订阅数据</td></tr></tbody></table></div>
+        <footer class="panel-footer">匹配率 {{ rssRate(rssOverview.matchRate) }}%；匹配成功的订阅优先把既有画廊归入合集，已有其他归属的画廊保持原样。</footer>
+      </article>
+      <article class="panel">
+        <header class="panel-heading"><div><h2>RSS 合集归位</h2><p>按订阅查看匹配、归入合集与待处理</p></div><span class="panel-chip">{{ rssPlacementTotal }} 个归位任务</span></header>
+        <div v-show="viewMode === 'chart'" class="chart-wrap"><div ref="rssPlacementRef" class="chart rss-chart" /><div v-if="!rssPlacement.length && rssLoaded" class="chart-empty">暂无归位任务</div></div>
+        <div v-if="viewMode === 'table'" class="table-wrap rss-table"><table><thead><tr><th>订阅</th><th>入库</th><th>匹配</th><th>归合集</th><th>待复核</th></tr></thead><tbody><tr v-for="row in rssSubscriptions" :key="row.id"><td><span class="rss-name">{{ row.name }}</span><em v-if="!row.enabled">已暂停</em></td><td>{{ formatCount(row.imported) }}</td><td>{{ formatCount(row.matched) }}</td><td>{{ formatCount(row.placed) }}</td><td>{{ formatCount(row.pendingReview) }}</td></tr><tr v-if="!rssSubscriptions.length"><td colspan="5" class="empty-cell">暂无订阅</td></tr></tbody></table></div>
+        <footer class="panel-footer">切换上方“明细表”可对比各订阅的入库、匹配与归位进度；图表按归位状态汇总。</footer>
+      </article>
+    </section>
+
     <section class="operations-grid">
       <article class="panel downloads-panel">
         <header class="panel-heading"><div><h2>实时下载</h2><p>当前全局运行任务，不受上方内容范围限制</p></div><span class="live-badge"><i />{{ downloadLoaded ? downloads.length + ' 个进行中' : '等待运行状态' }}</span></header>
@@ -192,8 +213,11 @@ const dimension = ref('rating')
 const trendMetric = ref('count')
 const viewMode = ref('chart')
 const timelineRef = ref(null), statusRef = ref(null), contentRef = ref(null), collectionRef = ref(null), languageRef = ref(null), queryRef = ref(null)
+const rssFunnelRef = ref(null), rssPlacementRef = ref(null)
 const charts = new Map()
-let analyticsController, serviceController, collectionController, resizeObserver, refreshTimer, servicesBusy = false, disposed = false
+const rss = ref({ overview: {}, funnel: [], placement: [], subscriptions: [], daily: [] })
+const rssLoaded = ref(false)
+let analyticsController, serviceController, collectionController, rssController, resizeObserver, refreshTimer, servicesBusy = false, disposed = false
 
 const overview = computed(() => analytics.value.overview || {})
 const total = computed(() => Number(overview.value.total || 0))
@@ -204,6 +228,11 @@ const collectionRows = computed(() => analytics.value.collections || [])
 const languageRows = computed(() => analytics.value.languages || [])
 const queryRows = computed(() => analytics.value.queries || [])
 const qualityRows = computed(() => analytics.value.quality || [])
+const rssOverview = computed(() => rss.value.overview || {})
+const rssFunnel = computed(() => (rss.value.funnel || []).filter(row => Number(row.value) > 0))
+const rssPlacement = computed(() => rss.value.placement || [])
+const rssSubscriptions = computed(() => rss.value.subscriptions || [])
+const rssPlacementTotal = computed(() => rssPlacement.value.reduce((sum, row) => sum + Number(row.value || 0), 0))
 const timelineTotal = computed(() => timeline.value.reduce((sum, row) => sum + Number(row.value || 0), 0))
 const timelineSizeGb = computed(() => timeline.value.reduce((sum, row) => sum + Number(row.size_mb || 0), 0) / 1024)
 const grainLabel = computed(() => ({ day: '按日', week: '按周', month: '按月' })[applied.grain] || '按日')
@@ -234,6 +263,8 @@ const metrics = computed(() => [
 
 function formatCount(value, digits = 0) { return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits }).format(Number(value) || 0) }
 function percent(value) { return total.value ? (Number(value || 0) / total.value * 100).toFixed(1) : '0.0' }
+// RSS 的比率由后端返回 0–1，展示时统一换算成百分比。
+function rssRate(value) { return (Number(value || 0) * 100).toFixed(1) }
 function formatBytes(value) {
   const bytes = Number(value) || 0
   if (bytes < 1024) return bytes + ' B'
@@ -322,9 +353,26 @@ async function loadServices() {
     servicesError.value = results.some(result => result.status === 'rejected') ? '部分实时服务状态更新失败，暂保留已有结果。' : ''
   } finally { servicesBusy = false }
 }
-function refresh() { void loadAnalytics({ ...applied }); void loadServices() }
+// RSS 统计是独立维度：失败时保留上一次结果，不影响主统计与实时服务状态。
+async function loadRss() {
+  if (disposed) return
+  rssController?.abort()
+  const request = new AbortController()
+  rssController = request
+  try {
+    const response = await api.get('/rss/analytics', { signal: request.signal, silent: true })
+    if (request !== rssController || disposed) return
+    rss.value = response.data || { overview: {} }
+    rssLoaded.value = true
+    await nextTick()
+    renderCharts()
+  } catch (failure) {
+    if (request === rssController && failure.code !== 'ERR_CANCELED' && !disposed) rssLoaded.value = true
+  }
+}
+function refresh() { void loadAnalytics({ ...applied }); void loadServices(); void loadRss() }
 // 页面重新可见时按用户开关更新数据，后台隐藏期间不主动刷新统计。
-function onVisibilityChange() { if (!document.hidden && autoRefresh.value) { void loadAnalytics({ ...applied }, true); void loadServices() } }
+function onVisibilityChange() { if (!document.hidden && autoRefresh.value) { void loadAnalytics({ ...applied }, true); void loadServices(); void loadRss() } }
 // 切换浏览器全屏，并在浏览器拒绝时保留现有分析范围。
 async function toggleFullscreen() {
   displayHint.value = ''
@@ -350,6 +398,15 @@ function renderRanking(chart, rows, color, label = row => row.name) {
   const data = [...rows].reverse()
   updateChart(chart, { ...chartStyle, grid: { top: 12, left: 15, right: 32, bottom: 14, containLabel: true }, xAxis: { ...valueAxis(), splitNumber: 3 }, yAxis: { ...categoryAxis(data.map(label)), inverse: false, axisLabel: { fontSize: 10, color: '#7f8fa7', width: 110, overflow: 'truncate' }, axisLine: { show: false } }, series: [{ type: 'bar', barMaxWidth: 13, data: data.map(row => ({ value: row.value, name: label(row), filter: row.filter })), itemStyle: { color, borderRadius: [0, 4, 4, 0] }, label: { show: true, position: 'right', fontSize: 9, color: '#94a2b6' } }] })
 }
+// 归位状态使用与状态徽标一致的低饱和色，避免与主统计的颜色冲突。
+const placementColors = { SYNCED: '#57b9c9', WAITING: '#7294df', WAITING_IMPORT: '#6790e6', WAITING_KOMGA: '#8b7cdb', WAITING_REVIEW: '#e8b34d', RUNNING: '#9a87d7', RETRY: '#c9a86a', FAILED: '#d9776f', CONFLICT: '#d15f6b', CANCELLED: '#b7c0cf', SKIPPED_EXISTING: '#9fb3c8', SKIPPED_IGNORED: '#b0b8c4' }
+function placementColor(status) { return placementColors[status] || '#8b9bb4' }
+// 按归位状态绘制横向柱状图，颜色区分成功、等待与异常，标签直接显示数量。
+function renderPlacement(chart) {
+  if (!chart) return
+  const data = [...rssPlacement.value].reverse()
+  updateChart(chart, { ...chartStyle, grid: { top: 12, left: 15, right: 36, bottom: 14, containLabel: true }, xAxis: { ...valueAxis(), splitNumber: 3 }, yAxis: { ...categoryAxis(data.map(row => row.name)), inverse: false, axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#7f8fa7', width: 110, overflow: 'truncate' } }, series: [{ type: 'bar', barMaxWidth: 13, data: data.map(row => ({ value: row.value, name: row.name, itemStyle: { color: placementColor(row.status), borderRadius: [0, 4, 4, 0] } })), label: { show: true, position: 'right', fontSize: 9, color: '#94a2b6' } }] })
+}
 // 根据当前指标和统计结果重建各图表，统一保留筛选条件与点击入口。
 function renderCharts() {
   if (disposed) return
@@ -360,6 +417,8 @@ function renderCharts() {
   renderRanking(charts.get('collections'), collectionRows.value, '#7294df')
   renderRanking(charts.get('languages'), languageRows.value, '#5eb7ba', row => languageLabel(row.name))
   renderRanking(charts.get('queries'), queryRows.value, '#9a87d7')
+  renderRanking(charts.get('rssFunnel'), rssFunnel.value, '#6790e6')
+  renderPlacement(charts.get('rssPlacement'))
 }
 function resizeCharts() { if (!disposed) charts.forEach(chart => chart.resize()) }
 // 先按系统字号调整文字，再替换图表配置，避免切换字号后残留旧样式。
@@ -368,7 +427,7 @@ function onFontScaleChange() { nextTick(() => { renderCharts(); resizeCharts() }
 watch([dimension, trendMetric], () => nextTick(renderCharts))
 watch(viewMode, () => nextTick(() => { resizeCharts(); renderCharts() }))
 onMounted(() => {
-  const elements = { timeline: timelineRef, status: statusRef, content: contentRef, collections: collectionRef, languages: languageRef, queries: queryRef }
+  const elements = { timeline: timelineRef, status: statusRef, content: contentRef, collections: collectionRef, languages: languageRef, queries: queryRef, rssFunnel: rssFunnelRef, rssPlacement: rssPlacementRef }
   resizeObserver = new ResizeObserver(resizeCharts)
   Object.entries(elements).forEach(([key, element]) => {
     const chart = echarts.init(element.value)
@@ -380,7 +439,8 @@ onMounted(() => {
   api.get('/collections', { signal: collectionController.signal }).then(response => { if (!disposed) collectionOptions.value = response.data || [] }).catch(() => {})
   void loadAnalytics({ ...defaults })
   void loadServices()
-  refreshTimer = setInterval(() => { if (autoRefresh.value && !document.hidden) { void loadAnalytics({ ...applied }, true); void loadServices() } }, 30000)
+  void loadRss()
+  refreshTimer = setInterval(() => { if (autoRefresh.value && !document.hidden) { void loadAnalytics({ ...applied }, true); void loadServices(); void loadRss() } }, 30000)
   document.addEventListener('visibilitychange', onVisibilityChange)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   window.addEventListener('app-font-scale-change', onFontScaleChange)
@@ -391,6 +451,7 @@ onUnmounted(() => {
   analyticsController?.abort()
   serviceController?.abort()
   collectionController?.abort()
+  rssController?.abort()
   resizeObserver?.disconnect()
   document.removeEventListener('visibilitychange', onVisibilityChange)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -461,10 +522,11 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
 .metric-bottom small { font-size: calc(10px * var(--app-font-scale, 1)); color: #8c9bb2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .metric-bottom .el-icon { font-size: calc(9px * var(--app-font-scale, 1)); }
 .measurement-note { margin: 11px 2px 18px; color: #a3adbd; font-size: calc(10px * var(--app-font-scale, 1)); line-height: 1.7; }
-.primary-grid, .secondary-grid, .three-grid, .operations-grid { display: grid; gap: 16px; margin-bottom: 16px; align-items: stretch; }
+.primary-grid, .secondary-grid, .three-grid, .rss-grid, .operations-grid { display: grid; gap: 16px; margin-bottom: 16px; align-items: stretch; }
 .primary-grid { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
 .secondary-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
 .three-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.rss-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
 .operations-grid { grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); }
 .panel { background: #fff; border: 1px solid #e1e7f0; border-radius: 11px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 19px 20px 15px; }
@@ -519,6 +581,15 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
 .content-table { height: 260px; box-sizing: border-box; }
 .collection-table { height: 228px; box-sizing: border-box; }
 .ranking-table { height: 255px; box-sizing: border-box; }
+.rss-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0 20px 12px; }
+.rss-metrics > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 12px 14px; border-radius: 9px; background: #f6f8fc; border: 1px solid #eef2f8; }
+.rss-metrics span { font-size: calc(10px * var(--app-font-scale, 1)); color: #8c9aaf; }
+.rss-metrics strong { font-size: calc(20px * var(--app-font-scale, 1)); font-weight: 600; color: #405472; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.rss-metrics small { font-size: calc(9px * var(--app-font-scale, 1)); color: #9aa8bc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rss-chart { height: 255px; }
+.rss-table { height: 255px; box-sizing: border-box; }
+.rss-name { display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.rss-table td em { margin-left: 6px; font-style: normal; color: #aab4c4; font-size: calc(9px * var(--app-font-scale, 1)); }
 .table-link { border: 0; background: transparent; padding: 0; color: #7e90ae; display: inline-flex; align-items: center; gap: 7px; font-size: calc(10px * var(--app-font-scale, 1)); }
 .table-link > i { height: 6px; width: 6px; border-radius: 50%; }
 .empty-cell { text-align: center !important; color: #b0bdce; padding-top: 60px !important; }
@@ -558,7 +629,7 @@ input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
 .spinning { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1550px) { .metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .filter-fields { gap: 10px; } .filter-fields > label { min-width: 125px; } }
-@media (max-width: 1050px) { .primary-grid, .secondary-grid, .operations-grid { grid-template-columns: 1fr; } .three-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .quality-panel { grid-column: 1 / -1; } .quality-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 25px; } h1 > span { display: none; } .scope-actions { gap: 10px; } .graph-link { display: none; } }
-@media (max-width: 700px) { .page-heading { align-items: flex-start; } h1 { font-size: calc(23px * var(--app-font-scale, 1)); } .heading-actions { gap: 5px; } .update-time { display: none; } .heading-actions .button { padding: 9px 10px; font-size: calc(11px * var(--app-font-scale, 1)); } .filter-panel { padding: 13px; } .filter-topline { flex-wrap: wrap; gap: 11px; } .filter-title { width: 100%; } .time-presets { gap: 1px; } .time-presets button { padding: 6px 8px; font-size: calc(10px * var(--app-font-scale, 1)); } .auto-refresh { font-size: calc(9px * var(--app-font-scale, 1)); } .filter-fields > label { min-width: 115px; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; } .metric-card { padding: 13px 12px; } .metric-card > strong { font-size: calc(22px * var(--app-font-scale, 1)); } .scope-bar { align-items: flex-start; flex-wrap: wrap; } .scope-actions { margin-left: 0; } .three-grid { grid-template-columns: 1fr; } .quality-panel { grid-column: auto; } .quality-list { display: block; } .trend-summary { flex-wrap: wrap; gap: 5px; } .panel-heading { padding: 17px 16px 14px; } .panel-heading h2 { font-size: calc(12px * var(--app-font-scale, 1)); } .panel-heading p { font-size: calc(9px * var(--app-font-scale, 1)); } .trend-summary { padding-left: 17px; } .filter-fields .collection-filter { max-width: none; } }
+@media (max-width: 1050px) { .primary-grid, .secondary-grid, .rss-grid, .operations-grid { grid-template-columns: 1fr; } .three-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .quality-panel { grid-column: 1 / -1; } .quality-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 25px; } .rss-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } h1 > span { display: none; } .scope-actions { gap: 10px; } .graph-link { display: none; } }
+@media (max-width: 700px) { .page-heading { align-items: flex-start; } h1 { font-size: calc(23px * var(--app-font-scale, 1)); } .heading-actions { gap: 5px; } .update-time { display: none; } .heading-actions .button { padding: 9px 10px; font-size: calc(11px * var(--app-font-scale, 1)); } .filter-panel { padding: 13px; } .filter-topline { flex-wrap: wrap; gap: 11px; } .filter-title { width: 100%; } .time-presets { gap: 1px; } .time-presets button { padding: 6px 8px; font-size: calc(10px * var(--app-font-scale, 1)); } .auto-refresh { font-size: calc(9px * var(--app-font-scale, 1)); } .filter-fields > label { min-width: 115px; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; } .metric-card { padding: 13px 12px; } .metric-card > strong { font-size: calc(22px * var(--app-font-scale, 1)); } .scope-bar { align-items: flex-start; flex-wrap: wrap; } .scope-actions { margin-left: 0; } .three-grid { grid-template-columns: 1fr; } .quality-panel { grid-column: auto; } .quality-list { display: block; } .rss-metrics { grid-template-columns: 1fr; } .trend-summary { flex-wrap: wrap; gap: 5px; } .panel-heading { padding: 17px 16px 14px; } .panel-heading h2 { font-size: calc(12px * var(--app-font-scale, 1)); } .panel-heading p { font-size: calc(9px * var(--app-font-scale, 1)); } .trend-summary { padding-left: 17px; } .filter-fields .collection-filter { max-width: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } .spinning { animation-duration: 2s; } }
 </style>

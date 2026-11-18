@@ -9,7 +9,7 @@
         <el-table-column label="目标合集" min-width="185"><template #default="{ row }"><template v-if="row.config.collectionEnabled"><router-link to="/collections">{{ collectionName(row.config.collectionId, row.collectionName) }}</router-link><div class="muted">下载后归入合集目录与 Komga 系列</div></template><span v-else class="muted">未设置</span><div v-if="row.collectionCounts?.length" class="counts collection-counts"><el-tag v-for="count in row.collectionCounts" :key="count.status" size="small" :type="collectionStatusType(count.status)">{{ collectionStatusLabel(count.status) }} {{ count.total }}</el-tag></div></template></el-table-column>
         <el-table-column label="启用" width="90"><template #default="{ row }"><el-switch :model-value="Boolean(row.enabled)" :disabled="acting" @change="enabled => action(row, 'enabled', { enabled })" /></template></el-table-column>
         <el-table-column label="检查与补查" min-width="210"><template #default="{ row }"><div>检查：{{ date(row.lastSuccessAt) }}</div><div>覆盖至：{{ date(row.coverageAt) }}</div><el-tag v-if="row.scanStartedAt" type="warning" size="small">补查未完成 · 已扫描 {{ row.scanPages }} 页</el-tag><div v-if="row.lastError" class="error">{{ row.lastError }}</div></template></el-table-column>
-        <el-table-column label="处理情况" min-width="190"><template #default="{ row }"><div class="counts"><el-tag v-for="count in row.counts" :key="count.status" size="small" :type="statusType(count.status)">{{ label(count.status) }} {{ count.total }}</el-tag><span v-if="!row.counts.length" class="muted">尚无命中</span></div></template></el-table-column>
+        <el-table-column label="处理情况" min-width="190"><template #default="{ row }"><div class="counts"><el-tag v-if="Number(row.matched) > 0" size="small" type="success" effect="plain">匹配已有 {{ row.matched }}</el-tag><el-tag v-for="count in row.counts" :key="count.status" size="small" :type="statusType(count.status)">{{ label(count.status) }} {{ count.total }}</el-tag><span v-if="!row.counts.length" class="muted">尚无命中</span></div></template></el-table-column>
         <el-table-column label="操作" width="250"><template #default="{ row }"><el-button link type="primary" @click="openEditor(row)">编辑</el-button><el-button link type="primary" @click="showDetails(row)">记录</el-button><el-button link :disabled="!row.enabled || acting || !systemEnabled" @click="action(row, 'poll')">立即检查</el-button><el-button link :disabled="acting" @click="action(row, 'retry')">重试失败</el-button><el-button link type="danger" @click="remove(row)">删除</el-button></template></el-table-column>
       </el-table>
     </el-card>
@@ -36,6 +36,7 @@
             <p v-else-if="collectionsLoaded && form.collectionId && !selectedCollection" class="error">所选合集已不存在，请重新选择或新建合集。</p>
             <p v-if="selectedCollection?.description" class="muted">{{ selectedCollection.description }}</p>
             <p class="muted">下载完成后归入此合集，并按合集目录同步到 Komga 系列。订阅已收集且已入库的画廊也可补归档。{{ form.autoDownload ? '' : '当前仅收集，尚未下载的画廊需完成下载后才能归档。' }}</p>
+            <p class="muted">入库时会先与已有画廊匹配：匹配成功且该画廊尚未归入合集时，归入的是既有画廊，不会重复建立版本；匹配需要人工确认时先进入审核，确认后再归位。已有其他合集归属的画廊保持原样。</p>
             <p class="muted">与“画廊合集”使用相同的目录和 Komga 系列规则。画廊已有的合集归属会保留，命中多个订阅时不会来回移动；关闭此设置或停用订阅不会移除已有归档。</p>
           </div>
         </el-form-item>
@@ -90,9 +91,9 @@ const details = ref(false), selected = ref(null), detailTab = ref('items'), deta
 const labels = { PENDING: '待下载', QUEUED: '已派发', RETRY: '等待重试', FAILED: '失败', IMPORTED: '已入库', SKIPPED: '重复或忽略', BLOCKED: '访问阻断', REVIEW_REQUIRED: '待人工审核', WAITING_EXISTING: '等待已有任务', COLLECTED: '已收集', BASELINE: '历史基线' }
 const label = status => labels[status] || status
 const statusType = status => status === 'IMPORTED' ? 'success' : ['FAILED', 'BLOCKED'].includes(status) ? 'danger' : ['RETRY', 'REVIEW_REQUIRED'].includes(status) ? 'warning' : 'info'
-const collectionLabels = { WAITING: '待归入', WAITING_IMPORT: '等待入库', WAITING_KOMGA: '等待扫描', RUNNING: '整理中', CANCELLED: '已暂停', SYNCED: '已归入', CONFLICT: '保留已有合集', RETRY: '等待重试', FAILED: '归档失败' }
+const collectionLabels = { WAITING: '待归入', WAITING_IMPORT: '等待入库', WAITING_KOMGA: '等待扫描', WAITING_REVIEW: '待人工复核', RUNNING: '整理中', CANCELLED: '已暂停', SYNCED: '已归入', CONFLICT: '保留已有合集', RETRY: '等待重试', FAILED: '归档失败', SKIPPED_EXISTING: '保持原样', SKIPPED_IGNORED: '无需归位' }
 const collectionStatusLabel = status => collectionLabels[status] || status
-const collectionStatusType = status => status === 'SYNCED' ? 'success' : status === 'RUNNING' ? 'primary' : status === 'FAILED' ? 'danger' : ['CONFLICT', 'RETRY'].includes(status) ? 'warning' : 'info'
+const collectionStatusType = status => status === 'SYNCED' ? 'success' : ['RUNNING', 'SKIPPED_EXISTING', 'SKIPPED_IGNORED'].includes(status) ? 'primary' : status === 'FAILED' ? 'danger' : ['CONFLICT', 'RETRY', 'WAITING_REVIEW'].includes(status) ? 'warning' : 'info'
 const date = value => value == null ? '尚未完成' : new Date(Number(value)).toLocaleString('zh-CN')
 async function refresh() { busy.value = true; try { const res = await rssApi.listSubscriptions(); subscriptions.value = res.data.records; systemEnabled.value = res.data.enabled } catch {} finally { busy.value = false } }
 function collectionName(id, fallback) { return collections.value.find(collection => Number(collection.id) === Number(id))?.name || fallback || (id ? `合集 #${id}${collectionsLoaded.value ? '（不可用）' : ''}` : '未选择合集') }

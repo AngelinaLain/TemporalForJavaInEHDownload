@@ -13,12 +13,18 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Durable, independent collection placement. These jobs never change download state or start downloads. */
+/**
+ * Durable, independent collection placement. These jobs never change download state or start downloads.
+ *
+ * <p>归位前先通过 {@link RssPlacementResolver} 匹配已有画廊：匹配成功时归属的是既有画廊，
+ * 订阅未开启归合集时任务会被取消，已有归属的画廊保持原样。</p>
+ */
 @Slf4j
 @Service
 public class RssCollectionService {
@@ -37,6 +43,7 @@ public class RssCollectionService {
     private final JdbcTemplate db;
     private final TransactionTemplate tx;
     private final RssCollectionArchiveService archives;
+    private final RssPlacementResolver placements;
     private final TaskExecutor executor;
     private final RssConfig config;
     private final AtomicBoolean running = new AtomicBoolean();
@@ -45,55 +52,38 @@ public class RssCollectionService {
     record Gallery(String status, Long duplicateOf) {}
     record Membership(long collectionId, String signature) {}
     record Task(String subscriptionId, long gid, long collectionId, int revision, String status,
-                int attempts, long updatedAt, String signature) {}
+                int attempts, long updatedAt, String signature,
+                Long placementGid, String matchSource, Long reviewId) {}
     record Prepared(Task task, String signature) {}
     record Decision(String status, String reason) {}
 
     private static final RowMapper<Task> TASK_ROW = (rs, row) -> new Task(
             rs.getString("subscription_id"), rs.getLong("gid"), rs.getLong("collection_id"),
             rs.getInt("revision"), rs.getString("status"), rs.getInt("attempts"),
-            rs.getLong("updated_at"), rs.getString("placement_signature"));
+            rs.getLong("updated_at"), rs.getString("placement_signature"),
+            nullableLong(rs, "placement_gid"), rs.getString("match_source"), nullableLong(rs, "review_id"));
 
     public RssCollectionService(JdbcTemplate db, PlatformTransactionManager manager,
-                                RssCollectionArchiveService archives,
+                                RssCollectionArchiveService archives, RssPlacementResolver placements,
                                 @Qualifier("backgroundTaskExecutor") TaskExecutor executor, RssConfig config) {
         this.db = db;
         this.tx = new TransactionTemplate(manager);
         this.tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         this.archives = archives;
+        this.placements = placements;
         this.executor = executor;
         this.config = config;
     }
 
-    /** Called before local-import placement resolution: database changes only, no storage or Komga calls. */
+    /**
+     * Called before local-import placement resolution: database changes only, no storage or Komga calls.
+     * 匹配到既有画廊时直接把该画廊加入合集，重复版本本身不再单独建立归属。
+     */
     public void assignForGallery(long gid) {
         if (!config.isEnabled()) return;
-        tx.executeWithoutResult(status -> assign(gid));
-    }
-
-    private void assign(long gid) {
-        List<Gallery> galleries = gallery(gid, true);
-        if (galleries.isEmpty() || galleries.get(0).duplicateOf() != null || membership(gid) != null) return;
-        List<Target> targets = db.query("""
-                SELECT s.id,s.revision,s.collection_id FROM rss_item i
-                JOIN rss_subscription s ON s.id=i.subscription_id
-                WHERE i.gid=? AND
-                """ + ACTIVE_HIT + " ORDER BY i.discovered_at,s.id LIMIT 1 FOR UPDATE",
-                (rs, row) -> new Target(rs.getString(1), rs.getInt(2), rs.getLong(3)), gid);
-        if (targets.isEmpty()) return;
-        long collectionId = targets.get(0).collectionId();
-        List<Long> collections = db.query("SELECT id FROM eh_gallery_collections WHERE id=? FOR UPDATE",
-                (rs, row) -> rs.getLong(1), collectionId);
-        if (collections.isEmpty()) return;
-        List<Integer> orders = db.queryForList(
-                "SELECT sort_order FROM eh_gallery_collection_items WHERE collection_id=? ORDER BY sort_order DESC,gid DESC LIMIT 1 FOR UPDATE",
-                Integer.class, collectionId);
-        int nextOrder = orders.isEmpty() ? 0 : orders.get(0) + 1;
-        int inserted = db.update("""
-                INSERT IGNORE INTO eh_gallery_collection_items(collection_id,gid,sort_order,added_source)
-                VALUES(?,?,?,'RSS')
-                """, collectionId, gid, nextOrder);
-        if (inserted > 0) db.update("UPDATE eh_gallery_collections SET updated_at=CURRENT_TIMESTAMP WHERE id=?", collectionId);
+        RssPlacementResolver.Decision placement = placements.resolve(gid);
+        if (!placement.ready()) return;
+        tx.executeWithoutResult(status -> assign(gid, placement.placementGid()));
     }
 
     @Scheduled(fixedDelay = 60_000, initialDelay = 30_000)
@@ -120,7 +110,7 @@ public class RssCollectionService {
             try {
                 enqueue();
                 List<Task> tasks = db.query("SELECT t.* FROM rss_collection_task t WHERE " + VALID_TASK + """
-                         AND t.status IN ('WAITING','WAITING_IMPORT','WAITING_KOMGA','RETRY','RUNNING')
+                         AND t.status IN ('WAITING','WAITING_IMPORT','WAITING_KOMGA','WAITING_REVIEW','RETRY','RUNNING')
                          AND t.next_attempt_at<=? ORDER BY t.next_attempt_at,t.updated_at,t.subscription_id,t.gid LIMIT 50
                         """, TASK_ROW, System.currentTimeMillis());
                 for (Task task : tasks) {
@@ -160,11 +150,11 @@ public class RssCollectionService {
                 """ + ACTIVE_HIT + " AND (t.revision<>s.revision OR t.status='CANCELLED')", now);
         db.update("""
                 UPDATE rss_collection_task t SET t.status='CANCELLED',t.updated_at=?,t.last_error='订阅已暂停、删除或条件/目标已变更'
-                WHERE t.status IN ('WAITING','WAITING_IMPORT','WAITING_KOMGA','RETRY','RUNNING') AND NOT
+                WHERE t.status IN ('WAITING','WAITING_IMPORT','WAITING_KOMGA','WAITING_REVIEW','RETRY','RUNNING') AND NOT
                 """ + VALID_TASK, now);
         // Only layout changes reopen a completed job. A removed/moved membership is checked as a conflict below.
         db.update("""
-                UPDATE rss_collection_task t LEFT JOIN eh_gallery_collection_items ci ON ci.gid=t.gid
+                UPDATE rss_collection_task t LEFT JOIN eh_gallery_collection_items ci ON ci.gid=COALESCE(t.placement_gid,t.gid)
                 LEFT JOIN eh_gallery_collections c ON c.id=ci.collection_id
                 SET t.status='WAITING',t.attempts=0,t.next_attempt_at=0,t.updated_at=?,t.last_error=NULL
                 WHERE t.status='SYNCED' AND
@@ -184,7 +174,8 @@ public class RssCollectionService {
                 finish(task, "CANCELLED", task.attempts(), 0, "订阅已暂停、删除或条件/目标已变更", prepared.signature());
                 return;
             }
-            boolean complete = archives.synchronize(task.gid(), task.collectionId());
+            long placementGid = task.placementGid() == null ? task.gid() : task.placementGid();
+            boolean complete = archives.synchronize(placementGid, task.collectionId());
             finish(task, complete ? "SYNCED" : "WAITING_KOMGA", 0,
                     complete ? 0 : System.currentTimeMillis() + POLL_DELAY, null, prepared.signature());
         } catch (Exception failure) {
@@ -202,29 +193,49 @@ public class RssCollectionService {
         Task task = rows.get(0);
         if (task.revision() != candidate.revision() || task.updatedAt() != candidate.updatedAt()
                 || !task.status().equals(candidate.status()) || !current(task)) return null;
-        List<Gallery> galleries = gallery(task.gid(), true);
+
+        // 先匹配已有画廊：匹配成功时归位对象是既有画廊，而不是重复下载的订阅画廊。
+        RssPlacementResolver.Decision placement = placements.resolve(task.gid());
+        if (!placement.ready()) {
+            long next = placement.terminal() ? 0 : System.currentTimeMillis() + POLL_DELAY;
+            finish(task, placement.status(), task.attempts(), next, placement.reason(), task.signature(), placement);
+            return null;
+        }
+        long placementGid = placement.placementGid();
+        List<Gallery> galleries = gallery(placementGid, true);
         Gallery gallery = galleries.isEmpty() ? null : galleries.get(0);
-        Membership membership = membership(task.gid());
-        boolean permitted = db.queryForObject("SELECT COUNT(*) FROM eh_download_permit WHERE gid=?", Long.class, task.gid()) > 0;
+        Membership membership = membership(placementGid);
+        // 匹配到的既有画廊已经归属其他合集：保持原样，不再调整归档。
+        if (placement.source() != RssPlacementResolver.MatchSource.SELF
+                && membership != null && membership.collectionId() != task.collectionId()) {
+            finish(task, "SKIPPED_EXISTING", task.attempts(), 0,
+                    "匹配的既有画廊已归入其他合集，保持原样", membership.signature(), placement);
+            return null;
+        }
+        boolean permitted = db.queryForObject("SELECT COUNT(*) FROM eh_download_permit WHERE gid=?", Long.class, placementGid) > 0;
         Decision decision = readiness(gallery, membership, task.collectionId(), permitted, task.signature());
         if (decision == null && membership == null) {
-            assign(task.gid());
-            membership = membership(task.gid());
+            assign(task.gid(), placementGid);
+            membership = membership(placementGid);
             decision = readiness(gallery, membership, task.collectionId(), permitted, task.signature());
             if (decision == null && membership == null) decision = new Decision("CONFLICT", "目标合集不存在或无法建立归属，保留原归档");
         }
         if (decision != null) {
-            finish(task, decision.status(), task.attempts(), System.currentTimeMillis() + POLL_DELAY, decision.reason(), task.signature());
+            finish(task, decision.status(), task.attempts(), System.currentTimeMillis() + POLL_DELAY,
+                    decision.reason(), task.signature(), placement);
             return null;
         }
         long now = System.currentTimeMillis();
         int changed = db.update("""
-                UPDATE rss_collection_task SET status='RUNNING',updated_at=?,next_attempt_at=?,last_error=NULL,placement_signature=?
+                UPDATE rss_collection_task SET status='RUNNING',updated_at=?,next_attempt_at=?,last_error=NULL,placement_signature=?,
+                  placement_gid=?,match_source=?,match_reason=?,review_id=?
                 WHERE subscription_id=? AND gid=? AND collection_id=? AND revision=? AND status=? AND updated_at=?
-                """, now, now + POLL_DELAY, membership.signature(), task.subscriptionId(), task.gid(), task.collectionId(),
-                task.revision(), task.status(), task.updatedAt());
-        return changed == 0 ? null : new Prepared(new Task(task.subscriptionId(), task.gid(), task.collectionId(), task.revision(),
-                "RUNNING", task.attempts(), now, membership.signature()), membership.signature());
+                """, now, now + POLL_DELAY, membership.signature(),
+                placementGid, placement.source().name(), clip(placement.reason()), placement.reviewId(),
+                task.subscriptionId(), task.gid(), task.collectionId(), task.revision(), task.status(), task.updatedAt());
+        return changed == 0 ? null : new Prepared(new Task(task.subscriptionId(), task.gid(), task.collectionId(),
+                task.revision(), "RUNNING", task.attempts(), now, membership.signature(),
+                placementGid, placement.source().name(), placement.reviewId()), membership.signature());
     }
 
     static Decision readiness(Gallery gallery, Membership membership, long target, boolean downloadPermit, String previousSignature) {
@@ -257,11 +268,54 @@ public class RssCollectionService {
     }
 
     private void finish(Task task, String state, int attempts, long next, String reason, String signature) {
+        finish(task, state, attempts, next, reason, signature, null);
+    }
+
+    private void finish(Task task, String state, int attempts, long next, String reason, String signature,
+                        RssPlacementResolver.Decision placement) {
+        if (placement == null) {
+            db.update("""
+                    UPDATE rss_collection_task SET status=?,attempts=?,next_attempt_at=?,updated_at=?,last_error=?,placement_signature=?
+                    WHERE subscription_id=? AND gid=? AND collection_id=? AND revision=? AND status=? AND updated_at=?
+                    """, state, attempts, next, System.currentTimeMillis(), reason, signature, task.subscriptionId(), task.gid(),
+                    task.collectionId(), task.revision(), task.status(), task.updatedAt());
+            return;
+        }
         db.update("""
-                UPDATE rss_collection_task SET status=?,attempts=?,next_attempt_at=?,updated_at=?,last_error=?,placement_signature=?
+                UPDATE rss_collection_task SET status=?,attempts=?,next_attempt_at=?,updated_at=?,last_error=?,placement_signature=?,
+                  placement_gid=?,match_source=?,match_reason=?,review_id=?
                 WHERE subscription_id=? AND gid=? AND collection_id=? AND revision=? AND status=? AND updated_at=?
-                """, state, attempts, next, System.currentTimeMillis(), reason, signature, task.subscriptionId(), task.gid(),
-                task.collectionId(), task.revision(), task.status(), task.updatedAt());
+                """, state, attempts, next, System.currentTimeMillis(), reason, signature,
+                placement.placementGid(), placement.source().name(), clip(placement.reason()), placement.reviewId(),
+                task.subscriptionId(), task.gid(), task.collectionId(), task.revision(), task.status(), task.updatedAt());
+    }
+
+    /**
+     * 把订阅命中对应的合集写入归位对象；匹配到既有画廊时写入既有画廊，而不是重复版本。
+     */
+    private void assign(long rssGid, long targetGid) {
+        List<Gallery> galleries = gallery(targetGid, true);
+        if (galleries.isEmpty() || galleries.get(0).duplicateOf() != null || membership(targetGid) != null) return;
+        List<Target> targets = db.query("""
+                SELECT s.id,s.revision,s.collection_id FROM rss_item i
+                JOIN rss_subscription s ON s.id=i.subscription_id
+                WHERE i.gid=? AND
+                """ + ACTIVE_HIT + " ORDER BY i.discovered_at,s.id LIMIT 1 FOR UPDATE",
+                (rs, row) -> new Target(rs.getString(1), rs.getInt(2), rs.getLong(3)), rssGid);
+        if (targets.isEmpty()) return;
+        long collectionId = targets.get(0).collectionId();
+        List<Long> collections = db.query("SELECT id FROM eh_gallery_collections WHERE id=? FOR UPDATE",
+                (rs, row) -> rs.getLong(1), collectionId);
+        if (collections.isEmpty()) return;
+        List<Integer> orders = db.queryForList(
+                "SELECT sort_order FROM eh_gallery_collection_items WHERE collection_id=? ORDER BY sort_order DESC,gid DESC LIMIT 1 FOR UPDATE",
+                Integer.class, collectionId);
+        int nextOrder = orders.isEmpty() ? 0 : orders.get(0) + 1;
+        int inserted = db.update("""
+                INSERT IGNORE INTO eh_gallery_collection_items(collection_id,gid,sort_order,added_source)
+                VALUES(?,?,?,'RSS')
+                """, collectionId, targetGid, nextOrder);
+        if (inserted > 0) db.update("UPDATE eh_gallery_collections SET updated_at=CURRENT_TIMESTAMP WHERE id=?", collectionId);
     }
 
     static long retryDelay(int attempts) { return Math.min(3_600_000L, 60_000L << Math.min(Math.max(0, attempts - 1), 6)); }
@@ -269,5 +323,16 @@ public class RssCollectionService {
     static String safeError(Exception error) {
         // Storage and HTTP exceptions may include credentials/paths. Persist a safe category, not raw remote text.
         return "合集归档失败（" + error.getClass().getSimpleName() + "），将按退避策略重试；达到 5 次后需手动重试";
+    }
+
+    private static Long nullableLong(ResultSet rs, String column) throws SQLException {
+        Object value = rs.getObject(column);
+        return value == null ? null : ((Number) value).longValue();
+    }
+
+    /** 匹配依据可能包含去重原因，按列宽截断避免严格模式下写入失败。 */
+    private static String clip(String reason) {
+        if (reason == null) return null;
+        return reason.length() <= 500 ? reason : reason.substring(0, 500);
     }
 }
