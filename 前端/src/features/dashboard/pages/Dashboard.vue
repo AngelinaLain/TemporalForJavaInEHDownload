@@ -138,16 +138,26 @@
 
     <section class="rss-grid">
       <article class="panel">
-        <header class="panel-heading"><div><h2>RSS 订阅分析</h2><p>从订阅发现到匹配既有画廊、归入合集的链路</p></div><span class="panel-chip">{{ rssOverview.activeSubscriptions || 0 }} / {{ rssOverview.subscriptions || 0 }} 个订阅在运行</span></header>
+        <header class="panel-heading"><div><h2>RSS 订阅分析</h2><p>从订阅发现到匹配既有画廊、归入合集的链路</p></div><div class="small-tabs" role="group" aria-label="RSS 指标"><button :class="{ active: rssMetric === 'funnel' }" :aria-pressed="rssMetric === 'funnel'" @click="rssMetric = 'funnel'">漏斗</button><button :class="{ active: rssMetric === 'trend' }" :aria-pressed="rssMetric === 'trend'" @click="rssMetric = 'trend'">近两周</button></div></header>
         <div class="rss-metrics">
           <div><span>订阅发现</span><strong>{{ formatCount(rssOverview.discovered) }}</strong><small>满足条件 {{ formatCount(rssOverview.eligible) }}</small></div>
           <div><span>已入库</span><strong>{{ formatCount(rssOverview.imported) }}</strong><small>匹配已有 {{ formatCount(rssOverview.matched) }}</small></div>
           <div><span>已归合集</span><strong>{{ formatCount(rssOverview.placed) }}</strong><small>归位率 {{ rssRate(rssOverview.placementRate) }}%</small></div>
           <div><span>待人工复核</span><strong>{{ formatCount(rssOverview.pendingReview) }}</strong><small>入库未归位 {{ formatCount(rssOverview.unplaced) }}</small></div>
         </div>
-        <div v-show="viewMode === 'chart'" class="chart-wrap"><div ref="rssFunnelRef" class="chart rss-chart" /><div v-if="!rssFunnel.length && rssLoaded" class="chart-empty">暂无 RSS 订阅数据</div></div>
-        <div v-if="viewMode === 'table'" class="table-wrap rss-table"><table><thead><tr><th>阶段</th><th>数量</th><th /></tr></thead><tbody><tr v-for="row in rssFunnel" :key="row.key"><td>{{ row.name }}</td><td>{{ formatCount(row.value) }}</td><td /></tr><tr v-if="!rssFunnel.length"><td colspan="3" class="empty-cell">暂无 RSS 订阅数据</td></tr></tbody></table></div>
-        <footer class="panel-footer">匹配率 {{ rssRate(rssOverview.matchRate) }}%；匹配成功的订阅优先把既有画廊归入合集，已有其他归属的画廊保持原样。</footer>
+        <div v-if="rssError" class="service-error">{{ rssError }}</div>
+        <div v-show="viewMode === 'chart'" class="chart-wrap"><div ref="rssFunnelRef" class="chart rss-chart" /><div v-if="rssChartEmpty" class="chart-empty">{{ rssEmptyText }}</div></div>
+        <div v-if="viewMode === 'table'" class="table-wrap rss-table">
+          <table v-if="rssMetric === 'funnel'">
+            <thead><tr><th>阶段</th><th>数量</th><th /></tr></thead>
+            <tbody><tr v-for="row in rssFunnel" :key="row.key"><td>{{ row.name }}</td><td>{{ formatCount(row.value) }}</td><td /></tr><tr v-if="!rssFunnel.length"><td colspan="3" class="empty-cell">暂无 RSS 订阅数据</td></tr></tbody>
+          </table>
+          <table v-else>
+            <thead><tr><th>日期</th><th>发现</th><th>满足条件</th><th>已归合集</th></tr></thead>
+            <tbody><tr v-for="row in rssDaily" :key="row.date"><td>{{ row.date }}</td><td>{{ formatCount(row.discovered) }}</td><td>{{ formatCount(row.eligible) }}</td><td>{{ formatCount(row.placed) }}</td></tr><tr v-if="!rssDaily.length"><td colspan="4" class="empty-cell">暂无趋势数据</td></tr></tbody>
+          </table>
+        </div>
+        <footer class="panel-footer">{{ rssOverview.activeSubscriptions || 0 }} / {{ rssOverview.subscriptions || 0 }} 个订阅在运行；匹配率 {{ rssRate(rssOverview.matchRate) }}%，匹配成功的订阅优先把既有画廊归入合集。</footer>
       </article>
       <article class="panel">
         <header class="panel-heading"><div><h2>RSS 合集归位</h2><p>按订阅查看匹配、归入合集与待处理</p></div><span class="panel-chip">{{ rssPlacementTotal }} 个归位任务</span></header>
@@ -217,6 +227,7 @@ const rssFunnelRef = ref(null), rssPlacementRef = ref(null)
 const charts = new Map()
 const rss = ref({ overview: {}, funnel: [], placement: [], subscriptions: [], daily: [] })
 const rssLoaded = ref(false)
+const rssError = ref('')
 let analyticsController, serviceController, collectionController, rssController, resizeObserver, refreshTimer, servicesBusy = false, disposed = false
 
 const overview = computed(() => analytics.value.overview || {})
@@ -232,7 +243,11 @@ const rssOverview = computed(() => rss.value.overview || {})
 const rssFunnel = computed(() => (rss.value.funnel || []).filter(row => Number(row.value) > 0))
 const rssPlacement = computed(() => rss.value.placement || [])
 const rssSubscriptions = computed(() => rss.value.subscriptions || [])
+const rssDaily = computed(() => rss.value.daily || [])
+const rssMetric = ref('funnel')
 const rssPlacementTotal = computed(() => rssPlacement.value.reduce((sum, row) => sum + Number(row.value || 0), 0))
+const rssChartEmpty = computed(() => rssLoaded.value && (rssMetric.value === 'trend' ? !rssDaily.value.length : !rssFunnel.value.length))
+const rssEmptyText = computed(() => rssMetric.value === 'trend' ? '暂无趋势数据' : '暂无 RSS 订阅数据')
 const timelineTotal = computed(() => timeline.value.reduce((sum, row) => sum + Number(row.value || 0), 0))
 const timelineSizeGb = computed(() => timeline.value.reduce((sum, row) => sum + Number(row.size_mb || 0), 0) / 1024)
 const grainLabel = computed(() => ({ day: '按日', week: '按周', month: '按月' })[applied.grain] || '按日')
@@ -364,10 +379,11 @@ async function loadRss() {
     if (request !== rssController || disposed) return
     rss.value = response.data || { overview: {} }
     rssLoaded.value = true
+    rssError.value = ''
     await nextTick()
     renderCharts()
   } catch (failure) {
-    if (request === rssController && failure.code !== 'ERR_CANCELED' && !disposed) rssLoaded.value = true
+    if (request === rssController && failure.code !== 'ERR_CANCELED' && !disposed) rssError.value = 'RSS 统计暂时不可用，稍后自动重试。'
   }
 }
 function refresh() { void loadAnalytics({ ...applied }); void loadServices(); void loadRss() }
@@ -407,6 +423,19 @@ function renderPlacement(chart) {
   const data = [...rssPlacement.value].reverse()
   updateChart(chart, { ...chartStyle, grid: { top: 12, left: 15, right: 36, bottom: 14, containLabel: true }, xAxis: { ...valueAxis(), splitNumber: 3 }, yAxis: { ...categoryAxis(data.map(row => row.name)), inverse: false, axisLine: { show: false }, axisLabel: { fontSize: 10, color: '#7f8fa7', width: 110, overflow: 'truncate' } }, series: [{ type: 'bar', barMaxWidth: 13, data: data.map(row => ({ value: row.value, name: row.name, itemStyle: { color: placementColor(row.status), borderRadius: [0, 4, 4, 0] } })), label: { show: true, position: 'right', fontSize: 9, color: '#94a2b6' } }] })
 }
+// RSS 面板在漏斗与近两周趋势间切换，两种视图共用同一块图表区域。
+function renderRssPanel(chart) {
+  if (!chart) return
+  if (rssMetric.value === 'trend') {
+    const daily = rssDaily.value
+    updateChart(chart, { ...chartStyle, grid: { top: 20, left: 16, right: 20, bottom: 34, containLabel: true }, legend: { bottom: 0, itemWidth: 8, itemHeight: 8, icon: 'circle', textStyle: { color: '#8c99ac', fontSize: 10 } }, xAxis: { ...categoryAxis(daily.map(row => String(row.date).slice(5))), boundaryGap: false }, yAxis: valueAxis('数量'), series: [
+      { name: '发现', type: 'line', smooth: .2, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#5276e8' }, data: daily.map(row => Number(row.discovered || 0)) },
+      { name: '满足条件', type: 'line', smooth: .2, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#57b9c9' }, data: daily.map(row => Number(row.eligible || 0)) },
+      { name: '已归合集', type: 'line', smooth: .2, symbol: 'circle', symbolSize: 4, lineStyle: { width: 2 }, itemStyle: { color: '#8b7cdb' }, data: daily.map(row => Number(row.placed || 0)) }] })
+    return
+  }
+  renderRanking(chart, rssFunnel.value, '#6790e6')
+}
 // 根据当前指标和统计结果重建各图表，统一保留筛选条件与点击入口。
 function renderCharts() {
   if (disposed) return
@@ -417,14 +446,14 @@ function renderCharts() {
   renderRanking(charts.get('collections'), collectionRows.value, '#7294df')
   renderRanking(charts.get('languages'), languageRows.value, '#5eb7ba', row => languageLabel(row.name))
   renderRanking(charts.get('queries'), queryRows.value, '#9a87d7')
-  renderRanking(charts.get('rssFunnel'), rssFunnel.value, '#6790e6')
+  renderRssPanel(charts.get('rssFunnel'))
   renderPlacement(charts.get('rssPlacement'))
 }
 function resizeCharts() { if (!disposed) charts.forEach(chart => chart.resize()) }
 // 先按系统字号调整文字，再替换图表配置，避免切换字号后残留旧样式。
 function updateChart(chart, option) { chart?.setOption(scaleChartFonts(option), true) }
 function onFontScaleChange() { nextTick(() => { renderCharts(); resizeCharts() }) }
-watch([dimension, trendMetric], () => nextTick(renderCharts))
+watch([dimension, trendMetric, rssMetric], () => nextTick(renderCharts))
 watch(viewMode, () => nextTick(() => { resizeCharts(); renderCharts() }))
 onMounted(() => {
   const elements = { timeline: timelineRef, status: statusRef, content: contentRef, collections: collectionRef, languages: languageRef, queries: queryRef, rssFunnel: rssFunnelRef, rssPlacement: rssPlacementRef }
