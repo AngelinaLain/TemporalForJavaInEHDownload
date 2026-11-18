@@ -8,7 +8,7 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.dedupe.GalleryDeduplication;
 import com.checker.dedupe.PerceptualHash;
 import com.checker.infrastructure.network.EhNetworkClient;

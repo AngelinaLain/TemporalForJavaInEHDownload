@@ -1,7 +1,7 @@
 package com.checker.manager.ai;
 
-import com.checker.model.dataobject.aiconfig.AiProviderConfigEntity;
-import com.checker.manager.aiconfig.AiProviderSecretCipher;
+import com.checker.model.dataobject.ai.AiProviderConfigEntity;
+import com.checker.manager.ai.AiProviderSecretCipher;
 import com.checker.dto.VisualEmbedding;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;

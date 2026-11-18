@@ -4,7 +4,7 @@ import com.checker.dao.catalog.EhGalleriesMapper;
 import com.checker.manager.archive.MountedArchiveStorage;
 import com.checker.manager.komga.KomgaMediaClient;
 import com.checker.config.EhNetworkConfig;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.entity.EhGalleriesEntity;
 import okhttp3.HttpUrl;
 import org.springframework.http.HttpStatus;

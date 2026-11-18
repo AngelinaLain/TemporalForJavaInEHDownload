@@ -5,7 +5,7 @@ import com.checker.model.dto.workflow.WorkflowSettings;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.dedupe.GalleryDeduplication;
 import com.checker.dedupe.DedupeSettings;
 import com.checker.dto.GalleryPageFingerprint;

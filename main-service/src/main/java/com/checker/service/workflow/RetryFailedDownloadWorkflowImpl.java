@@ -3,7 +3,7 @@ package com.checker.service.workflow;
 import com.checker.model.dto.workflow.WorkflowSettings;
 import com.checker.service.activity.workflow.DatabaseActivity;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.service.activity.notification.NotificationActivity;
 import io.temporal.failure.ChildWorkflowFailure;

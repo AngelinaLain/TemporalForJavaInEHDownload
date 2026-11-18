@@ -9,7 +9,7 @@ import com.checker.service.dedupe.DedupeReviewService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.shared.Result;
 import com.checker.config.workflow.EhWorkflowConfig;
 import com.checker.model.dto.workflow.WorkflowSettings;

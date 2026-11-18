@@ -7,7 +7,7 @@ import com.checker.dto.SearchOptions;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.manager.source.ScraperManager;
 import com.checker.shared.Constants;
-import com.checker.temporalServices.activities.ScraperActivity;
+import com.checker.temporal.activity.ScraperActivity;
 import io.temporal.activity.Activity;
 import io.temporal.spring.boot.ActivityImpl;
 import org.springframework.stereotype.Component;

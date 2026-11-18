@@ -4,7 +4,7 @@ import com.checker.dto.GallerySourceRequest;
 import com.checker.dto.GallerySourceResult;
 import com.checker.manager.source.GallerySourceManager;
 import com.checker.shared.Constants;
-import com.checker.temporalServices.activities.GallerySourceActivity;
+import com.checker.temporal.activity.GallerySourceActivity;
 import io.temporal.spring.boot.ActivityImpl;
 import org.springframework.stereotype.Component;
 

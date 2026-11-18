@@ -7,7 +7,7 @@ import com.checker.dao.dedupe.GalleryPageEmbeddingMapper;
 import com.checker.manager.dedupe.ArchiveVisualFingerprintExtractor;
 import com.checker.model.dataobject.dedupe.AiVisualReviewJobEntity;
 import com.checker.model.dataobject.dedupe.AiVisualReviewResultEntity;
-import com.checker.service.aiconfig.AiConfigurationService;
+import com.checker.service.ai.AiConfigurationService;
 import com.checker.manager.ai.AiInternalClient;
 import com.checker.manager.archive.ArchiveSampleImageExtractor;
 import com.checker.manager.archive.SynologyArchiveReader;

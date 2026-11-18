@@ -4,7 +4,7 @@ import com.checker.dto.RssSearchPage;
 import com.checker.dto.SearchOptions;
 import com.checker.manager.search.RssSearchManager;
 import com.checker.shared.Constants;
-import com.checker.temporalServices.activities.RssScraperActivity;
+import com.checker.temporal.activity.RssScraperActivity;
 import io.temporal.spring.boot.ActivityImpl;
 import org.springframework.stereotype.Component;
 

@@ -9,7 +9,7 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checker.shared.Constants;
 import com.checker.shared.ErrorType;
-import com.checker.common.SynologyTaskStatus;
+import com.checker.shared.SynologyTaskStatus;
 import com.checker.dto.SynologyDownloadResult;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dao.catalog.EhGalleriesMapper;
@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.checker.common.SynologyTaskStatus.*;
+import static com.checker.shared.SynologyTaskStatus.*;
 
 /**
  * 操作群晖下载任务并汇报执行进度；底层认证、HTTP 和文件查询交给群晖客户端。

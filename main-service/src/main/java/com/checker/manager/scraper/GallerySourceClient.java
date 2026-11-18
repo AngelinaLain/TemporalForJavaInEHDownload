@@ -4,7 +4,7 @@ import com.checker.dto.GalleryPageFingerprint;
 import com.checker.dto.GallerySourceRequest;
 import com.checker.dto.GallerySourceResult;
 import com.checker.shared.Constants;
-import com.checker.temporalServices.workflows.GallerySourceWorkflow;
+import com.checker.temporal.workflow.GallerySourceWorkflow;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowFailedException;
 import io.temporal.client.WorkflowOptions;

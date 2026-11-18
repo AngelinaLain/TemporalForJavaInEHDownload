@@ -1,6 +1,6 @@
 package com.checker.service.rss;
 
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dao.catalog.EhGalleriesMapper;
 import com.checker.service.catalog.GalleryMediaService;

@@ -2,7 +2,7 @@ package com.checker.service.activity;
 
 import com.checker.shared.Constants;
 import com.checker.service.ai.AiTextService;
-import com.checker.temporalServices.activities.AiActivity;
+import com.checker.temporal.activity.AiActivity;
 import io.temporal.failure.ApplicationFailure;
 import io.temporal.spring.boot.ActivityImpl;
 import lombok.extern.slf4j.Slf4j;

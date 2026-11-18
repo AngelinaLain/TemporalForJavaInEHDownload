@@ -6,7 +6,7 @@ import com.checker.service.activity.rss.RssActivities;
 import com.checker.shared.Constants;
 import com.checker.dto.RssSearchItem;
 import com.checker.dto.RssSearchPage;
-import com.checker.temporalServices.activities.RssScraperActivity;
+import com.checker.temporal.activity.RssScraperActivity;
 import io.temporal.client.WorkflowOptions;
 import io.temporal.testing.TestWorkflowEnvironment;
 import org.junit.jupiter.api.Test;

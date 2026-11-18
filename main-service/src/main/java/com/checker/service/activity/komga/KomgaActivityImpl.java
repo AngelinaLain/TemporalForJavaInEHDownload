@@ -9,7 +9,7 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.shared.ErrorType;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dao.catalog.EhGalleriesMapper;

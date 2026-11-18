@@ -2,7 +2,7 @@ package com.checker.service.activity.workflow;
 
 import com.checker.service.dedupe.DedupeReviewService;
 import com.checker.dedupe.DedupeSettings;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dao.catalog.EhGalleriesMapper;
 import org.junit.jupiter.api.Test;

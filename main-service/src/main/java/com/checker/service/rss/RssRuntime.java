@@ -5,7 +5,7 @@ import com.checker.dao.rss.RssStore;
 import com.checker.service.workflow.rss.RssPollWorkflow;
 import com.checker.service.workflow.rss.RssTickWorkflow;
 import com.checker.shared.Constants;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.dto.SearchOptions;
 import com.checker.entity.EhGalleriesEntity;
 import com.checker.dao.catalog.EhGalleriesMapper;

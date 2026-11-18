@@ -1,6 +1,6 @@
 package com.checker.dto;
 
-import com.checker.common.SynologyTaskStatus;
+import com.checker.shared.SynologyTaskStatus;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;

@@ -1,6 +1,6 @@
 package com.checker.service.activity.archive;
 
-import com.checker.common.SynologyTaskStatus;
+import com.checker.shared.SynologyTaskStatus;
 import com.checker.dto.SynologyDownloadResult;
 import io.temporal.activity.ActivityInterface;
 import io.temporal.activity.ActivityMethod;

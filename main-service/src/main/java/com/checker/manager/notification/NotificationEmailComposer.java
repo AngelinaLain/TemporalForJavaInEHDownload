@@ -4,7 +4,7 @@ import com.checker.dao.notification.NotificationGalleryMapper;
 import com.checker.model.dto.notification.BatchEmailPayload;
 import com.checker.model.dto.notification.NotificationContext;
 import com.checker.model.vo.notification.NotificationEmail;
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.config.EhNetworkConfig;
 import okhttp3.HttpUrl;
 import org.slf4j.Logger;

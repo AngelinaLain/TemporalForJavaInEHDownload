@@ -1,28 +1,29 @@
 package com.checker.web.catalog;
 
-import com.checker.dao.catalog.EhGalleriesMapper;
-import com.checker.dao.catalog.GalleryQueryService;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.checker.model.dto.catalog.GalleryAnalyticsRequest;
 import com.checker.model.dto.catalog.GallerySearchRequest;
-import com.checker.service.catalog.EhGalleriesService;
 import com.checker.service.catalog.EhTagTranslationService;
-import com.checker.dao.catalog.GalleryAnalyticsService;
+import com.checker.service.catalog.GalleryAnalyticsService;
+import com.checker.service.catalog.GalleryDashboardService;
+import com.checker.service.catalog.GalleryQueryService;
 import com.checker.service.catalog.TagNetworkService;
-import io.swagger.v3.oas.annotations.tags.Tag;
-import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.baomidou.mybatisplus.core.metadata.IPage;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.checker.shared.Result;
-import com.checker.entity.EhGalleriesEntity;
-import org.springframework.jdbc.core.JdbcTemplate;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * 为数据概览、标签图谱和画廊检索提供查询接口，把聚合结果整理为前端使用的格式。
+ * 为数据概览、标签图谱和画廊检索提供查询接口，只做参数转发和结果包装。
  */
 @RestController
 @RequestMapping("/api/dashboard")
@@ -30,28 +31,22 @@ import java.util.stream.Collectors;
 @PreAuthorize("hasRole('ADMIN')")
 public class DashboardController {
 
-    private final EhGalleriesService galleriesService;
-    private final EhTagTranslationService tagTranslationService;
-    private final EhGalleriesMapper galleriesMapper;
-    private final JdbcTemplate jdbcTemplate;
-    private final GalleryQueryService galleryQueryService;
+    private final GalleryDashboardService dashboardService;
     private final GalleryAnalyticsService galleryAnalyticsService;
+    private final GalleryQueryService galleryQueryService;
     private final TagNetworkService tagNetworkService;
+    private final EhTagTranslationService tagTranslationService;
 
-    public DashboardController(EhGalleriesService galleriesService,
-                               EhTagTranslationService tagTranslationService,
-                               EhGalleriesMapper galleriesMapper,
-                               JdbcTemplate jdbcTemplate,
-                               GalleryQueryService galleryQueryService,
+    public DashboardController(GalleryDashboardService dashboardService,
                                GalleryAnalyticsService galleryAnalyticsService,
-                               TagNetworkService tagNetworkService) {
-        this.galleriesService = galleriesService;
-        this.tagTranslationService = tagTranslationService;
-        this.galleriesMapper = galleriesMapper;
-        this.jdbcTemplate = jdbcTemplate;
-        this.galleryQueryService = galleryQueryService;
+                               GalleryQueryService galleryQueryService,
+                               TagNetworkService tagNetworkService,
+                               EhTagTranslationService tagTranslationService) {
+        this.dashboardService = dashboardService;
         this.galleryAnalyticsService = galleryAnalyticsService;
+        this.galleryQueryService = galleryQueryService;
         this.tagNetworkService = tagNetworkService;
+        this.tagTranslationService = tagTranslationService;
     }
 
     /**
@@ -59,15 +54,7 @@ public class DashboardController {
      */
     @GetMapping("/stats")
     public Result<Map<String, Object>> getStats() {
-        Map<String, Object> overview = galleriesMapper.getDashboardOverview();
-        Map<String, Object> stats = new LinkedHashMap<>();
-        stats.put("total", toLong(overview.get("total")));
-        stats.put("downloaded", toLong(overview.get("downloaded")));
-        stats.put("imported", toLong(overview.get("imported")));
-        stats.put("failed", toLong(overview.get("failed")));
-        stats.put("pending", toLong(overview.get("pending")));
-        stats.put("totalSizeGb", Math.round(toDouble(overview.get("total_size_mb")) / 1024 * 100.0) / 100.0);
-        return Result.success(stats);
+        return Result.success(dashboardService.overview());
     }
 
     /**
@@ -115,27 +102,13 @@ public class DashboardController {
             return Result.error(400, failure.getMessage());
         }
     }
+
     /**
-     * 把数据库聚合的下载状态数量整理为状态分布数据。
+     * 返回下载状态分布，供概览图表使用。
      */
     @GetMapping("/status-distribution")
     public Result<List<Map<String, Object>>> getStatusDistribution() {
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (Map<String, Object> row : galleriesMapper.countByDownloadStatus()) {
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", String.valueOf(row.get("status")));
-            item.put("value", toLong(row.get("cnt")));
-            result.add(item);
-        }
-        return Result.success(result);
-    }
-
-    private long toLong(Object value) {
-        return value instanceof Number number ? number.longValue() : 0L;
-    }
-
-    private double toDouble(Object value) {
-        return value instanceof Number number ? number.doubleValue() : 0.0;
+        return Result.success(dashboardService.statusDistribution());
     }
 
     /**
@@ -143,27 +116,7 @@ public class DashboardController {
      */
     @GetMapping("/download-progress")
     public Result<List<Map<String, Object>>> getDownloadProgress() {
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-        wrapper.eq("download_status", "DOWNLOADING").or().eq("download_status", "下载中");
-        List<EhGalleriesEntity> downloading = galleriesService.list(wrapper);
-
-        List<Map<String, Object>> result = new ArrayList<>();
-        for (EhGalleriesEntity gallery : downloading) {
-            long downloadedBytes = gallery.getDownloadedBytes() != null ? gallery.getDownloadedBytes() : 0L;
-            double sizeMb = gallery.getFileSizeMb() != null ? gallery.getFileSizeMb() : 0.0;
-            long totalBytes = (long) (sizeMb * 1024 * 1024);
-            double percent = totalBytes > 0 ? Math.min(100.0, downloadedBytes * 100.0 / totalBytes) : 0.0;
-
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("gid", gallery.getGid());
-            item.put("title", gallery.getTitle());
-            item.put("downloadedBytes", downloadedBytes);
-            item.put("totalBytes", totalBytes);
-            item.put("sizeMb", sizeMb);
-            item.put("percent", Math.round(percent * 10) / 10.0);
-            result.add(item);
-        }
-        return Result.success(result);
+        return Result.success(dashboardService.downloadProgress());
     }
 
     /**
@@ -171,23 +124,7 @@ public class DashboardController {
      */
     @GetMapping("/db-status")
     public Result<Map<String, Object>> getDbStatus() {
-        Map<String, Object> status = new LinkedHashMap<>();
-        try {
-            Integer probe = jdbcTemplate.queryForObject("SELECT 1", Integer.class);
-            status.put("connected", probe != null && probe == 1);
-        } catch (Exception e) {
-            status.put("connected", false);
-            status.put("error", e.getMessage());
-        }
-        try {
-            Map<String, Object> overview = galleriesMapper.getDashboardOverview();
-            status.put("total", toLong(overview.get("total")));
-            status.put("totalSizeGb", Math.round(toDouble(overview.get("total_size_mb")) / 1024 * 100.0) / 100.0);
-        } catch (Exception ignored) {
-            status.put("total", 0L);
-            status.put("totalSizeGb", 0.0);
-        }
-        return Result.success(status);
+        return Result.success(dashboardService.databaseStatus());
     }
 
     /**
@@ -195,47 +132,15 @@ public class DashboardController {
      */
     @GetMapping("/file-size-distribution")
     public Result<Map<String, Object>> getFileSizeDistribution() {
-        Map<String, Object> buckets = galleriesMapper.getFileSizeBuckets();
-        String[] labels = {"<50MB", "50-100MB", "100-200MB", "200-500MB", "500MB-1GB", ">1GB"};
-        long[] counts = {
-                toLong(buckets.get("lt_50")),
-                toLong(buckets.get("from_50_to_100")),
-                toLong(buckets.get("from_100_to_200")),
-                toLong(buckets.get("from_200_to_500")),
-                toLong(buckets.get("from_500_to_1024")),
-                toLong(buckets.get("ge_1024"))
-        };
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("labels", labels);
-        result.put("data", counts);
-        return Result.success(result);
+        return Result.success(dashboardService.fileSizeDistribution());
     }
+
     /**
      * 按抓取时间统计画廊数量，供历史趋势图展示。
      */
     @GetMapping("/crawl-timeline")
     public Result<Map<String, Object>> getCrawlTimeline() {
-        QueryWrapper<EhGalleriesEntity> wrapper = new QueryWrapper<>();
-        wrapper.isNotNull("crawled_at")
-                .select("DATE(crawled_at) as crawl_date", "COUNT(*) as cnt")
-                .groupBy("DATE(crawled_at)")
-                .orderByAsc("DATE(crawled_at)")
-                .last("LIMIT 60");
-
-        List<Map<String, Object>> rows = galleriesService.listMaps(wrapper);
-
-        List<String> dates = new ArrayList<>();
-        List<Long> counts = new ArrayList<>();
-        for (Map<String, Object> row : rows) {
-            dates.add(String.valueOf(row.get("crawl_date")));
-            counts.add(((Number) row.get("cnt")).longValue());
-        }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("dates", dates);
-        result.put("counts", counts);
-        return Result.success(result);
+        return Result.success(dashboardService.crawlTimeline());
     }
 
     /**
@@ -243,16 +148,7 @@ public class DashboardController {
      */
     @GetMapping("/tag-stats")
     public Result<List<Map<String, Object>>> getTagStats() {
-        List<Map<String, Object>> rows = galleriesMapper.countTagNamespaces();
-        List<Map<String, Object>> result = rows.stream().map(row -> {
-            String ns = String.valueOf(row.get("namespace"));
-            Map<String, Object> item = new LinkedHashMap<>();
-            item.put("name", ns);
-            item.put("nameCn", tagTranslationService.translateNamespace(ns));
-            item.put("value", ((Number) row.get("cnt")).longValue());
-            return item;
-        }).collect(Collectors.toList());
-        return Result.success(result);
+        return Result.success(dashboardService.tagStatistics());
     }
 
     /**
@@ -268,46 +164,6 @@ public class DashboardController {
     }
 
     /**
-     * 把中文与英文状态写法归一成业务状态，兼容历史数据和不同调用方。
-     */
-    private String normalizeStatus(String status) {
-        return switch (status) {
-            case "PENDING", "未下载" -> "PENDING";
-            case "DOWNLOADING", "下载中" -> "DOWNLOADING";
-            case "DOWNLOADED", "已下载" -> "DOWNLOADED";
-            case "WAITING_KOMGA", "等待 Komga" -> "WAITING_KOMGA";
-            case "PARTIAL", "不完整" -> "PARTIAL";
-            case "DOWNLOAD_FAILED", "下载失败" -> "DOWNLOAD_FAILED";
-            case "KOMGA_IMPORT_FAILED", "Komga 入库失败" -> "KOMGA_IMPORT_FAILED";
-            case "IMPORTED", "已入库" -> "IMPORTED";
-            case "REVIEW_REQUIRED", "待去重审核" -> "REVIEW_REQUIRED";
-            case "BLOCKED", "阻断" -> "BLOCKED";
-            case "IGNORED", "已忽略" -> "IGNORED";
-            default -> null;
-        };
-    }
-
-    /**
-     * 将内部状态转换为对应中文名称，便于与历史存储值匹配。
-     */
-    private String statusLabel(String status) {
-        return switch (status) {
-            case "PENDING" -> "未下载";
-            case "DOWNLOADING" -> "下载中";
-            case "DOWNLOADED" -> "已下载";
-            case "WAITING_KOMGA" -> "等待 Komga";
-            case "PARTIAL" -> "不完整";
-            case "DOWNLOAD_FAILED" -> "下载失败";
-            case "KOMGA_IMPORT_FAILED" -> "Komga 入库失败";
-            case "IMPORTED" -> "已入库";
-            case "REVIEW_REQUIRED" -> "待去重审核";
-            case "BLOCKED" -> "阻断";
-            case "IGNORED" -> "已忽略";
-            default -> status;
-        };
-    }
-
-    /**
      * 为标题或标签输入返回数量受限的检索建议，帮助用户快速选择条件。
      */
     @GetMapping("/suggestions")
@@ -315,51 +171,11 @@ public class DashboardController {
             @RequestParam String q,
             @RequestParam(defaultValue = "10") int limit,
             @RequestParam(defaultValue = "all") String type) {
-
-        String query = q == null ? "" : q.trim();
-        if (query.isEmpty()) {
-            return Result.success(List.of());
+        try {
+            return Result.success(dashboardService.suggestions(q, limit, type));
+        } catch (IllegalArgumentException failure) {
+            return Result.error(400, failure.getMessage());
         }
-
-        int safeLimit = Math.min(Math.max(limit, 1), 30);
-        List<Map<String, String>> suggestions = new ArrayList<>();
-        String lowerQ = query.toLowerCase(Locale.ROOT);
-        String requestedType = type.toLowerCase(Locale.ROOT);
-        if (!Set.of("all", "title", "tag").contains(requestedType)) {
-            return Result.error(400, "不支持的联想类型");
-        }
-
-        if (!"tag".equals(requestedType)) {
-            QueryWrapper<EhGalleriesEntity> titleWrapper = new QueryWrapper<>();
-            titleWrapper.select("DISTINCT title")
-                    .like("title", query)
-                    .last("LIMIT " + safeLimit);
-            List<EhGalleriesEntity> titles = galleriesService.list(titleWrapper);
-            for (EhGalleriesEntity e : titles) {
-                Map<String, String> item = new LinkedHashMap<>();
-                item.put("value", e.getTitle());
-                item.put("type", "title");
-                suggestions.add(item);
-            }
-        }
-
-        if (!"title".equals(requestedType)) {
-            Map<String, String> translationMap = tagTranslationService.getTranslationMap();
-            int tagCount = 0;
-            for (Map.Entry<String, String> entry : translationMap.entrySet()) {
-                if (tagCount >= safeLimit) break;
-                if (entry.getKey().toLowerCase(Locale.ROOT).contains(lowerQ) || entry.getValue().contains(query)) {
-                    Map<String, String> item = new LinkedHashMap<>();
-                    item.put("value", entry.getKey());
-                    item.put("label", entry.getValue() + " (" + entry.getKey() + ")");
-                    item.put("type", "tag");
-                    suggestions.add(item);
-                    tagCount++;
-                }
-            }
-        }
-
-        return Result.success(suggestions);
     }
 
     /**

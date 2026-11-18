@@ -1,6 +1,6 @@
 package com.checker.manager.monitoring;
 
-import com.checker.common.DownloadStatus;
+import com.checker.shared.DownloadStatus;
 import com.checker.dao.catalog.EhGalleriesMapper;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;

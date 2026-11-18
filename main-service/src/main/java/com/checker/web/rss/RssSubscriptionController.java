@@ -1,87 +1,94 @@
 package com.checker.web.rss;
 
 import com.checker.config.rss.RssConfig;
-import com.checker.dao.rss.RssStore;
-import com.checker.manager.rss.RssFeedClient;
 import com.checker.model.dto.rss.RssSubscriptionRequest;
-import com.checker.service.rss.RssRuntime;
+import com.checker.service.rss.RssSubscriptionService;
 import com.checker.shared.Result;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
 
+/**
+ * RSS 订阅管理接口：只接收参数、做基本校验并包装响应，订阅读写交由服务层完成。
+ */
 @RestController
 @RequestMapping("/api/rss/subscriptions")
 @PreAuthorize("hasRole('ADMIN')")
 public class RssSubscriptionController {
-    private final RssStore store;
-    private final RssFeedClient feed;
-    private final RssRuntime runtime;
+
+    private final RssSubscriptionService subscriptionService;
     private final RssConfig config;
 
-    public RssSubscriptionController(RssStore store, RssFeedClient feed, RssRuntime runtime, RssConfig config) {
-        this.store = store;
-        this.feed = feed;
-        this.runtime = runtime;
+    public RssSubscriptionController(RssSubscriptionService subscriptionService, RssConfig config) {
+        this.subscriptionService = subscriptionService;
         this.config = config;
     }
 
     @GetMapping
     public Result<?> list() {
-        return Result.success(Map.of("records", store.list(), "enabled", config.isEnabled()));
+        return Result.success(Map.of("records", subscriptionService.list(), "enabled", config.isEnabled()));
     }
 
     @PostMapping
-    public Result<?> create(@RequestBody RssSubscriptionRequest r) {
-        return Result.success(Map.of("id", store.save(null, r)));
+    public Result<?> create(@RequestBody RssSubscriptionRequest request) {
+        return Result.success(Map.of("id", subscriptionService.create(request)));
     }
 
     @PutMapping("/{id}")
-    public Result<?> update(@PathVariable String id, @RequestBody RssSubscriptionRequest r) {
-        return Result.success(Map.of("id", store.save(id, r)));
+    public Result<?> update(@PathVariable String id, @RequestBody RssSubscriptionRequest request) {
+        return Result.success(Map.of("id", subscriptionService.update(id, request)));
     }
 
     @DeleteMapping("/{id}")
     public Result<?> delete(@PathVariable String id) {
-        store.delete(id);
+        subscriptionService.delete(id);
         return Result.success();
     }
 
     @PostMapping("/{id}/enabled")
-    public Result<?> enable(@PathVariable String id, @RequestBody Map<String, Boolean> r) {
-        store.enable(id, Boolean.TRUE.equals(r.get("enabled")));
+    public Result<?> enable(@PathVariable String id, @RequestBody Map<String, Boolean> request) {
+        subscriptionService.enable(id, Boolean.TRUE.equals(request.get("enabled")));
         return Result.success();
     }
 
     @PostMapping("/{id}/poll")
     public Result<?> poll(@PathVariable String id) {
-        store.requestPoll(id);
-        var row = store.list().stream().filter(r -> id.equals(r.get("id"))).findFirst().orElseThrow();
-        runtime.startPoll(id, ((Number) row.get("revision")).intValue());
+        subscriptionService.poll(id);
         return Result.success();
     }
 
     @PostMapping("/{id}/retry")
     public Result<?> retry(@PathVariable String id) {
-        store.retry(id);
+        subscriptionService.retry(id);
         return Result.success();
     }
 
     @GetMapping("/{id}/items")
-    public Result<?> items(@PathVariable String id, @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "25") int size) {
-        return Result.success(store.items(id, page, size));
+    public Result<?> items(@PathVariable String id,
+                           @RequestParam(defaultValue = "1") int page,
+                           @RequestParam(defaultValue = "25") int size) {
+        return Result.success(subscriptionService.items(id, page, size));
     }
 
     @GetMapping("/{id}/runs")
     public Result<?> runs(@PathVariable String id) {
-        return Result.success(store.runs(id));
+        return Result.success(subscriptionService.runs(id));
     }
 
     @PostMapping("/preview")
-    public Result<?> preview(@RequestBody RssSubscriptionRequest r) {
-        r.validate();
-        return Result.success(feed.fetch(r.getSearchOptions()));
+    public Result<?> preview(@RequestBody RssSubscriptionRequest request) {
+        request.validate();
+        return Result.success(subscriptionService.preview(request));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

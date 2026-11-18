@@ -7,14 +7,14 @@ import com.checker.dto.RssSearchItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
-import org.springframework.stereotype.Service;
+import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import java.sql.ResultSetMetaData;
 import java.util.*;
 
 /** Durable subscription inbox and transactional outbox. No network calls inside transactions. */
-@Service
+@Repository
 public class RssStore {
     private final JdbcTemplate db;
     private final ObjectMapper json;
