@@ -9,13 +9,15 @@ docker-compose.yml 会启动以下容器：
 | 容器 | 端口 | 作用 |
 | --- | ---: | --- |
 | eh-backend | 8001 | Spring Boot API、Temporal Worker、下载和 Komga 入库确认 |
-| eh-scraper-worker | 8081 | EHentai 抓取 Worker |
-| eh-ai-service | 8082 | AI 摘要/翻译服务 |
+| eh-scraper-worker | 8081 | EH 搜索、RSS 分页、画廊标签、封面指纹和下载直链 |
+| eh-ai-service | 8082 | AI 摘要、翻译、模型供应商调用和向量推理 |
 | eh-frontend | 8002 | Vue 管理页面和 Nginx API 反向代理 |
 | eh-redis | 6379 | JWT 黑名单、AI 缓存及 RSSHub 缓存 |
 | rsshub | 内部 1200 | EH 搜索 RSS 源；不向宿主机公开端口 |
 
 MySQL、Temporal、Nacos、Synology 和 Komga 由外部环境提供，不由本 Compose 文件创建。
+
+升级 Java 服务时应使用同一版源码构建 `backend`、`scraper-worker` 和 `ai-service`。主服务通过原有抓取队列把标签读取和源站封面采集交给 `scraper-worker`，分步更新时先切换抓取 Worker，再切换主服务。
 
 默认会创建三个持久卷：
 

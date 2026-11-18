@@ -179,16 +179,28 @@ Komga 补偿流程不调用 AI 概述服务，避免 GPU 节点超时阻塞物�
 
 ```text
 GalleryImport/
-├── common/           # 通用模型、网络客户端、ComicInfo 与判重算法
-├── main-service/     # API、Temporal Worker、下载导入、Komga、审核和 Flyway
-├── scraper-worker/   # EHentai 搜索与画廊抓取
-├── ai-service/       # AI 简介/翻译服务
-├── 前端/              # Vue 3 管理界面
+├── common/           # 跨服务契约、检索、判重、归档及网络工具
+├── main-service/     # 按业务分包的 API、Temporal Worker 与数据库迁移
+├── scraper-worker/   # EH 搜索、元数据、封面指纹与下载直链
+├── ai-service/       # 摘要、标签翻译、供应商调用及向量推理
+├── 前端/              # Vue 3 管理界面，页面和组件按功能组织
 ├── models/           # DINOv2 ONNX 视觉模型（体积较大，已被 .gitignore 排除）
 ├── deploy/           # Prometheus、Grafana、Loki、Promtail 配置
 ├── Dockerfile
 └── docker-compose.yml
 ```
+
+目录沿用 [Spring PetClinic Microservices](https://github.com/spring-petclinic/spring-petclinic-microservices) 的可独立部署模块，以及 [Spring Boot](https://docs.spring.io/spring-boot/docs/3.2.4/reference/html/using.html#using.structuring-your-code) 的业务分包方式。Vue 侧借鉴 [Vue Vben Admin](https://github.com/vbenjs/vue-vben-admin) 对应用和共用代码的区分。
+
+| 模块 | 代码归属 |
+| --- | --- |
+| `main-service` | `rss` 管理订阅、游标和下载队列，`catalog`、`collection`、`dedupe` 管理画廊与审核，`workflow` 编排下载，`archive` 和 `komga` 处理本地归档对账及图库入库。`aiconfig` 管理模型配置和权限，`integration` 通过内部客户端调用其他服务。 |
+| `scraper-worker` | `scraper` 执行 EH 搜索、预览采样与下载直链提取。`scraper.search` 执行 RSS 分页与页面解析，`scraper.source` 为入库和归档复核采集标签与封面指纹。 |
+| `ai-service` | `ai.chat` 和 `ai.summary` 执行摘要与翻译，`ai.provider` 调用配置的模型供应商，`ai.embedding` 执行向量推理，`ai.security` 校验内部调用。 |
+| `common` | 保存跨服务的 DTO、Temporal 接口、检索参数及共同使用的网络和判重工具。三个 Java 服务分别依赖它，通过 HTTP 或 Temporal 协作。 |
+| `前端` | `src/features/` 按功能组织页面、组件和接口。RSS、合集、画廊和 AI 设置各自维护 `api.js`，共用 HTTP 客户端。检索表单等跨功能代码在 `src/shared/`。 |
+
+源站抓取结果通过 Temporal 以标签和指纹等小对象返回。归档文件由主服务直接下载、校验和上传。AI 服务执行模型推理，主服务负责归档采样、判重规则和审核记录。Java 测试放在对应模块的 `src/test/java` 业务包。
 
 ## 技术栈
 

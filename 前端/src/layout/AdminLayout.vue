@@ -43,8 +43,8 @@ import { computed, markRaw, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowDown, Collection, Connection, DataAnalysis, Expand, Finished, Fold, FolderChecked, List, Lock, Monitor, Operation, Picture, Refresh, Setting, Share, SwitchButton } from '@element-plus/icons-vue'
 import api from '../api'
-import SystemPreferences from '../components/SystemPreferences.vue'
-import { FONT_PRESETS, useUiPreferences } from '../stores/uiPreferences'
+import SystemPreferences from '../features/settings/components/SystemPreferences.vue'
+import { FONT_PRESETS, useUiPreferences } from '../shared/stores/uiPreferences'
 
 const route = useRoute(), router = useRouter(), preferences = useUiPreferences()
 const isCollapse = ref(false), isMobile = ref(false), mobileOpen = ref(false), loggingOut = ref(false)

@@ -1,0 +1,485 @@
+package com.checker.service.activity.archive;
+
+import com.checker.archive.ComicInfoInjector;
+import com.checker.archive.ComicInfo;
+import com.checker.manager.archive.SynologyUploadService;
+import com.checker.shared.Constants;
+import com.checker.infrastructure.network.EhNetworkClient;
+import com.checker.shared.ErrorType;
+import com.checker.config.EhNetworkConfig;
+import com.checker.entity.EhGalleriesEntity;
+import com.checker.dao.catalog.EhGalleriesMapper;
+import com.checker.manager.dedupe.ArchiveVisualFingerprintExtractor;
+import com.checker.service.dedupe.VisualFingerprintService;
+import com.checker.service.dedupe.DedupeReviewService;
+import com.checker.manager.collection.GallerySeriesPlacementService;
+import com.checker.service.rss.RssCollectionService;
+import cn.hutool.core.util.StrUtil;
+import io.temporal.activity.Activity;
+import io.temporal.activity.ActivityExecutionContext;
+import io.temporal.client.ActivityCompletionException;
+import io.temporal.failure.ApplicationFailure;
+import io.temporal.spring.boot.ActivityImpl;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
+
+/**
+ * 在独立缓存目录中下载和校验归档，写入 ComicInfo 后发布到目标图库。
+ * 同一画廊使用文件锁，失败保留可恢复缓存，成功写库后再清理临时文件。
+ */
+@Slf4j
+@Component
+@ActivityImpl(taskQueues = Constants.TASK_QUEUE)
+public class LocalImportActivityImpl implements LocalImportActivity {
+
+    private static final long HEARTBEAT_INTERVAL_MS = 15_000;
+    private static final long DATABASE_PROGRESS_INTERVAL_MS = 3_000;
+    private static final long LOCK_WAIT_TIMEOUT_MS = 4 * 60_000;
+    private static final long MAX_UNCOMPRESSED_ARCHIVE_BYTES = 20L * 1024 * 1024 * 1024;
+
+    @Autowired
+    private EhNetworkClient ehNetworkClient;
+
+    @Autowired
+    private EhGalleriesMapper galleriesMapper;
+
+    @Autowired
+    private SynologyUploadService uploadService;
+
+    @Autowired
+    private EhNetworkConfig netConfig;
+
+    @Autowired
+    private ArchiveVisualFingerprintExtractor visualExtractor;
+
+    @Autowired
+    private VisualFingerprintService visualFingerprintService;
+
+    @Autowired
+    private DedupeReviewService dedupeReviewService;
+
+    @Autowired
+    private GallerySeriesPlacementService placementService;
+
+    @Autowired
+    private RssCollectionService rssCollections;
+
+    @Override
+    /** 锁定当前画廊工作目录后复用或续传归档，校验并注入元数据，上传成功再更新位置和清理缓存。 */
+    public void localDownloadAndImport(String downloadUrl, Long gid, Double sizeMb) {
+        ActivityExecutionContext ctx = Activity.getExecutionContext();
+        ctx.heartbeat("加载画廊元数据: " + gid);
+
+        EhGalleriesEntity gallery = galleriesMapper.selectById(gid);
+        if (gallery == null) {
+            throw ApplicationFailure.newFailure("画廊记录不存在: " + gid, ErrorType.SYNOLOGY_API_ERROR.getCode());
+        }
+
+        Path workDir = resolveTempDir().resolve("gallery-" + gid);
+        try {
+            Files.createDirectories(workDir);
+        } catch (IOException e) {
+            throw ApplicationFailure.newFailure("创建本地下载工作目录失败: " + e.getMessage(),
+                    ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
+        }
+
+        Path zipFile = workDir.resolve("archive.zip");
+        String targetFilename = buildTargetFilename(gid, gallery.getTitle());
+        Path cbzFile = workDir.resolve("final.cbz");
+        Path metadataFingerprintFile = workDir.resolve("comicinfo.sha256");
+        Path lockFile = workDir.resolve(".lock");
+        boolean succeeded = false;
+
+        try (FileChannel lockChannel = FileChannel.open(lockFile,
+                StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+             FileLock ignored = acquireWorkLock(lockChannel, ctx, gid)) {
+            // 同一 GID 的活动共用缓存目录，取得锁后才能续传、注入或清理，避免互相覆盖。
+            rssCollections.assignForGallery(gid);
+            GallerySeriesPlacementService.SeriesPlacement placement = placementService.resolve(gid);
+            ComicInfo comicInfo = buildComicInfo(gallery, placement);
+            String metadataFingerprint = sha256(comicInfo.toXml());
+
+            // 已完成的本地 CBZ 只有在 ZIP 深度校验通过后才允许直接重试上传。
+            if (Files.isRegularFile(cbzFile)) {
+                try {
+                    verifyArchive(cbzFile, true, heartbeatProgress(ctx, gid, "校验本地 CBZ", false));
+                } catch (IOException invalidCbz) {
+                    log.warn("本地 CBZ 缓存无效，将重新下载, GID: {}, 原因: {}", gid, invalidCbz.getMessage());
+                    cleanupQuietly(cbzFile);
+                    Files.deleteIfExists(metadataFingerprintFile);
+                }
+            }
+
+            if (!Files.isRegularFile(cbzFile)) {
+                // 下载完成后、注入前崩溃时 archive.zip 会保留下来；校验通过即可继续后续阶段。
+                if (Files.isRegularFile(zipFile)) {
+                    try {
+                        verifyArchive(zipFile, false, heartbeatProgress(ctx, gid, "校验下载缓存", false));
+                        log.info("⏭️ 检测到完整下载缓存，跳过网络下载, GID: {}", gid);
+                    } catch (IOException invalidZip) {
+                        log.warn("下载缓存无效，清空后重新下载, GID: {}, 原因: {}", gid, invalidZip.getMessage());
+                        cleanupDownloadCache(zipFile);
+                    }
+                }
+
+                if (!Files.isRegularFile(zipFile)) {
+                    ctx.heartbeat("开始本地下载, 预估 " + sizeMb + " MB: " + gid);
+                    long bytes = ehNetworkClient.downloadWithResume(downloadUrl, zipFile,
+                            heartbeatProgress(ctx, gid, "本地下载", true));
+                    updateDownloadedBytesBestEffort(gid, bytes);
+                    log.info("✅ 本地下载完成, GID: {}, 字节数: {}", gid, bytes);
+                    try {
+                        verifyArchive(zipFile, false, heartbeatProgress(ctx, gid, "校验下载文件", false));
+                    } catch (IOException verifyEx) {
+                        cleanupDownloadCache(zipFile);
+                        throw new IOException("下载文件损坏（ZIP/CRC 校验失败）: " + verifyEx.getMessage(), verifyEx);
+                    }
+                }
+
+                ctx.heartbeat("注入 ComicInfo.xml: " + gid);
+                ComicInfoInjector.inject(zipFile, comicInfo);
+                moveAtomically(zipFile, cbzFile);
+                Files.writeString(metadataFingerprintFile, metadataFingerprint, StandardCharsets.US_ASCII,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                verifyArchive(cbzFile, true, heartbeatProgress(ctx, gid, "校验注入结果", false));
+            } else if (!metadataFingerprint.equals(readFingerprint(metadataFingerprintFile))) {
+                // 元数据/简介在上次上传失败后发生变化时，只重新注入，不重复网络下载。
+                ctx.heartbeat("刷新 ComicInfo.xml: " + gid);
+                ComicInfoInjector.inject(cbzFile, comicInfo);
+                Files.writeString(metadataFingerprintFile, metadataFingerprint, StandardCharsets.US_ASCII,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                verifyArchive(cbzFile, true, heartbeatProgress(ctx, gid, "校验元数据刷新结果", false));
+            } else {
+                log.info("⏭️ 检测到完整且元数据一致的 CBZ，直接重试上传, GID: {}", gid);
+            }
+
+            // 在临时归档被清理前生成高质量采样指纹；失败只降低去重证据，不阻断主下载链路。
+            try (java.io.InputStream archiveInput = Files.newInputStream(cbzFile)) {
+                int visualPages = visualFingerprintService.replace(gid,
+                        visualExtractor.extract(archiveInput, gid, gallery.getPageCount()));
+                if (visualPages > 0) {
+                    dedupeReviewService.refreshVisualEvidenceForGid(gid);
+                    log.info("🖼️ 归档视觉指纹已刷新, GID: {}, 采样页: {}", gid, visualPages);
+                }
+            } catch (Exception visualFailure) {
+                log.warn("归档视觉指纹生成失败，不阻断上传, GID: {}, 原因: {}", gid, visualFailure.getMessage());
+            }
+
+            ctx.heartbeat("上传到群晖: " + targetFilename);
+            try {
+                uploadService.upload(cbzFile, placement.relativeDirectory(), targetFilename,
+                        heartbeatProgress(ctx, gid, "上传到群晖", false));
+            } catch (ActivityCompletionException e) {
+                throw e;
+            } catch (ApplicationFailure e) {
+                throw e;
+            } catch (Exception e) {
+                throw ApplicationFailure.newFailure("上传群晖失败: " + e.getMessage(),
+                        ErrorType.SYNOLOGY_API_ERROR.getCode());
+            }
+
+            // 上传发布成功才保存实际位置；写库也成功后，最终清理阶段才删除可恢复缓存。
+            EhGalleriesEntity update = new EhGalleriesEntity();
+            update.setGid(gid);
+            update.setFilename(targetFilename);
+            update.setStoragePath(placement.relativeDirectory());
+            update.setSeriesSyncSignature(placement.signature());
+            galleriesMapper.updateById(update);
+
+            succeeded = true;
+            log.info("🎉 本地导入完成, GID: {}, 文件: {}", gid, targetFilename);
+        } catch (ActivityCompletionException e) {
+            throw e;
+        } catch (ApplicationFailure e) {
+            throw e;
+        } catch (IOException e) {
+            log.error("本地下载/注入失败, GID: {}", gid, e);
+            throw ApplicationFailure.newFailure("本地下载/注入失败: " + e.getMessage(),
+                    ErrorType.SYNOLOGY_DOWNLOAD_ERROR.getCode());
+        } catch (Exception e) {
+            log.error("本地导入失败, GID: {}", gid, e);
+            throw ApplicationFailure.newFailure("本地导入失败: " + e.getMessage(),
+                    ErrorType.SYNOLOGY_API_ERROR.getCode());
+        } finally {
+            if (succeeded) {
+                cleanupWorkDirectory(workDir, zipFile, cbzFile, metadataFingerprintFile, lockFile);
+            }
+        }
+    }
+
+    /**
+     * 由画廊元数据构建 ComicInfo：Series 沿用目标系列，作者取 artist/group 标签，
+     * 其余标签写入 Genre（Komga 映射为 book tags）。
+     */
+    private ComicInfo buildComicInfo(EhGalleriesEntity gallery,
+                                     GallerySeriesPlacementService.SeriesPlacement placement) {
+        List<String> writers = new ArrayList<>();
+        List<String> tags = new ArrayList<>();
+        if (gallery.getTags() != null) {
+            for (String tag : gallery.getTags()) {
+                if (tag.startsWith("artist:") || tag.startsWith("group:")) {
+                    writers.add(tag.substring(tag.indexOf(':') + 1));
+                } else {
+                    tags.add(tag);
+                }
+            }
+        }
+        return ComicInfo.builder()
+                .title(gallery.getTitle())
+                .series(placement.seriesName())
+                .number(placement.number())
+                .summary(gallery.getSummary())
+                .writers(writers)
+                .tags(tags)
+                .build();
+    }
+
+    /**
+     * 进度回调同时承担 Temporal 心跳与可选的数据库进度更新。数据库展示失败不应中断下载，
+     * 但 heartbeat 抛出的取消/超时异常必须继续传播，让旧 Activity 尽快停止。
+     */
+    private LongConsumer heartbeatProgress(ActivityExecutionContext ctx, Long gid, String phase,
+                                           boolean updateDatabase) {
+        AtomicLong lastHeartbeat = new AtomicLong(0);
+        AtomicLong lastDatabaseUpdate = new AtomicLong(0);
+        return bytes -> {
+            long now = System.currentTimeMillis();
+            long previousHeartbeat = lastHeartbeat.get();
+            if (now - previousHeartbeat >= HEARTBEAT_INTERVAL_MS
+                    && lastHeartbeat.compareAndSet(previousHeartbeat, now)) {
+                ctx.heartbeat(phase + ": " + bytes + " bytes, GID: " + gid);
+            }
+            long previousDatabaseUpdate = lastDatabaseUpdate.get();
+            if (updateDatabase && now - previousDatabaseUpdate >= DATABASE_PROGRESS_INTERVAL_MS
+                    && lastDatabaseUpdate.compareAndSet(previousDatabaseUpdate, now)) {
+                updateDownloadedBytesBestEffort(gid, bytes);
+            }
+        };
+    }
+
+    /** 尽力更新页面展示进度，展示写库失败不影响正在进行的下载。 */
+    private void updateDownloadedBytesBestEffort(Long gid, long bytes) {
+        try {
+            EhGalleriesEntity update = new EhGalleriesEntity();
+            update.setGid(gid);
+            update.setDownloadedBytes(bytes);
+            galleriesMapper.updateById(update);
+        } catch (RuntimeException e) {
+            log.warn("下载进度写库失败但不影响下载, GID: {}, 原因: {}", gid, e.getMessage());
+        }
+    }
+
+    /** 等待同一画廊的旧活动释放文件锁，期间持续心跳，并响应取消或中断。 */
+    private FileLock acquireWorkLock(FileChannel channel, ActivityExecutionContext ctx, Long gid) throws IOException {
+        long deadline = System.currentTimeMillis() + LOCK_WAIT_TIMEOUT_MS;
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                FileLock lock = channel.tryLock();
+                if (lock != null) {
+                    return lock;
+                }
+            } catch (OverlappingFileLockException ignored) {
+                // 同 JVM 中另一个仍在退出的 Activity 持有锁，继续等待并发送心跳。
+            }
+            ctx.heartbeat("等待本地下载缓存锁: " + gid);
+            try {
+                Thread.sleep(1_000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new InterruptedIOException("等待本地下载缓存锁时被中断");
+            }
+        }
+        throw new IOException("等待本地下载缓存锁超时: " + gid);
+    }
+
+    /** 完整读取每个条目，触发 ZIP CRC 校验，并确认归档中至少包含一张图片。 */
+    private void verifyArchive(Path archive, boolean requireComicInfo, LongConsumer progress) throws IOException {
+        long archiveSize = Files.size(archive);
+        if (archiveSize <= 0) {
+            throw new IOException("归档文件为空");
+        }
+        // 先校验中央目录可读，再顺序读完所有条目以触发 CRC 检查。
+        try (ZipFile ignored = new ZipFile(archive.toFile())) {
+            // 打开 ZipFile 时会校验中央目录，先排除结构不完整的归档。
+        }
+
+        long ratioLimit = archiveSize > Long.MAX_VALUE / 200 ? Long.MAX_VALUE : archiveSize * 200;
+        long expandedLimit = Math.min(MAX_UNCOMPRESSED_ARCHIVE_BYTES, Math.max(512L * 1024 * 1024, ratioLimit));
+        // 同时限制解压总量和压缩倍率，避免校验消耗异常大的磁盘与处理时间。
+        long expandedBytes = 0;
+        int entries = 0;
+        int images = 0;
+        boolean comicInfoFound = false;
+        byte[] buffer = new byte[128 * 1024];
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(archive))) {
+            ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                entries++;
+                String name = entry.getName();
+                if (ComicInfoInjector.COMIC_INFO_ENTRY.equalsIgnoreCase(name)) {
+                    comicInfoFound = true;
+                }
+                if (isImageEntry(name)) {
+                    images++;
+                }
+                int read;
+                while ((read = zis.read(buffer)) != -1) {
+                    expandedBytes += read;
+                    if (expandedBytes > expandedLimit) {
+                        throw new IOException("归档解压后体积异常，疑似压缩炸弹");
+                    }
+                    progress.accept(expandedBytes);
+                }
+                zis.closeEntry();
+            }
+        }
+        if (entries == 0 || images == 0) {
+            throw new IOException("归档不包含有效图片条目");
+        }
+        if (requireComicInfo && !comicInfoFound) {
+            throw new IOException("归档缺少 ComicInfo.xml");
+        }
+        log.info("📦 ZIP 深度校验通过，{} 个文件条目，{} 张图片，读取 {} 字节",
+                entries, images, expandedBytes);
+    }
+
+    /** 根据文件扩展名统计归档图片条目，供完整性校验使用。 */
+    private static boolean isImageEntry(String name) {
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                || lower.endsWith(".gif") || lower.endsWith(".webp") || lower.endsWith(".avif")
+                || lower.endsWith(".bmp") || lower.endsWith(".jfif") || lower.endsWith(".jxl")
+                || lower.endsWith(".tif") || lower.endsWith(".tiff");
+    }
+
+    /** 计算阅读元数据指纹，判断缓存归档是否需要重新注入 ComicInfo。 */
+    private static String sha256(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM 不支持 SHA-256", e);
+        }
+    }
+
+    /** 读取上次注入的元数据指纹，缺失或不可读时让当前流程重新注入。 */
+    private static String readFingerprint(Path file) {
+        try {
+            return Files.isRegularFile(file) ? Files.readString(file, StandardCharsets.US_ASCII).trim() : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** 优先原子替换归档，文件系统不支持时退回普通替换。 */
+    private static void moveAtomically(Path source, Path target) throws IOException {
+        try {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    /** 清除损坏原包及续传、注入辅助文件，避免下次复用坏缓存。 */
+    private void cleanupDownloadCache(Path zipFile) throws IOException {
+        Files.deleteIfExists(zipFile);
+        Files.deleteIfExists(zipFile.resolveSibling(zipFile.getFileName() + ".part"));
+        Files.deleteIfExists(zipFile.resolveSibling(zipFile.getFileName() + ".part.meta"));
+        Files.deleteIfExists(zipFile.resolveSibling(zipFile.getFileName() + ".inject.tmp"));
+    }
+
+    /**
+     * 构建安全文件名：[gid] 清理后的标题.cbz，规避群晖「文件夹/文件名不合法或超长」问题。
+     */
+    private String buildTargetFilename(Long gid, String title) {
+        String safeTitle = title == null ? "" : title.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        safeTitle = safeTitle.replaceAll("[. ]+$", "");
+        int fixedBytes = ("[" + gid + "] .cbz").getBytes(StandardCharsets.UTF_8).length;
+        safeTitle = truncateUtf8(safeTitle, Math.max(32, 240 - fixedBytes));
+        return "[" + gid + "] " + safeTitle + ".cbz";
+    }
+
+    /** 按完整字符限制 UTF-8 字节数，避免中文文件名被截成半个字符。 */
+    private static String truncateUtf8(String value, int maxBytes) {
+        StringBuilder result = new StringBuilder();
+        int used = 0;
+        for (int offset = 0; offset < value.length(); ) {
+            int codePoint = value.codePointAt(offset);
+            String next = new String(Character.toChars(codePoint));
+            int bytes = next.getBytes(StandardCharsets.UTF_8).length;
+            if (used + bytes > maxBytes) break;
+            result.append(next);
+            used += bytes;
+            offset += Character.charCount(codePoint);
+        }
+        return result.toString();
+    }
+
+    /** 优先使用配置的持久缓存目录，无法创建时退回系统临时目录。 */
+    private Path resolveTempDir() {
+        String dir = netConfig.getDownload() != null ? netConfig.getDownload().getTempDir() : null;
+        Path path = StrUtil.isNotBlank(dir) ? Path.of(dir) : Path.of(System.getProperty("java.io.tmpdir"));
+        try {
+            Files.createDirectories(path);
+        } catch (IOException e) {
+            log.warn("创建临时目录失败，回退系统临时目录: {}", e.getMessage());
+            path = Path.of(System.getProperty("java.io.tmpdir"));
+        }
+        return path;
+    }
+
+    /** 尽力清理单个临时文件，失败不覆盖主流程的成功或失败结果。 */
+    private void cleanupQuietly(Path file) {
+        try {
+            if (file != null) {
+                Files.deleteIfExists(file);
+                Files.deleteIfExists(file.resolveSibling(file.getFileName() + ".part"));
+            }
+        } catch (IOException ignored) {
+            // 忽略临时文件清理失败
+        }
+    }
+
+    /** 发布和写库均成功后清理缓存、指纹和锁文件，再尝试移除空工作目录。 */
+    private void cleanupWorkDirectory(Path workDir, Path zipFile, Path cbzFile,
+                                      Path metadataFingerprintFile, Path lockFile) {
+        cleanupQuietly(zipFile);
+        cleanupQuietly(cbzFile);
+        cleanupQuietly(metadataFingerprintFile);
+        cleanupQuietly(zipFile.resolveSibling(zipFile.getFileName() + ".part.meta"));
+        cleanupQuietly(zipFile.resolveSibling(zipFile.getFileName() + ".inject.tmp"));
+        cleanupQuietly(cbzFile.resolveSibling(cbzFile.getFileName() + ".inject.tmp"));
+        cleanupQuietly(lockFile);
+        try {
+            Files.deleteIfExists(workDir);
+        } catch (IOException e) {
+            log.warn("本地工作目录清理失败，将由后续任务复用/清理: {}", workDir);
+        }
+    }
+}

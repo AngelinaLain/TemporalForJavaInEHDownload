@@ -1,0 +1,22 @@
+package com.checker.model.dataobject.collection;
+
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+import lombok.Data;
+
+import java.util.Date;
+
+/**
+ * 保存本系统中由用户维护的画廊合集名称、说明及修改时间。
+ */
+@Data
+@TableName("eh_gallery_collections")
+public class GalleryCollectionEntity {
+    @TableId(type = IdType.AUTO)
+    private Long id;
+    private String name;
+    private String description;
+    private Date createdAt;
+    private Date updatedAt;
+}

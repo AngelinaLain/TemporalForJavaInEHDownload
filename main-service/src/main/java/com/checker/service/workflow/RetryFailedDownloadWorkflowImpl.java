@@ -1,0 +1,142 @@
+package com.checker.service.workflow;
+
+import com.checker.model.dto.workflow.WorkflowSettings;
+import com.checker.service.activity.workflow.DatabaseActivity;
+import com.checker.shared.Constants;
+import com.checker.common.DownloadStatus;
+import com.checker.entity.EhGalleriesEntity;
+import com.checker.service.activity.notification.NotificationActivity;
+import io.temporal.failure.ChildWorkflowFailure;
+import io.temporal.spring.boot.WorkflowImpl;
+import io.temporal.workflow.Async;
+import io.temporal.workflow.ChildWorkflowOptions;
+import io.temporal.workflow.Promise;
+import io.temporal.workflow.Workflow;
+import org.slf4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 从失败记录中安排下载或入库补偿子流程，限制同时运行数量，并在结束后汇总最终状态。
+ */
+@WorkflowImpl(taskQueues = Constants.TASK_QUEUE)
+public class RetryFailedDownloadWorkflowImpl implements RetryFailedDownloadWorkflow {
+    private static final Logger log = Workflow.getLogger(RetryFailedDownloadWorkflowImpl.class);
+
+    // 数据库的活动设置进来
+    private final DatabaseActivity databaseActivity = Workflow.newActivityStub(DatabaseActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+    // 将邮件的发送设置进来
+    private final NotificationActivity notificationActivity = Workflow.newActivityStub(NotificationActivity.class, WorkflowSteps.DEFAULT_OPTIONS);
+
+    /** 子工作流致命错误标识 */
+    private boolean fatalErrorOccurred = false;
+
+    @Override
+    /** 读取失败记录并按并发窗口启动恢复子流程，结束后重新核对首选关系和最终通知。 */
+    public void retryFailedTasks() {
+        int existingChildVersion = Workflow.getVersion("idempotent-child-conflict", Workflow.DEFAULT_VERSION, 1);
+        // 版本标记保留已运行历史的调用顺序，新任务才使用对应的新认领与通知规则。
+        int version = Workflow.getVersion("child-workflow-refactor", Workflow.DEFAULT_VERSION, 1);
+        int batchNotificationVersion = Workflow.getVersion(
+                "batch-email-notification", Workflow.DEFAULT_VERSION, 1);
+        int dedupeV2Version = Workflow.getVersion(
+                "candidate-score-deduplication", Workflow.DEFAULT_VERSION, 1);
+        int dedupeBackfillVersion = Workflow.getVersion(
+                "gallery-dedupe-history-backfill", Workflow.DEFAULT_VERSION, 1);
+
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                && dedupeBackfillVersion != Workflow.DEFAULT_VERSION) {
+            databaseActivity.backfillGalleryDeduplicationMetadata();
+        }
+
+        // 加载运行时配置
+        WorkflowSettings settings = databaseActivity.loadWorkflowSettings();
+
+
+        List<EhGalleriesEntity> failedGalleries = databaseActivity.getFailedGalleries();
+        if (failedGalleries == null || failedGalleries.isEmpty()) {
+            return;
+        }
+
+        // 滑动窗口并发控制：派发子工作流
+        List<Promise<Void>> running = new ArrayList<>();
+        int startedChildren = 0;
+
+        for (EhGalleriesEntity gallery : failedGalleries) {
+            if (fatalErrorOccurred) break;
+
+            while (running.size() >= settings.getMaxConcurrency()) {
+                Promise.anyOf(running).get();
+                running.removeIf(Promise::isCompleted);
+            }
+
+            boolean compensateOnly = DownloadStatus.DOWNLOADED.getValue().equals(gallery.getDownloadStatus())
+                    || DownloadStatus.WAITING_KOMGA.getValue().equals(gallery.getDownloadStatus())
+                    || DownloadStatus.KOMGA_IMPORT_FAILED.getValue().equals(gallery.getDownloadStatus());
+            if (dedupeV2Version != Workflow.DEFAULT_VERSION
+                    && !compensateOnly
+                    && !databaseActivity.claimGalleryForDownload(gallery.getGid())) {
+                log.info("数据库原子去重判定跳过重试 GID: {}", gallery.getGid());
+                continue;
+            }
+
+            ChildWorkflowOptions childOptions = ChildWorkflowOptions.newBuilder()
+                    .setWorkflowId("retry-gallery-" + gallery.getGid())
+                    .setTaskQueue(Constants.TASK_QUEUE)
+                    .build();
+            SingleGalleryDownloadWorkflow child = Workflow.newChildWorkflowStub(
+                    SingleGalleryDownloadWorkflow.class, childOptions);
+
+            Promise<Void> promise = Async.procedure(() -> {
+                try {
+                    child.processSingleGallery(gallery, compensateOnly, settings);
+                } catch (ChildWorkflowFailure e) {
+                    if (existingChildVersion != Workflow.DEFAULT_VERSION && WorkflowSteps.isAlreadyStarted(e)) {
+                        log.info("画廊已有工作流，沿用该任务");
+                        return;
+                    }
+                    log.error("子工作流异常终止（致命错误），停止派发新任务。GID: {}", gallery.getGid());
+                    fatalErrorOccurred = true;
+                }
+            });
+            running.add(promise);
+            startedChildren++;
+        }
+
+        // 等待所有剩余子工作流完成
+        for (Promise<Void> p : running) {
+            try {
+                p.get();
+            } catch (Exception e) {
+                log.error("等待子工作流完成时发生异常", e);
+            }
+        }
+
+        if (dedupeV2Version != Workflow.DEFAULT_VERSION) {
+            List<String> candidateKeys = failedGalleries.stream()
+                    .map(EhGalleriesEntity::getCandidateKey)
+                    .filter(key -> key != null && !key.isBlank())
+                    .distinct()
+                    .toList();
+            databaseActivity.reconcileGalleryDeduplication(candidateKeys);
+        }
+
+        if (batchNotificationVersion == Workflow.DEFAULT_VERSION) {
+            // 兼容正在运行的旧 Workflow 历史。
+            notificationActivity.sendEmailAlert("重试流程结束", "本次共重试了 " + failedGalleries.size() + " 个画廊");
+        } else {
+            List<Long> gids = failedGalleries.stream().map(EhGalleriesEntity::getGid).toList();
+            List<EhGalleriesEntity> finalStates = databaseActivity.getGalleriesByIds(gids);
+            int richEmailVersion = Workflow.getVersion("rich-email-summary", Workflow.DEFAULT_VERSION, 1);
+            // 活动接口和调用顺序保持不变；新增版本只决定邮件正文采用旧文本还是新版结构。
+            String content = richEmailVersion == Workflow.DEFAULT_VERSION
+                    ? WorkflowSteps.buildBatchNotificationContent("重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
+                            fatalErrorOccurred, finalStates)
+                    : WorkflowSteps.buildRichBatchNotificationContent("重试流程", failedGalleries.size(), failedGalleries.size(), startedChildren,
+                            fatalErrorOccurred, finalStates, Workflow.getInfo().getRunStartedTimestampMillis(),
+                            Workflow.currentTimeMillis(), Workflow.getInfo().getWorkflowId(), Workflow.getInfo().getRunId());
+            notificationActivity.sendEmailAlert("重试流程汇总", content);
+        }
+    }
+}

@@ -39,7 +39,7 @@ springdoc:
     lang: zh-cn
 mybatis-plus:
   mapper-locations: classpath:mapper/*.xml
-  type-aliases-package: com.checker.entity
+  type-aliases-package: com.checker.entity,com.checker.model.dataobject
   configuration:
     map-underscore-to-camel-case: true
     #log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
@@ -178,11 +178,6 @@ ai:
 resilience4j:
   circuitbreaker:
     instances:
-      aiSummary:
-        sliding-window-size: 10
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 60s
-        permitted-number-of-calls-in-half-open-state: 2
       aiTagTranslation:
         sliding-window-size: 10
         failure-rate-threshold: 50

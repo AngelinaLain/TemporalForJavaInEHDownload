@@ -7,7 +7,7 @@ import './styles/theme.css'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import App from './App.vue'
 import router from './router'
-import { initializeUiPreferences } from './stores/uiPreferences'
+import { initializeUiPreferences } from './shared/stores/uiPreferences'
 
 initializeUiPreferences()
 const app = createApp(App)

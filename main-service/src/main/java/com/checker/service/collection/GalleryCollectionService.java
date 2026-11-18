@@ -1,0 +1,318 @@
+package com.checker.service.collection;
+
+import com.checker.dao.collection.GalleryCollectionMapper;
+import com.checker.manager.collection.GallerySeriesPlacementService;
+import com.checker.model.dataobject.collection.GalleryCollectionEntity;
+import com.checker.model.dto.collection.GalleryCollectionRequest;
+import com.checker.model.vo.collection.GalleryCollectionCandidate;
+import com.checker.model.vo.collection.GalleryCollectionSummary;
+import com.checker.service.catalog.EhGalleriesService;
+import com.checker.manager.dedupe.ArchiveVisualFingerprintExtractor;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.checker.dedupe.GallerySeriesMatching;
+import com.checker.dedupe.PerceptualHash;
+import com.checker.entity.EhGalleriesEntity;
+import com.checker.model.dataobject.dedupe.GalleryPageHashEntity;
+import com.checker.dao.dedupe.GalleryPageHashMapper;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/** 管理本地画廊合集及成员顺序，并结合标签和页面指纹给出加入合集的候选建议。 */
+@Service
+public class GalleryCollectionService {
+    private static final int SUGGESTION_SCAN_BATCH_SIZE = 500;
+    /**
+     * 评分的阈值
+     */
+    private static final int SUGGESTION_SCORE_THRESHOLD = 48;
+    private static final Comparator<GalleryCollectionCandidate> BEST_SUGGESTION_FIRST =
+            Comparator.comparing(GalleryCollectionCandidate::getScore).reversed()
+                    .thenComparing(GalleryCollectionCandidate::getGid, Comparator.reverseOrder());
+    private static final Comparator<GalleryCollectionCandidate> WORST_SUGGESTION_FIRST =
+            Comparator.comparing(GalleryCollectionCandidate::getScore)
+                    .thenComparing(GalleryCollectionCandidate::getGid);
+
+    private final GalleryCollectionMapper collectionMapper;
+    private final EhGalleriesService galleriesService;
+    private final GalleryPageHashMapper pageHashMapper;
+    private final JdbcTemplate jdbcTemplate;
+
+    public GalleryCollectionService(GalleryCollectionMapper collectionMapper,
+                                    EhGalleriesService galleriesService,
+                                    GalleryPageHashMapper pageHashMapper,
+                                    JdbcTemplate jdbcTemplate) {
+        this.collectionMapper = collectionMapper;
+        this.galleriesService = galleriesService;
+        this.pageHashMapper = pageHashMapper;
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    /**
+     * 汇总合集及成员数量，按最近更新时间展示。
+     * */
+    public List<GalleryCollectionSummary> listCollections() {
+        return jdbcTemplate.query("""
+                SELECT c.id, c.name, c.description, c.updated_at, COUNT(i.gid) item_count
+                FROM eh_gallery_collections c
+                LEFT JOIN eh_gallery_collection_items i ON i.collection_id = c.id
+                GROUP BY c.id, c.name, c.description, c.updated_at
+                ORDER BY c.updated_at DESC, c.id DESC
+                """, (rs, row) -> GalleryCollectionSummary.builder()
+                .id(rs.getLong("id")).name(rs.getString("name"))
+                .description(rs.getString("description")).itemCount(rs.getLong("item_count"))
+                .updatedAt(rs.getTimestamp("updated_at")).build());
+    }
+
+    /**
+     * 清理名称和说明后创建合集，避免同名合集。
+     * */
+    @Transactional
+    public GalleryCollectionEntity create(GalleryCollectionRequest request) {
+        GalleryCollectionEntity entity = new GalleryCollectionEntity();
+        entity.setName(cleanName(request.getName()));
+        entity.setDescription(cleanDescription(request.getDescription()));
+        try {
+            collectionMapper.insert(entity);
+        } catch (DuplicateKeyException e) {
+            throw new IllegalArgumentException("已存在同名合集");
+        }
+        return entity;
+    }
+
+    /**
+     * 更新合集基本信息，同时检查名称冲突。
+     * */
+    @Transactional
+    public GalleryCollectionEntity update(long id, GalleryCollectionRequest request) {
+        GalleryCollectionEntity entity = requireCollection(id);
+        entity.setName(cleanName(request.getName()));
+        entity.setDescription(cleanDescription(request.getDescription()));
+        try {
+            collectionMapper.updateById(entity);
+        } catch (DuplicateKeyException e) {
+            throw new IllegalArgumentException("已存在同名合集");
+        }
+        return entity;
+    }
+
+    /**
+     * 删除合集记录，由数据库关系约束处理对应成员关系。
+     * */
+    @Transactional
+    public void delete(long id) {
+        requireCollection(id);
+        collectionMapper.deleteById(id);
+    }
+
+    /**
+     * 按合集内顺序读取成员，并补齐用于列表展示的画廊信息。
+     * */
+    public List<GalleryCollectionCandidate> listItems(long collectionId) {
+        requireCollection(collectionId);
+        List<Long> gids = jdbcTemplate.queryForList(
+                "SELECT gid FROM eh_gallery_collection_items WHERE collection_id = ? ORDER BY sort_order, gid",
+                Long.class, collectionId);
+        if (gids.isEmpty()) return List.of();
+        Map<Long, EhGalleriesEntity> galleries = galleriesService.listByIds(gids).stream()
+                .collect(Collectors.toMap(EhGalleriesEntity::getGid, Function.identity()));
+        return gids.stream().map(galleries::get).filter(item -> item != null)
+                .map(item -> toCandidate(item, collectionId, null)).toList();
+    }
+
+    /**
+     * 按关键词和归组范围查找可加入合集的首选画廊。
+     * */
+    public List<GalleryCollectionCandidate> searchGalleries(String keyword, String scope, int limit) {
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
+        query.isNull("duplicate_of_gid");
+        if (keyword != null && !keyword.isBlank()) {
+            String value = keyword.trim();
+            query.and(w -> w.like("title", value).or().like("original_title", value).or().like("filename", value));
+        }
+        query.orderByDesc("crawled_at").last("LIMIT " + safeLimit * 3);
+        List<EhGalleriesEntity> galleries = galleriesService.list(query);
+        Map<Long, Membership> memberships = memberships(galleries.stream().map(EhGalleriesEntity::getGid).toList());
+        boolean unassignedOnly = "unassigned".equalsIgnoreCase(scope);
+        return galleries.stream()
+                .filter(item -> !unassignedOnly || !memberships.containsKey(item.getGid()))
+                .limit(safeLimit)
+                .map(item -> {
+                    Membership membership = memberships.get(item.getGid());
+                    return toCandidate(item, membership == null ? null : membership.collectionId(),
+                            membership == null ? null : membership.collectionName());
+                }).toList();
+    }
+
+    /**
+     * 在事务中添加或调整成员，保持合集关系和成员顺序一致。
+     * */
+    @Transactional
+    public void addItems(long collectionId, List<Long> gids, String source) {
+        requireCollection(collectionId);
+        List<Long> cleanGids = gids == null ? List.of() : gids.stream().filter(id -> id != null).distinct().toList();
+        if (cleanGids.isEmpty()) throw new IllegalArgumentException("至少选择一个画廊");
+        Set<Long> existing = galleriesService.listByIds(cleanGids).stream()
+                .map(EhGalleriesEntity::getGid).collect(Collectors.toSet());
+        if (existing.size() != cleanGids.size()) throw new IllegalArgumentException("部分画廊不存在");
+        String normalizedSource = "SUGGESTED".equalsIgnoreCase(source) ? "SUGGESTED" : "MANUAL";
+        int nextOrder = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM eh_gallery_collection_items WHERE collection_id = ?",
+                Integer.class, collectionId);
+        for (Long gid : cleanGids) {
+            jdbcTemplate.update("""
+                    INSERT INTO eh_gallery_collection_items(collection_id, gid, sort_order, added_source)
+                    VALUES (?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE collection_id = VALUES(collection_id),
+                      sort_order = VALUES(sort_order), added_source = VALUES(added_source), created_at = CURRENT_TIMESTAMP
+                    """, collectionId, gid, nextOrder++, normalizedSource);
+        }
+        jdbcTemplate.update("UPDATE eh_gallery_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", collectionId);
+    }
+
+    /**
+     * 从指定合集中移除画廊，不删除画廊本身。
+     * */
+    @Transactional
+    public void removeItem(long collectionId, long gid) {
+        requireCollection(collectionId);
+        jdbcTemplate.update("DELETE FROM eh_gallery_collection_items WHERE collection_id = ? AND gid = ?",
+                collectionId, gid);
+        jdbcTemplate.update("UPDATE eh_gallery_collections SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", collectionId);
+    }
+
+    /** 综合同作者、标签和视觉证据，给出可继续加入合集的候选。 */
+    public List<GalleryCollectionCandidate> suggestions(long collectionId, int limit) {
+        List<GalleryCollectionCandidate> current = listItems(collectionId);
+        if (current.isEmpty()) return List.of();
+        List<Long> memberGids = current.stream().map(GalleryCollectionCandidate::getGid).toList();
+        List<EhGalleriesEntity> members = galleriesService.listByIds(memberGids);
+        Map<Long, String> memberCoverHashes = firstPageHashes(memberGids);
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        PriorityQueue<GalleryCollectionCandidate> bestSuggestions =
+                new PriorityQueue<>(safeLimit + 1, WORST_SUGGESTION_FIRST);
+
+        // 使用 GID 游标分批扫描全部候选，避免 OFFSET 越往后越慢，也不再漏掉第 2001 条之后的画廊。
+        Long lastGid = null;
+        while (true) {
+            QueryWrapper<EhGalleriesEntity> query = new QueryWrapper<>();
+            query.isNull("duplicate_of_gid")
+                    .notInSql("gid", "SELECT gid FROM eh_gallery_collection_items");
+            if (lastGid != null) query.gt("gid", lastGid);
+            query.orderByAsc("gid").last("LIMIT " + SUGGESTION_SCAN_BATCH_SIZE);
+
+            List<EhGalleriesEntity> candidates = galleriesService.list(query);
+            if (candidates.isEmpty()) break;
+            Map<Long, String> candidateCoverHashes = firstPageHashes(
+                    candidates.stream().map(EhGalleriesEntity::getGid).toList());
+
+            for (EhGalleriesEntity candidate : candidates) {
+                GalleryCollectionCandidate scored = scoreCandidate(
+                        candidate, members, memberCoverHashes, candidateCoverHashes.get(candidate.getGid()));
+                if (scored == null) continue;
+                bestSuggestions.offer(scored);
+                if (bestSuggestions.size() > safeLimit) bestSuggestions.poll();
+            }
+
+            lastGid = candidates.get(candidates.size() - 1).getGid();
+            if (candidates.size() < SUGGESTION_SCAN_BATCH_SIZE) break;
+        }
+
+        return bestSuggestions.stream().sorted(BEST_SUGGESTION_FIRST).toList();
+    }
+
+    /**
+     * 按已有成员与候选的共同信息累积分数，并保留推荐原因。
+     * */
+    private GalleryCollectionCandidate scoreCandidate(EhGalleriesEntity candidate,
+                                                       List<EhGalleriesEntity> members,
+                                                       Map<Long, String> memberCoverHashes,
+                                                       String candidateCoverHash) {
+        GallerySeriesMatching.SeriesMatch best = null;
+        for (EhGalleriesEntity member : members) {
+            GallerySeriesMatching.SeriesMatch match = GallerySeriesMatching.score(
+                    member, memberCoverHashes.get(member.getGid()), candidate, candidateCoverHash);
+            if (best == null || match.score() > best.score()) best = match;
+        }
+        if (best == null || best.score() < SUGGESTION_SCORE_THRESHOLD) return null;
+        return GalleryCollectionCandidate.builder()
+                .gid(candidate.getGid()).title(candidate.getTitle()).originalTitle(candidate.getOriginalTitle())
+                .galleryUrl(candidate.getGalleryUrl()).pageCount(candidate.getPageCount()).rating(candidate.getRating())
+                .score(best.score()).titleSimilarity(best.titleSimilarity())
+                .coverSimilarity(best.coverSimilarity()).metadataSimilarity(best.metadataSimilarity())
+                .reason(best.reason()).build();
+    }
+
+    /**
+     * 批量读取封面或首页指纹，减少建议计算时的重复查询。
+     * */
+    private Map<Long, String> firstPageHashes(List<Long> gids) {
+        if (gids.isEmpty()) return Map.of();
+        QueryWrapper<GalleryPageHashEntity> query = new QueryWrapper<>();
+        query.in("gid", gids).eq("algorithm_version", PerceptualHash.ALGORITHM_VERSION)
+                .orderByAsc("gid", "page_index");
+        Map<Long, String> result = new LinkedHashMap<>();
+        Set<Long> explicitCovers = new java.util.HashSet<>();
+        for (GalleryPageHashEntity hash : pageHashMapper.selectList(query)) {
+            boolean explicitCover = ArchiveVisualFingerprintExtractor.isLikelyCover(hash.getPageName());
+            if (explicitCover || !result.containsKey(hash.getGid())) {
+                if (explicitCover || !explicitCovers.contains(hash.getGid())) {
+                    result.put(hash.getGid(), hash.getPerceptualHash());
+                    if (explicitCover) explicitCovers.add(hash.getGid());
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 批量读取候选已所属的合集，供界面说明归组关系。
+     * */
+    private Map<Long, Membership> memberships(List<Long> gids) {
+        if (gids.isEmpty()) return Map.of();
+        String placeholders = gids.stream().map(id -> "?").collect(Collectors.joining(","));
+        String sql = "SELECT i.gid, c.id, c.name FROM eh_gallery_collection_items i "
+                + "JOIN eh_gallery_collections c ON c.id = i.collection_id WHERE i.gid IN (" + placeholders + ")";
+        Map<Long, Membership> result = new LinkedHashMap<>();
+        jdbcTemplate.query(sql, gids.toArray(), rs -> {
+            result.put(rs.getLong("gid"), new Membership(rs.getLong("id"), rs.getString("name")));
+        });
+        return result;
+    }
+
+    private GalleryCollectionCandidate toCandidate(EhGalleriesEntity gallery, Long collectionId, String collectionName) {
+        return GalleryCollectionCandidate.builder().gid(gallery.getGid()).title(gallery.getTitle())
+                .originalTitle(gallery.getOriginalTitle()).galleryUrl(gallery.getGalleryUrl())
+                .pageCount(gallery.getPageCount()).rating(gallery.getRating())
+                .collectionId(collectionId).collectionName(collectionName).build();
+    }
+
+    private GalleryCollectionEntity requireCollection(long id) {
+        GalleryCollectionEntity entity = collectionMapper.selectById(id);
+        if (entity == null) throw new IllegalArgumentException("合集不存在");
+        return entity;
+    }
+
+    private String cleanName(String value) {
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("合集名称不能为空");
+        return GallerySeriesPlacementService.safeDirectory(value);
+    }
+
+    private String cleanDescription(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private record Membership(Long collectionId, String collectionName) {
+    }
+}
